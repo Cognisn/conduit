@@ -56,6 +56,10 @@ class ResidencyRefused(AssignmentRefused):
     """The assignment would breach the deployment's residency policy."""
 
 
+class UnknownTaskClass(ConduitError, LookupError):
+    """A task class was asked for that the product did not declare or assign."""
+
+
 class SecretUnavailable(ConduitError, LookupError):
     """A secret reference could not be resolved. The message names the reference only."""
 
