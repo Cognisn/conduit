@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.0",
+  "version": "2026.11.1",
   "models": [
     {
       "model_id": "claude-opus-5-5",
@@ -17,7 +17,7 @@
       "output_limit": 128000
     },
     {
-      "model_id": "claude-sonnet-4-5",
+      "model_id": "claude-sonnet-5-5",
       "provider": "anthropic",
       "kind": "chat",
       "residency_scope": "global",
@@ -28,7 +28,37 @@
         "prompt_caching": true,
         "structured_output": true
       },
-      "context_window": 200000,
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "claude-haiku-5-5",
+      "provider": "anthropic",
+      "kind": "chat",
+      "residency_scope": "global",
+      "regions": [],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "claude-sonnet-4-6",
+      "provider": "anthropic",
+      "kind": "chat",
+      "residency_scope": "global",
+      "regions": [],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
       "output_limit": 64000
     },
     {
@@ -47,13 +77,33 @@
       "output_limit": 64000
     },
     {
-      "model_id": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "model_id": "anthropic.claude-opus-5-5",
       "provider": "bedrock",
       "kind": "chat",
       "residency_scope": "in_region",
       "regions": [
-        "ap-southeast-2",
+        "eu-west-2"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "us.anthropic.claude-opus-5-5",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "ca-central-1",
+        "ca-west-1",
         "us-east-1",
+        "us-east-2",
+        "us-west-1",
         "us-west-2"
       ],
       "capabilities": {
@@ -62,11 +112,35 @@
         "prompt_caching": true,
         "structured_output": true
       },
-      "context_window": 200000,
-      "output_limit": 64000
+      "context_window": 1000000,
+      "output_limit": 128000
     },
     {
-      "model_id": "au.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "model_id": "eu.anthropic.claude-opus-5-5",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "eu-central-1",
+        "eu-central-2",
+        "eu-north-1",
+        "eu-south-1",
+        "eu-south-2",
+        "eu-west-1",
+        "eu-west-2",
+        "eu-west-3"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "au.anthropic.claude-opus-5-5",
       "provider": "bedrock",
       "kind": "chat",
       "residency_scope": "cross_region",
@@ -80,11 +154,29 @@
         "prompt_caching": true,
         "structured_output": true
       },
-      "context_window": 200000,
-      "output_limit": 64000
+      "context_window": 1000000,
+      "output_limit": 128000
     },
     {
-      "model_id": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "model_id": "jp.anthropic.claude-opus-5-5",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "ap-northeast-1",
+        "ap-northeast-3"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "global.anthropic.claude-opus-5-5",
       "provider": "bedrock",
       "kind": "chat",
       "residency_scope": "global",
@@ -95,18 +187,336 @@
         "prompt_caching": true,
         "structured_output": true
       },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "us.anthropic.claude-sonnet-5-5",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "ca-central-1",
+        "ca-west-1",
+        "us-east-1",
+        "us-east-2",
+        "us-west-1",
+        "us-west-2"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "eu.anthropic.claude-sonnet-5-5",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "eu-central-1",
+        "eu-central-2",
+        "eu-north-1",
+        "eu-south-1",
+        "eu-south-2",
+        "eu-west-1",
+        "eu-west-2",
+        "eu-west-3"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "au.anthropic.claude-sonnet-5-5",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "ap-southeast-2",
+        "ap-southeast-4"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "global.anthropic.claude-sonnet-5-5",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "global",
+      "regions": [],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "us.anthropic.claude-haiku-5-5",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "ca-central-1",
+        "ca-west-1",
+        "us-east-1",
+        "us-east-2",
+        "us-west-1",
+        "us-west-2"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "ca.anthropic.claude-haiku-5-5",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "ca-central-1",
+        "ca-west-1"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "eu.anthropic.claude-haiku-5-5",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "eu-central-1",
+        "eu-central-2",
+        "eu-north-1",
+        "eu-south-1",
+        "eu-south-2",
+        "eu-west-1",
+        "eu-west-2",
+        "eu-west-3"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "au.anthropic.claude-haiku-5-5",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "ap-southeast-2",
+        "ap-southeast-4"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "jp.anthropic.claude-haiku-5-5",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "ap-northeast-1",
+        "ap-northeast-3"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "global.anthropic.claude-haiku-5-5",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "global",
+      "regions": [],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "us.anthropic.claude-sonnet-4-6",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "ca-central-1",
+        "ca-west-1",
+        "us-east-1",
+        "us-east-2",
+        "us-west-1",
+        "us-west-2"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 64000
+    },
+    {
+      "model_id": "eu.anthropic.claude-sonnet-4-6",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "eu-central-1",
+        "eu-central-2",
+        "eu-north-1",
+        "eu-south-1",
+        "eu-south-2",
+        "eu-west-1",
+        "eu-west-2",
+        "eu-west-3"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 64000
+    },
+    {
+      "model_id": "au.anthropic.claude-sonnet-4-6",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "ap-southeast-2",
+        "ap-southeast-4",
+        "ap-southeast-6"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 64000
+    },
+    {
+      "model_id": "jp.anthropic.claude-sonnet-4-6",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "ap-northeast-1",
+        "ap-northeast-3"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 64000
+    },
+    {
+      "model_id": "global.anthropic.claude-sonnet-4-6",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "global",
+      "regions": [],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 64000
+    },
+    {
+      "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "ca-central-1",
+        "us-east-1",
+        "us-east-2",
+        "us-west-1",
+        "us-west-2"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
       "context_window": 200000,
       "output_limit": 64000
     },
     {
-      "model_id": "anthropic.claude-haiku-4-5-20251001-v1:0",
+      "model_id": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
       "provider": "bedrock",
       "kind": "chat",
-      "residency_scope": "in_region",
+      "residency_scope": "cross_region",
       "regions": [
-        "ap-southeast-2",
-        "us-east-1",
-        "us-west-2"
+        "eu-central-1",
+        "eu-central-2",
+        "eu-north-1",
+        "eu-south-1",
+        "eu-south-2",
+        "eu-west-1",
+        "eu-west-2",
+        "eu-west-3"
       ],
       "capabilities": {
         "tools": true,
@@ -124,8 +534,60 @@
       "residency_scope": "cross_region",
       "regions": [
         "ap-southeast-2",
-        "ap-southeast-4"
+        "ap-southeast-4",
+        "ap-southeast-6"
       ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 200000,
+      "output_limit": 64000
+    },
+    {
+      "model_id": "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "ap-northeast-1",
+        "ap-northeast-3"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 200000,
+      "output_limit": 64000
+    },
+    {
+      "model_id": "in.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "cross_region",
+      "regions": [
+        "ap-south-1",
+        "ap-south-2"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 200000,
+      "output_limit": 64000
+    },
+    {
+      "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "provider": "bedrock",
+      "kind": "chat",
+      "residency_scope": "global",
+      "regions": [],
       "capabilities": {
         "tools": true,
         "vision": true,
@@ -141,8 +603,26 @@
       "kind": "embedding",
       "residency_scope": "in_region",
       "regions": [
+        "ap-northeast-1",
+        "ap-northeast-2",
+        "ap-northeast-3",
+        "ap-south-1",
+        "ap-south-2",
         "ap-southeast-2",
+        "ca-central-1",
+        "eu-central-1",
+        "eu-central-2",
+        "eu-north-1",
+        "eu-south-1",
+        "eu-south-2",
+        "eu-west-1",
+        "eu-west-2",
+        "eu-west-3",
+        "sa-east-1",
         "us-east-1",
+        "us-east-2",
+        "us-gov-east-1",
+        "us-gov-west-1",
         "us-west-2"
       ],
       "capabilities": {},

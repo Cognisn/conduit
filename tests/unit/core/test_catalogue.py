@@ -178,6 +178,28 @@ class TestDefaultData:
         assert any(e.residency_scope is ResidencyScope.CROSS_REGION for e in catalogue)
         assert any(e.residency_scope is ResidencyScope.IN_REGION for e in catalogue)
 
+    def test_australian_residency_against_the_default_bedrock_entries(self) -> None:
+        from conduit.core.errors import ResidencyRefused
+        from conduit.core.residency import ResidencyPolicy
+
+        catalogue = default_catalogue()
+        au_profile = catalogue.require("bedrock", "au.anthropic.claude-sonnet-5-5")
+        global_profile = catalogue.require("bedrock", "global.anthropic.claude-sonnet-5-5")
+        au = frozenset({"ap-southeast-2", "ap-southeast-4"})
+        in_region_only = ResidencyPolicy(scopes=frozenset({ResidencyScope.IN_REGION}), regions=au)
+        within_au = ResidencyPolicy(
+            scopes=frozenset({ResidencyScope.IN_REGION, ResidencyScope.CROSS_REGION}), regions=au
+        )
+        with pytest.raises(ResidencyRefused):
+            in_region_only.check(au_profile, "ap-southeast-2", task="t")
+        within_au.check(au_profile, "ap-southeast-2", task="t")
+        with pytest.raises(ResidencyRefused):
+            within_au.check(global_profile, "ap-southeast-2", task="t")
+        # Sonnet 4.6's Australian profile also routes to ap-southeast-6.
+        wider = catalogue.require("bedrock", "au.anthropic.claude-sonnet-4-6")
+        with pytest.raises(ResidencyRefused, match="ap-southeast-6"):
+            within_au.check(wider, "ap-southeast-2", task="t")
+
     def test_the_stub_model_is_local(self) -> None:
         stub = default_catalogue().require("stub", "stub-echo")
         assert stub.residency_scope is ResidencyScope.LOCAL
