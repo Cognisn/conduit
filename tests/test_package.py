@@ -7,6 +7,7 @@ from importlib import metadata
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 from packaging.version import Version
 
 import conduit
@@ -78,6 +79,9 @@ def test_every_planned_extra_is_declared() -> None:
     assert declared - {"dev"} == EXTRAS
 
 
-def test_the_core_install_has_no_runtime_dependencies() -> None:
+def test_the_core_install_depends_on_pydantic_alone() -> None:
+    # The core's only agreed runtime dependency is pydantic (Wave 1 kick-off).
     requires = metadata.requires("cognisn-conduit") or []
-    assert [r for r in requires if "extra ==" not in r] == []
+    core = [Requirement(r) for r in requires if "extra ==" not in r]
+    assert [r.name for r in core] == ["pydantic"]
+    assert core[0].specifier.contains("2.9") and not core[0].specifier.contains("3.0")
