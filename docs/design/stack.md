@@ -11,7 +11,7 @@
 | Tests | pytest with pytest-asyncio (`asyncio_mode = "auto"`); `integration` marker for live services, skipped by default |
 | Licence policy | `scripts/licence_audit.py`: no strong copyleft; weak copyleft only as a named, reviewed exception; the core and every runtime extra audited |
 | CI | GitHub Actions: lint, types, tests on Linux, macOS and Windows for 3.12 and 3.13, distribution build, licence audit |
-| Runtime dependencies | None in the core yet; each layer's dependencies arrive in its extra |
+| Runtime dependencies | The core depends on pydantic (MIT) alone; each other layer's dependencies arrive in its extra |
 
 ## Shared modules
 

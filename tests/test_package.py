@@ -85,3 +85,76 @@ def test_the_core_install_depends_on_pydantic_alone() -> None:
     core = [Requirement(r) for r in requires if "extra ==" not in r]
     assert [r.name for r in core] == ["pydantic"]
     assert core[0].specifier.contains("2.9") and not core[0].specifier.contains("3.0")
+
+
+#: The core's main types, re-exported from the top-level package (Wave 1 ruling Q0003).
+REEXPORTS: dict[str, tuple[str, ...]] = {
+    "conduit.core.types": (
+        "CacheBreakpoint",
+        "ImageBlock",
+        "Message",
+        "ModelRequest",
+        "ModelResponse",
+        "StopReason",
+        "TextBlock",
+        "ToolResultBlock",
+        "ToolSpec",
+        "ToolUseBlock",
+        "Usage",
+    ),
+    "conduit.core.streaming": (
+        "StreamStopped",
+        "TextDelta",
+        "ToolCallFinished",
+        "ToolCallStarted",
+        "UsageReported",
+        "collect",
+    ),
+    "conduit.core.provider": ("BaseProvider", "Provider"),
+    "conduit.core.errors": (
+        "AssignmentRefused",
+        "CapabilityRefused",
+        "ConduitError",
+        "ConfigurationError",
+        "ProviderError",
+        "ProviderFailure",
+        "ResidencyRefused",
+        "UndeclaredModel",
+    ),
+    "conduit.core.registry": ("MeteredProvider", "ProviderFactory", "ProviderRegistry"),
+    "conduit.core.runtime": ("ConduitSettings", "Runtime", "TaskBinding", "start"),
+    "conduit.core.settings": ("AssignmentSettings", "ProviderSettings"),
+    "conduit.core.secrets": (
+        "EnvironmentSecretResolver",
+        "LiteralSecretResolver",
+        "SecretRef",
+        "SecretResolver",
+    ),
+    "conduit.core.catalogue": (
+        "Catalogue",
+        "CatalogueOverlay",
+        "ModelEntry",
+        "ModelKey",
+        "default_catalogue",
+    ),
+    "conduit.core.tasks": ("CapabilityFloor", "TaskClass"),
+    "conduit.core.residency": ("ResidencyPolicy", "ResidencyScope"),
+    "conduit.core.events": ("CapturePolicy", "Event", "EventSink", "FanOutSink"),
+    "conduit.core.transcript": ("Transcript", "TranscriptStore"),
+    "conduit.core.backends": ("ApprovalHandler", "SkillSource", "TokenStore"),
+    "conduit.core.tools": ("Tool", "ToolCatalogue", "ToolRegistry"),
+    "conduit.core.facade": ("SyncFacade", "sync"),
+}
+
+
+@pytest.mark.parametrize(
+    ("module", "name"), [(module, name) for module, names in REEXPORTS.items() for name in names]
+)
+def test_the_core_s_main_types_are_re_exported(module: str, name: str) -> None:
+    assert name in conduit.__all__
+    assert getattr(conduit, name) is getattr(importlib.import_module(module), name)
+
+
+def test_the_top_level_exports_nothing_unlisted() -> None:
+    listed = {name for names in REEXPORTS.values() for name in names}
+    assert set(conduit.__all__) == listed | {"__version__"}
