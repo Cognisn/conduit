@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a0] - 2026-11-04
+
+Opening stamp of the 0.1.0 release branch: the scaffold, with no library behaviour yet.
+
 ### Added
 
 - Repository scaffold: README, MIT licence, project working agreement (`CLAUDE.md`), changelog, `.gitattributes` and `.gitignore`.
