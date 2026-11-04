@@ -1,0 +1,122 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cognisn-conduit"
+dynamic = ["version"]
+description = "Shared AI integration library for Cognisn products: providers, streaming, prompt caching, agent runner, compaction, skills, MCP client and embeddings."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Cognisn Pty Ltd" }]
+keywords = [
+    "agents",
+    "ai",
+    "amazon-bedrock",
+    "anthropic",
+    "gemini",
+    "llm",
+    "mcp",
+    "ollama",
+    "openai",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+# The core takes no runtime dependency beyond those agreed in the development
+# plan; every other layer and every provider SDK is an optional extra (C2). A new
+# dependency needs agreement and a licence check (scripts/licence_audit.py).
+dependencies = []
+
+[project.optional-dependencies]
+# Each extra is declared now and filled by the workstream that builds its layer.
+# Provider SDKs (C6).
+bedrock = []
+anthropic = []
+openai = []
+gemini = []
+ollama = []
+all-providers = []
+# Layers (C12 to C15, C19, C10).
+local-embeddings = []
+mcp = []
+sql = []
+konfig = []
+warden = []
+otel = []
+cli = []
+# Development only; never a runtime dependency.
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "mypy>=1.11",
+    "ruff>=0.6",
+    # The licence audit reads requirement specifiers with packaging.
+    "packaging>=24",
+]
+
+[project.urls]
+Homepage = "https://github.com/Cognisn/conduit"
+Source = "https://github.com/Cognisn/conduit"
+Issues = "https://github.com/Cognisn/conduit/issues"
+Changelog = "https://github.com/Cognisn/conduit/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+# The version lives in one place; scripts/stamp_version.py writes it.
+path = "src/conduit/_version.txt"
+pattern = "\\A(?P<version>[^\\s]+)\\s*\\Z"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/conduit"]
+
+[tool.hatch.build.targets.sdist]
+# Anchored, gitignore-style patterns.
+include = [
+    "/src/conduit",
+    "/tests",
+    "/scripts",
+    "/docs",
+    "/CHANGELOG.md",
+    "/README.md",
+    "/LICENSE",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["scripts"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: needs a live model provider or service; run only on the maintainer's word",
+]
+addopts = "-m 'not integration'"
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+mypy_path = "src:scripts"
+files = ["src", "scripts", "tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts", "."]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "S", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S603", "S607"]
+"scripts/**" = ["S603", "S607"]

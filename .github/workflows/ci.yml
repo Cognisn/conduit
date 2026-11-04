@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "release/**"
+      # Workstream branches of every kind: <kind>/<version>-<aspect>.
+      - "feat/**"
+      - "fix/**"
+      - "docs/**"
+      - "refactor/**"
+      - "chore/**"
+      - "test/**"
+      - "perf/**"
+      - "build/**"
+      - "ci/**"
+      - "style/**"
+      - "security/**"
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff format --check .
+      - run: ruff check .
+
+  types:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      # Paths come from [tool.mypy] files: src, scripts and tests.
+      - run: mypy --strict
+
+  # Development happens on Windows workstations and on macOS, where text-mode
+  # writes, paths and the event loop differ, so the suite runs on all three.
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -ra
+
+  # Build both distributions, check them, and import the package from the wheel
+  # in a clean environment (the version file must ship inside the package).
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check --strict dist/*
+      - name: Install the wheel into a clean environment
+        run: |
+          python -m venv "$RUNNER_TEMP/clean"
+          "$RUNNER_TEMP/clean/bin/pip" install dist/*.whl
+      - name: Import the package from the wheel
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$RUNNER_TEMP/clean/bin/python" -c "import conduit, importlib.metadata as m; assert conduit.__version__ == m.version('cognisn-conduit'), conduit.__version__; print(conduit.__version__)"
+
+  licences:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      # Audit exactly what a user installs: the built package, first with no
+      # extras, then with every runtime extra (dev is never audited).
+      - run: pip install . packaging
+      - run: python scripts/licence_audit.py
+      - name: Install every runtime extra
+        run: |
+          extras=$(python -c "import importlib.metadata as m; print(','.join(e for e in m.metadata('cognisn-conduit').get_all('Provides-Extra') or [] if e != 'dev'))")
+          pip install ".[$extras]"
+      - run: python scripts/licence_audit.py --all-extras

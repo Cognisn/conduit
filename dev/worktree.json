@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "python": {
+    "version": "3.12",
+    "install": ["-e", ".[dev]"],
+    "import_check": "conduit"
+  },
+  "services": [],
+  "notes": "No sandbox services yet: nothing in conduit needs a running service until the stores workstream adds Postgres for the sql extra (with its offset and a Compose template). The default test run never calls a live model or the network; live provider checks are marked integration and run only on the maintainer's word."
+}
