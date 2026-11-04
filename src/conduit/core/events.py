@@ -78,7 +78,7 @@ class Event(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    type: str
+    type: Identifier
     event_id: Identifier = Field(default_factory=lambda: new_id("evt"))
     occurred_at: datetime = Field(default_factory=_now)
     run_id: Identifier | None = None
