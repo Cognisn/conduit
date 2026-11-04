@@ -41,6 +41,20 @@ class TestUsage:
         with pytest.raises(ValidationError):
             Usage(input_tokens=1, output_tokens=1, cache_read_tokens=0)  # type: ignore[call-arg]
 
+    @pytest.mark.parametrize(
+        "missing", ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"]
+    )
+    def test_each_count_is_required_on_its_own(self, missing: str) -> None:
+        values = {
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "cache_read_tokens": 1,
+            "cache_write_tokens": 1,
+        }
+        del values[missing]
+        with pytest.raises(ValidationError):
+            Usage.model_validate(values)
+
     def test_a_provider_wire_name_is_refused_rather_than_ignored(self) -> None:
         # Reading a wrong key once meant cache tokens were never billed. A mapping that
         # carries a provider's own names is refused, not dropped.
