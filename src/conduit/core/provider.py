@@ -20,7 +20,8 @@ from conduit.core.types import ModelRequest, ModelResponse
 class Provider(Protocol):
     """What every provider offers. ``kind`` names its adapter (``bedrock``, ``stub``)."""
 
-    kind: str
+    @property
+    def kind(self) -> str: ...
 
     def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]: ...
 
