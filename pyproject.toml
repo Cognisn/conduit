@@ -36,9 +36,10 @@ classifiers = [
     "Typing :: Typed",
 ]
 # The core takes no runtime dependency beyond those agreed in the development
-# plan; every other layer and every provider SDK is an optional extra (C2). A new
-# dependency needs agreement and a licence check (scripts/licence_audit.py).
-dependencies = []
+# plan (pydantic, agreed for Wave 1); every other layer and every provider SDK is
+# an optional extra (C2). A new dependency needs agreement and a licence check
+# (scripts/licence_audit.py).
+dependencies = ["pydantic>=2.9,<3"]
 
 [project.optional-dependencies]
 # Each extra is declared now and filled by the workstream that builds its layer.
