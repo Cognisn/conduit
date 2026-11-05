@@ -18,8 +18,9 @@ lines into conduit stream events ending with one ``StreamStopped``.
   counts (some Ollama versions omit ``prompt_eval_count`` when the whole prompt was
   cached) reports zero for each missing count; a negative count is a protocol failure.
 
-Every failure is ``ProviderError(failure)`` raised ``from None``: Ollama's error text
-never reaches a log, an exception or an event.
+Every failure is ``ProviderError(failure)`` raised outside any exception handler, so
+no decoding or validation error is its cause or its context: Ollama's text never
+reaches a log, an exception or an event.
 """
 
 from __future__ import annotations
@@ -79,11 +80,10 @@ def _tool_names(request: ModelRequest) -> dict[str, str]:
 
 
 def _tool_message(result: ToolResultBlock, names: dict[str, str]) -> dict[str, Any]:
-    try:
-        name = names[result.tool_use_id]
-    except KeyError:
+    name = names.get(result.tool_use_id)
+    if name is None:
         # A result for a call the history does not hold: refused before any call.
-        raise ProviderError(ProviderFailure.REJECTED) from None
+        raise ProviderError(ProviderFailure.REJECTED)
     text = _texts(result.content)
     entry: dict[str, Any] = {
         "role": "tool",
@@ -181,6 +181,33 @@ def _usage(data: dict[str, Any]) -> Usage:
     )
 
 
+_INVALID: Any = object()
+
+
+def _loads(text: str) -> Any:
+    """The JSON value of ``text``, or ``_INVALID``.
+
+    The decoding error is not raised from here: the caller raises its own error after
+    this handler has finished, so the decoder's message (which quotes the text) is
+    neither its cause nor its context.
+    """
+    try:
+        return json.loads(text)
+    except ValueError:
+        return _INVALID
+
+
+def _call_events(call_id: str, name: str, arguments: Any) -> list[StreamEvent] | None:
+    """A tool call's started and finished events, or ``None`` if they are invalid."""
+    try:
+        return [
+            ToolCallStarted(id=call_id, name=name),
+            ToolCallFinished(id=call_id, name=name, input=arguments),
+        ]
+    except ValidationError:
+        return None
+
+
 class StreamMapper:
     """Turns /api/chat NDJSON lines into conduit stream events."""
 
@@ -199,20 +226,18 @@ class StreamMapper:
                 raise _protocol()
             arguments = function.get("arguments", {})
             if isinstance(arguments, str):
-                try:
-                    arguments = json.loads(arguments)
-                except ValueError:
-                    raise _protocol() from None
+                arguments = _loads(arguments)
+                if arguments is _INVALID:
+                    raise _protocol()
             name = function.get("name")
             if not isinstance(name, str):
                 raise _protocol()
             given = call.get("id")
             call_id = given if isinstance(given, str) and given else self._new_call_id()
-            try:
-                events.append(ToolCallStarted(id=call_id, name=name))
-                events.append(ToolCallFinished(id=call_id, name=name, input=arguments))
-            except ValidationError:
-                raise _protocol() from None
+            pair = _call_events(call_id, name, arguments)
+            if pair is None:
+                raise _protocol()
+            events += pair
             self._called = True
         return events
 
@@ -222,10 +247,7 @@ class StreamMapper:
             return []
         if self._stopped is not None:
             raise _protocol()
-        try:
-            data = json.loads(line)
-        except ValueError:
-            raise _protocol() from None
+        data = _loads(line)
         if not isinstance(data, dict):
             raise _protocol()
         if "error" in data:

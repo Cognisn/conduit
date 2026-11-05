@@ -31,6 +31,7 @@ from conduit.providers.gemini import GeminiFactory, GeminiProvider
 from conduit.providers.gemini.mapping import SKIP_SIGNATURE
 from conduit.testing.replay import Replay, load_recording
 from tests.unit.providers.gemini import recordings
+from tests.unit.providers.gemini.chains import assert_nothing_attached
 from tests.unit.providers.gemini.recordings import FakeClient
 
 SETTINGS = {"kind": "gemini", "api_key": "secret://gemini/key"}
@@ -204,8 +205,7 @@ class TestFailures:
             await provider.complete(_request())
         assert caught.value.failure is ProviderFailure.UNAVAILABLE
         assert "secret detail" not in str(caught.value)
-        assert caught.value.__cause__ is None
-        assert caught.value.__suppress_context__
+        assert_nothing_attached(caught.value, "secret detail")
 
     async def test_an_error_mid_stream_carries_no_provider_text(self) -> None:
         provider = await _build(
@@ -215,8 +215,7 @@ class TestFailures:
             await provider.complete(_request())
         assert caught.value.failure is ProviderFailure.UNAVAILABLE
         assert "secret detail" not in str(caught.value)
-        assert caught.value.__cause__ is None
-        assert caught.value.__suppress_context__
+        assert_nothing_attached(caught.value, "secret detail")
 
     @pytest.mark.parametrize(
         "chunk",
@@ -238,8 +237,7 @@ class TestFailures:
             await provider.complete(_request())
         assert caught.value.failure is ProviderFailure.PROTOCOL
         assert "secret detail" not in str(caught.value)
-        assert caught.value.__cause__ is None
-        assert caught.value.__context__ is None or caught.value.__suppress_context__
+        assert_nothing_attached(caught.value, "secret detail")
 
     @pytest.mark.parametrize("at_start", [True, False])
     async def test_the_call_timeout_applies(self, at_start: bool) -> None:

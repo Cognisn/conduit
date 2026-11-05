@@ -8,8 +8,10 @@ consumer stops early, the SDK stream is closed.
 Thought signatures (see ``conduit.providers.gemini.mapping``) are remembered by call
 id, the most recent ``signature_memory`` of them, and sent back with their calls.
 
-Every error becomes ``ProviderError(failure)`` raised ``from None``, so provider text
-reaches no log, exception or event.
+Every error becomes ``ProviderError(failure)``, raised after the handler that caught
+the SDK's error, so that error is neither its cause nor its context: provider text
+reaches no log, exception or event. Closing the SDK stream never replaces or chains
+a failure: an error from the close is suppressed.
 """
 
 from __future__ import annotations
@@ -43,6 +45,34 @@ def _as_json(chunk: Any) -> Mapping[str, Any]:
     if isinstance(chunk, Mapping):
         return chunk
     raise TypeError("unexpected chunk type")
+
+
+async def _next_chunk(
+    chunks: Any, timeout: float
+) -> tuple[Mapping[str, Any] | None, ProviderFailure | None]:
+    """The next chunk in JSON form, ``(None, None)`` at the end, or the failure.
+
+    The failure is returned, not raised: the caller raises its ``ProviderError`` after
+    this handler has finished, so the SDK's error is neither its cause nor its context.
+    """
+    try:
+        return _as_json(await asyncio.wait_for(anext(chunks), timeout)), None
+    except StopAsyncIteration:
+        return None, None
+    except Exception as error:
+        return None, classify(error)
+
+
+def _feed(
+    mapper: StreamMapper, chunk: Mapping[str, Any]
+) -> tuple[list[StreamEvent], ProviderFailure | None]:
+    """The chunk's events, or the failure: a chunk the mapper cannot read is PROTOCOL."""
+    try:
+        return mapper.feed(chunk), None
+    except ProviderError as error:
+        return [], error.failure
+    except Exception:
+        return [], ProviderFailure.PROTOCOL
 
 
 async def _close(stream: Any) -> None:
@@ -87,31 +117,20 @@ class GeminiProvider(BaseProvider):
     async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
         params = build_request(request, signatures=self._signatures)
         timeout = request.timeout_s
-        try:
-            chunks = await asyncio.wait_for(
-                self.client.aio.models.generate_content_stream(**params), timeout
-            )
-        except ProviderError:
-            raise
-        except Exception as error:
-            raise ProviderError(classify(error)) from None
+        chunks, failure = await self._open(params, timeout)
+        if failure is not None:
+            raise ProviderError(failure)
         mapper = StreamMapper()
         try:
             while True:
-                try:
-                    chunk = _as_json(await asyncio.wait_for(anext(chunks), timeout))
-                except StopAsyncIteration:
+                chunk, failure = await _next_chunk(chunks, timeout)
+                if failure is not None:
+                    raise ProviderError(failure)
+                if chunk is None:
                     break
-                except Exception as error:
-                    raise ProviderError(classify(error)) from None
-                try:
-                    events = mapper.feed(chunk)
-                except ProviderError:
-                    raise
-                except Exception:
-                    # A chunk the mapper cannot read (a malformed shape): never the
-                    # raw error, which could carry the chunk's text.
-                    raise ProviderError(ProviderFailure.PROTOCOL) from None
+                events, failure = _feed(mapper, chunk)
+                if failure is not None:
+                    raise ProviderError(failure)
                 self._remember(mapper.signatures)
                 for event in events:
                     yield event
@@ -119,6 +138,18 @@ class GeminiProvider(BaseProvider):
             await _close(chunks)
         for event in mapper.finish():
             yield event
+
+    async def _open(
+        self, params: dict[str, Any], timeout: float
+    ) -> tuple[Any, ProviderFailure | None]:
+        """The SDK stream, or the failure opening it (never the error itself)."""
+        try:
+            stream = await asyncio.wait_for(
+                self.client.aio.models.generate_content_stream(**params), timeout
+            )
+        except Exception as error:
+            return None, classify(error)
+        return stream, None
 
     async def aclose(self) -> None:
         await self.client.aio.aclose()

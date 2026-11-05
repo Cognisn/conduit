@@ -59,10 +59,10 @@ class GeminiFactory:
     def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
         """A ``google.genai.Client`` for ``settings``. Imports the SDK here only."""
         gemini = _gemini(settings)
-        try:
-            api_key = secrets["api_key"].get_secret_value()
-        except KeyError:
-            raise ConfigurationError("secret api_key was not resolved") from None
+        resolved = secrets.get("api_key")
+        if resolved is None:
+            raise ConfigurationError("secret api_key was not resolved")
+        api_key = resolved.get_secret_value()
         genai = importlib.import_module("google.genai")
         types = importlib.import_module("google.genai.types")
         options: dict[str, Any] = {

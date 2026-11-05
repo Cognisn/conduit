@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -117,11 +118,10 @@ def _parts(
             parts.append(part)
             first_call = False
         elif isinstance(block, ToolResultBlock):
-            try:
-                name = names[block.tool_use_id]
-            except KeyError:
+            name = names.get(block.tool_use_id)
+            if name is None:
                 # A result for a call the history does not hold: refused before any call.
-                raise ProviderError(ProviderFailure.REJECTED) from None
+                raise ProviderError(ProviderFailure.REJECTED)
             text = _texts(block.content)
             parts.append(
                 {
@@ -197,10 +197,13 @@ def _usage(usage: Mapping[str, Any]) -> Usage:
 def _signature(value: Any) -> bytes:
     if not isinstance(value, str):
         raise _protocol()
-    try:
-        return base64.b64decode(value, validate=True)
-    except (binascii.Error, ValueError):
-        raise _protocol() from None
+    decoded: bytes | None = None
+    with contextlib.suppress(binascii.Error, ValueError):
+        decoded = base64.b64decode(value, validate=True)
+    # Raised here, after the handler, so the decoding error is not attached.
+    if decoded is None:
+        raise _protocol()
+    return decoded
 
 
 class StreamMapper:
@@ -225,13 +228,15 @@ class StreamMapper:
         call_id = given if isinstance(given, str) and given else self._new_call_id()
         if "thought_signature" in part:
             self.signatures[call_id] = _signature(part["thought_signature"])
-        try:
-            events: list[StreamEvent] = [
+        events: list[StreamEvent] | None = None
+        with contextlib.suppress(ValidationError):
+            events = [
                 ToolCallStarted(id=call_id, name=name),
                 ToolCallFinished(id=call_id, name=name, input=args),
             ]
-        except ValidationError:
-            raise _protocol() from None
+        # Raised here, after the handler: the validation error repeats the values.
+        if events is None:
+            raise _protocol()
         self._called = True
         return events
 

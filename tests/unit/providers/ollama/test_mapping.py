@@ -30,6 +30,7 @@ from conduit.core.types import (
     Usage,
 )
 from conduit.providers.ollama.mapping import StreamMapper, build_chat_body, failure_for_status
+from tests.unit.providers.ollama.chains import assert_nothing_attached
 
 MODEL = "llama3.1:8b"
 PNG = b"\x89PNG\r\n\x1a\nsynthetic"
@@ -233,7 +234,7 @@ class TestStream:
             _run([_done("stop", **{key: -7031})])
         assert caught.value.failure is ProviderFailure.PROTOCOL
         assert "-7031" not in str(caught.value)
-        assert caught.value.__cause__ is None
+        assert_nothing_attached(caught.value, "-7031")
 
     def test_a_done_line_without_counts_reports_zero_usage(self) -> None:
         stop = _run([_done()])[-1]
@@ -324,8 +325,7 @@ class TestStream:
             _run([_chunk("Hi"), json.dumps({"error": "model runner crashed: secret detail"})])
         assert caught.value.failure is ProviderFailure.UNAVAILABLE
         assert "secret detail" not in str(caught.value)
-        assert caught.value.__cause__ is None
-        assert caught.value.__context__ is None
+        assert_nothing_attached(caught.value, "secret detail")
 
 
 @pytest.mark.parametrize(

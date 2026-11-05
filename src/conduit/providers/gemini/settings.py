@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Literal
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 from pydantic import Field, field_validator
 
@@ -34,11 +34,15 @@ class GeminiSettings(ProviderSettings):
     @classmethod
     def _plain_https_url(cls, value: str) -> str:
         # Messages never echo the URL: it may carry a credential by mistake.
+        parts: SplitResult | None = None
         try:
             parts = urlsplit(value)
             _ = parts.port  # raises for a malformed port
         except ValueError:
-            raise ValueError("base_url is not a valid URL") from None
+            parts = None
+        # Raised after the handler: the parser's message can quote the URL.
+        if parts is None:
+            raise ValueError("base_url is not a valid URL")
         if parts.scheme != "https" or not parts.hostname:
             raise ValueError("base_url must be an https URL naming a host")
         if parts.username is not None or parts.password is not None:

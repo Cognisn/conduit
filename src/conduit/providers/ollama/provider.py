@@ -9,12 +9,15 @@ that is not UTF-8, fails with ``PROTOCOL``. A redirect is never followed: any st
 but 200 is a failure (3xx and 4xx ``REJECTED``).
 If the consumer stops early, the response is closed.
 
-Every error becomes ``ProviderError(failure)`` raised ``from None``, so Ollama's text
-reaches no log, exception or event.
+Every error becomes ``ProviderError(failure)``, raised after the handler that caught
+httpx's error, so that error is neither its cause nor its context: Ollama's text
+reaches no log, exception or event. An error that is not one of httpx's own is
+``UNAVAILABLE``. Closing the response never replaces or chains a failure.
 """
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 from collections.abc import AsyncIterator
 from typing import Any
@@ -50,10 +53,14 @@ MAX_LINE_BYTES = 8 << 20
 
 
 def _decode(line: bytes) -> str:
-    try:
-        return line.rstrip(b"\r").decode("utf-8")
-    except UnicodeDecodeError:
-        raise ProviderError(ProviderFailure.PROTOCOL) from None
+    text: str | None = None
+    with contextlib.suppress(UnicodeDecodeError):
+        text = line.rstrip(b"\r").decode("utf-8")
+    # Raised here, after the handler, so the decoding error (which quotes the
+    # bytes) is neither the cause nor the context.
+    if text is None:
+        raise ProviderError(ProviderFailure.PROTOCOL)
+    return text
 
 
 async def _lines(chunks: AsyncIterator[bytes], limit: int) -> AsyncIterator[str]:
@@ -71,6 +78,41 @@ async def _lines(chunks: AsyncIterator[bytes], limit: int) -> AsyncIterator[str]
             raise ProviderError(ProviderFailure.PROTOCOL)
     if buffer:
         yield _decode(bytes(buffer))
+
+
+async def _send(
+    client: Any, body: dict[str, Any], timeout: float
+) -> tuple[Any, ProviderFailure | None]:
+    """The streamed response to a chat request, or the failure sending it.
+
+    The failure is returned, not raised: the caller raises its ``ProviderError`` after
+    this handler has finished, so httpx's error is neither its cause nor its context.
+    """
+    try:
+        sent = client.build_request("POST", CHAT_PATH, json=body, timeout=timeout)
+        return await client.send(sent, stream=True), None
+    except Exception as error:
+        return None, _classify(error) or ProviderFailure.UNAVAILABLE
+
+
+async def _next_line(lines: AsyncIterator[str]) -> tuple[str | None, ProviderFailure | None]:
+    """The next line, ``(None, None)`` at the end of the body, or the failure."""
+    try:
+        return await anext(lines), None
+    except StopAsyncIteration:
+        return None, None
+    except ProviderError as error:
+        return None, error.failure
+    except Exception as error:
+        return None, _classify(error) or ProviderFailure.UNAVAILABLE
+
+
+async def _close(lines: Any, response: Any) -> None:
+    """Close the line reader and the response. A failing close never replaces, or
+    rides along with, the failure being raised: its error is suppressed."""
+    for closable in (lines, response):
+        with contextlib.suppress(Exception):
+            await closable.aclose()
 
 
 class OllamaProvider(BaseProvider):
@@ -103,23 +145,24 @@ class OllamaProvider(BaseProvider):
     async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
         body = build_chat_body(request, num_ctx=self.num_ctx(request.model))
         mapper = StreamMapper()
+        response, failure = await _send(self.client, body, request.timeout_s)
+        if failure is not None:
+            raise ProviderError(failure)
+        lines = _lines(response.aiter_bytes(), self._max_line_bytes)
         try:
-            async with self.client.stream(
-                "POST", CHAT_PATH, json=body, timeout=request.timeout_s
-            ) as response:
-                if response.status_code != 200:
-                    # The body is never read: closing the response discards it.
-                    raise ProviderError(failure_for_status(response.status_code))
-                async for line in _lines(response.aiter_bytes(), self._max_line_bytes):
-                    for event in mapper.feed(line):
-                        yield event
-        except ProviderError:
-            raise
-        except Exception as error:
-            failure = _classify(error)
-            if failure is None:
-                raise
-            raise ProviderError(failure) from None
+            if response.status_code != 200:
+                # The body is never read: closing the response discards it.
+                raise ProviderError(failure_for_status(response.status_code))
+            while True:
+                line, failure = await _next_line(lines)
+                if failure is not None:
+                    raise ProviderError(failure)
+                if line is None:
+                    break
+                for event in mapper.feed(line):
+                    yield event
+        finally:
+            await _close(lines, response)
         for event in mapper.finish():
             yield event
 

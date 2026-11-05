@@ -31,6 +31,7 @@ from conduit.providers.ollama import OllamaFactory, OllamaProvider
 from conduit.providers.ollama.provider import MAX_LINE_BYTES
 from conduit.testing.replay import Replay, load_recording
 from tests.unit.providers.ollama import recordings
+from tests.unit.providers.ollama.chains import assert_nothing_attached
 
 httpx = pytest.importorskip("httpx", reason="needs the ollama extra")
 
@@ -279,7 +280,7 @@ class TestFailures:
             await provider.complete(_request())
         assert caught.value.failure is failure
         assert "secret-model" not in str(caught.value)
-        assert caught.value.__cause__ is None
+        assert_nothing_attached(caught.value, "secret-model")
 
     @pytest.mark.parametrize(
         ("error", "failure"),
@@ -299,8 +300,7 @@ class TestFailures:
             await provider.complete(_request())
         assert caught.value.failure is failure
         assert "secret detail" not in str(caught.value)
-        assert caught.value.__cause__ is None
-        assert caught.value.__suppress_context__
+        assert_nothing_attached(caught.value, "secret detail")
 
     @pytest.mark.parametrize("status", [301, 302, 307])
     async def test_a_redirect_is_rejected_and_not_followed(self, status: int) -> None:
@@ -363,7 +363,7 @@ class TestFailures:
         with pytest.raises(ProviderError) as caught:
             await provider.complete(_request())
         assert caught.value.failure is ProviderFailure.PROTOCOL
-        assert caught.value.__cause__ is None
+        assert_nothing_attached(caught.value)
 
     def test_the_default_line_limit_is_generous_but_bounded(self) -> None:
         assert 1 << 20 <= MAX_LINE_BYTES <= 64 << 20

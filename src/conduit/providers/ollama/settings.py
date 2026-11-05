@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Literal
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 from pydantic import Field, PositiveInt, field_validator
 
@@ -34,11 +34,15 @@ class OllamaSettings(ProviderSettings):
     @classmethod
     def _plain_http_url(cls, value: str) -> str:
         # Messages never echo the URL: it may carry a credential by mistake.
+        parts: SplitResult | None = None
         try:
             parts = urlsplit(value)
             _ = parts.port  # raises for a malformed port
         except ValueError:
-            raise ValueError("base_url is not a valid URL") from None
+            parts = None
+        # Raised after the handler: the parser's message can quote the URL.
+        if parts is None:
+            raise ValueError("base_url is not a valid URL")
         if parts.scheme not in ("http", "https"):
             raise ValueError("base_url must be an http or https URL")
         if not parts.hostname:

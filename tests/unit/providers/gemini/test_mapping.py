@@ -38,6 +38,7 @@ from conduit.providers.gemini.mapping import (
     StreamMapper,
     build_request,
 )
+from tests.unit.providers.gemini.chains import assert_nothing_attached
 
 MODEL = "gemini-3.8-flash"
 PNG = b"\x89PNG\r\n\x1a\nsynthetic"
@@ -351,7 +352,7 @@ class TestStream:
             _usage(_final(**{key: -7031}))
         assert caught.value.failure is ProviderFailure.PROTOCOL
         assert "-7031" not in str(caught.value)
-        assert caught.value.__cause__ is None
+        assert_nothing_attached(caught.value, "-7031")
 
     def test_a_stream_without_usage_is_a_protocol_failure(self) -> None:
         with pytest.raises(ProviderError) as caught:
