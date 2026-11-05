@@ -51,6 +51,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+      # torch first, from the PyTorch CPU index, so the local-embeddings extra keeps it
+      # and no NVIDIA package is installed (C13, Q0029).
+      - name: Install CPU-only torch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       # Every runtime extra, so mypy sees each layer's libraries (Q0008).
       - name: Install with every runtime extra
         shell: bash
@@ -58,6 +62,12 @@ jobs:
           pip install -e ".[dev]"
           extras=$(python -c "import importlib.metadata as m; print(','.join(e for e in m.metadata('cognisn-conduit').get_all('Provides-Extra') or [] if e != 'dev'))")
           pip install -e ".[dev,$extras]"
+      - name: Refuse any NVIDIA package
+        run: |
+          if pip list --format=freeze | grep -i '^nvidia[-_]'; then
+            echo "NVIDIA packages are installed: torch must come from the CPU index" >&2
+            exit 1
+          fi
       # Paths come from [tool.mypy] files: src, scripts and tests.
       - run: mypy --strict
 
@@ -76,6 +86,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+      # On Linux, torch first from the PyTorch CPU index, so the local-embeddings extra
+      # keeps it and no NVIDIA package is installed; macOS and Windows wheels from PyPI
+      # are CPU-only already (C13, Q0029). The suite checks no NVIDIA package is present.
+      - name: Install CPU-only torch
+        if: runner.os == 'Linux'
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       # Every runtime extra, so each layer's tests run and the licence audit test sees
       # the full install (Q0008). Names come from the package metadata, so a new extra
       # is picked up without editing this file.
@@ -145,8 +161,47 @@ jobs:
       # extras, then with every runtime extra (dev is never audited).
       - run: pip install . packaging
       - run: python scripts/licence_audit.py
+      # torch first, from the PyTorch CPU index, so the local-embeddings extra keeps it:
+      # the default Linux torch would bring NVIDIA CUDA packages, which are never
+      # installed or audited (C13).
+      - name: Install CPU-only torch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Install every runtime extra
         run: |
           extras=$(python -c "import importlib.metadata as m; print(','.join(e for e in m.metadata('cognisn-conduit').get_all('Provides-Extra') or [] if e != 'dev'))")
           pip install ".[$extras]"
+      - name: Refuse any NVIDIA package
+        run: |
+          if pip list --format=freeze | grep -i '^nvidia[-_]'; then
+            echo "NVIDIA packages are installed: torch must come from the CPU index" >&2
+            exit 1
+          fi
       - run: python scripts/licence_audit.py --all-extras
+
+  # The local-embeddings extra on CPU-only torch (C13): its tests, including the tiny
+  # model built on disk (no download), the tripwires and its licence audit. Ubuntu,
+  # where torch from PyPI would bring CUDA; macOS and Windows wheels are CPU-only.
+  local-embeddings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install CPU-only torch, then the extra
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev,local-embeddings]"
+      - name: Refuse any NVIDIA package
+        run: |
+          if pip list --format=freeze | grep -i '^nvidia[-_]'; then
+            echo "NVIDIA packages are installed: torch must come from the CPU index" >&2
+            exit 1
+          fi
+      # require: a broken torch or sentence-transformers install fails, never skips.
+      - run: pytest -ra tests/unit/embeddings tests/tripwires
+        env:
+          CONDUIT_LOCAL_EMBEDDINGS_TESTS: require
+          HF_HUB_OFFLINE: "1"
+      - run: python scripts/licence_audit.py --extra local-embeddings
