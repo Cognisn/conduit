@@ -41,7 +41,12 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel, SecretStr, ValidationError
 
 from conduit.core.catalogue import Catalogue, default_catalogue
-from conduit.core.errors import ConduitError, ConfigurationError, ProviderError, ProviderFailure
+from conduit.core.errors import (
+    ConfigurationError,
+    ModelNotAssigned,
+    ProviderError,
+    ProviderFailure,
+)
 from conduit.core.events import (
     CapturedContent,
     CapturePolicy,
@@ -80,21 +85,6 @@ async def _aclose(stream: AsyncIterator[StreamEvent]) -> None:
     closer = getattr(stream, "aclose", None)
     if closer is not None:
         await closer()
-
-
-class ModelNotAssigned(ConduitError, LookupError):
-    """A call named a model, or a task class, outside the provider's resolved assignments.
-
-    Raised before any client call. The message names the provider, model and task
-    class, which are configuration, never content.
-    """
-
-    def __init__(self, provider: str, model: str, task_class: str | None) -> None:
-        where = f" to task class {task_class!r}" if task_class is not None else ""
-        super().__init__(f"model {model!r} is not assigned{where} on provider {provider!r}")
-        self.provider = provider
-        self.model = model
-        self.task_class = task_class
 
 
 @runtime_checkable

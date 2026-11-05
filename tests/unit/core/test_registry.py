@@ -10,6 +10,7 @@ import pytest
 from conduit.core.catalogue import Catalogue, ModelEntry
 from conduit.core.errors import (
     ConfigurationError,
+    ModelNotAssigned,
     ProviderError,
     ProviderFailure,
     ResidencyRefused,
@@ -22,7 +23,7 @@ from conduit.core.events import (
     ModelCallFinishedEvent,
     ModelCallStartedEvent,
 )
-from conduit.core.registry import ModelNotAssigned, ProviderRegistry
+from conduit.core.registry import ProviderRegistry
 from conduit.core.residency import ResidencyPolicy, ResidencyScope
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.core.streaming import StreamStopped, TextDelta

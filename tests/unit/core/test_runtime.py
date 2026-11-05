@@ -7,9 +7,13 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from conduit.core.errors import CapabilityRefused, ConfigurationError, UndeclaredModel
+from conduit.core.errors import (
+    CapabilityRefused,
+    ConfigurationError,
+    ModelNotAssigned,
+    UndeclaredModel,
+)
 from conduit.core.events import MemoryEventSink, ModelCallFinishedEvent
-from conduit.core.registry import ModelNotAssigned
 from conduit.core.runtime import ConduitSettings, start
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.core.tasks import CapabilityFloor, TaskClass
