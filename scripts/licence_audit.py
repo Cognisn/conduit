@@ -47,6 +47,12 @@ EXCEPTIONS: dict[str, str] = {
     # installed as its own package.
     "certifi": "MPL-2.0 CA bundle required by httpx and requests; used unmodified, "
     "installed separately (Q0016)",
+    # Agreed 2026-11-05 (Skuld Q0032): the progress-bar library required by
+    # sentence-transformers, transformers and huggingface_hub (the local-embeddings
+    # extra); conduit never shows its bars. Used unmodified and installed as its own
+    # package.
+    "tqdm": "MPL-2.0 AND MIT progress bars required by sentence-transformers, transformers "
+    "and huggingface_hub; used unmodified, installed separately (Q0032)",
 }
 
 _STRONG = re.compile(
