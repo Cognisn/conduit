@@ -6,8 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a5] - 2026-11-04
+
+Wave 2, fourth merge: the Anthropic adapter (`feat/0.1.0-provider-anthropic`), and the Bedrock error-chain follow-up.
+
+### Added
+
+- The Anthropic adapter (`conduit.providers.anthropic`, `anthropic` extra) for the direct API and Claude in Microsoft Foundry:
+  - streaming text, and tool use assembled from input JSON deltas, reported once a call is known to be whole;
+  - all four usage counts, taken from the final message events;
+  - cache control from breakpoints, within the four-breakpoint limit;
+  - images, tool results, stop reasons and structured output;
+  - failures mapped to provider failures that carry no part of the failing exception.
+  - Keys are secret references. The client takes its key, endpoint and headers only from conduit's settings, and refuses SDK environment variables that would override them or log request content.
+
 ### Changed
 
+- Default catalogue: Claude Sonnet 4.6's output limit is 128K on the Anthropic API, Claude Fable 5.1 is added, and the catalogue's version is 2026.11.3.
+- `builtin_factories()` includes the Anthropic factory.
 - Bedrock provider and configuration errors carry no part of the failing exception: no cause and no context. A stream event or Converse response whose fields have the wrong type is a protocol failure.
 
 ## [0.1.0a4] - 2026-11-04
