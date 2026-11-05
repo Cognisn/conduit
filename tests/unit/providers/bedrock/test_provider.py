@@ -263,7 +263,7 @@ class TestErrors:
             await provider.complete(REQUEST)
         assert raised.value.failure is failure
         assert NOTES not in str(raised.value)
-        assert raised.value.__cause__ is None and raised.value.__suppress_context__
+        assert raised.value.__cause__ is None and raised.value.__context__ is None
         assert NOTES not in repr(sink.events)
 
     async def test_an_error_part_way_through_a_stream(self) -> None:
@@ -291,6 +291,7 @@ class TestErrors:
             with pytest.raises(ProviderError) as raised:
                 await provider.complete(REQUEST.model_copy(update={"timeout_s": 0.2}))
             assert raised.value.failure is ProviderFailure.TIMEOUT
+            assert raised.value.__cause__ is None and raised.value.__context__ is None
         finally:
             release.set()
 

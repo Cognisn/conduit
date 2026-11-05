@@ -2,7 +2,8 @@
 
 The classification reads class names and the error code and HTTP status of a
 ``ClientError`` response, so it needs no botocore import. Provider text never leaves
-this module: the adapter raises ``ProviderError(classify(error)) from None``.
+this module: the adapter raises ``ProviderError(classify(error))`` after the handler,
+with no cause or context.
 
 - Throttling, service and model availability errors, connection failures and HTTP 429
   or 5xx: ``UNAVAILABLE``.

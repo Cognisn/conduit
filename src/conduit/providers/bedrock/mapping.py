@@ -16,6 +16,7 @@ one: ``inputTokens``, ``outputTokens``, ``cacheReadInputTokens``,
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -191,10 +192,9 @@ def stop_reason_from_bedrock(raw: str) -> StopReason:
 def _tool_input(text: str) -> dict[str, Any]:
     if not text:
         return {}
-    try:
+    value: Any = None
+    with contextlib.suppress(json.JSONDecodeError):  # its message quotes the input
         value = json.loads(text)
-    except json.JSONDecodeError:
-        raise _protocol() from None
     if not isinstance(value, dict):
         raise _protocol()
     return value
@@ -216,10 +216,19 @@ class StreamMapper:
         self._usage: Usage | None = None
 
     def feed(self, raw: Mapping[str, Any]) -> Iterator[StreamEvent]:
+        # ValueError covers pydantic's ValidationError, whose text quotes the input.
+        broken = False
         try:
             yield from self._feed(raw)
-        except (KeyError, TypeError, AttributeError):
-            raise _protocol() from None
+        except (
+            KeyError,
+            TypeError,
+            AttributeError,
+            ValueError,
+        ):
+            broken = True
+        if broken:
+            raise _protocol()
 
     def _feed(self, raw: Mapping[str, Any]) -> Iterator[StreamEvent]:
         if "contentBlockStart" in raw:
@@ -287,6 +296,15 @@ def events_from_converse_response(response: Mapping[str, Any]) -> list[StreamEve
                 usage=usage_from_bedrock(response["usage"]),
             )
         )
-    except (KeyError, TypeError, AttributeError):
-        raise _protocol() from None
+    except (
+        KeyError,
+        TypeError,
+        AttributeError,
+        ValueError,
+    ):
+        broken = True
+    else:
+        broken = False
+    if broken:
+        raise _protocol()
     return events

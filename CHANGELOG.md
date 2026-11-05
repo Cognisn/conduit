@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Bedrock provider and configuration errors carry no part of the failing exception: no cause and no context. A stream event or Converse response whose fields have the wrong type is a protocol failure.
+
 ## [0.1.0a4] - 2026-11-04
 
 Wave 2, third merge: the Amazon Bedrock adapter (`feat/0.1.0-provider-bedrock`), and the stores follow-up (Q0018).
