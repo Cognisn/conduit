@@ -18,6 +18,7 @@ hold transcript content and token values, so the original error is never chained
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
@@ -38,6 +39,7 @@ from conduit.core.transcript import Transcript, TranscriptEntry
 from conduit.stores.errors import StoreError
 from conduit.stores.sql.models import (
     SCHEMA,
+    SESSION_ID_LENGTH,
     TOKEN_KEY_LENGTH,
     TokenRow,
     TranscriptEntryRow,
@@ -77,6 +79,10 @@ class _SqlStore:
             return await action()
         except StatementError as error:  # DBAPIError and every wrapped driver error
             failure = type(error).__name__
+            driver = getattr(error, "orig", None)
+            if driver is not None:
+                kind = type(driver)
+                failure += f" from {kind.__module__}.{kind.__qualname__}"
         # Raised here, after the handler, so the driver's error (and the statement
         # parameters in its message) is neither the cause nor the context.
         raise StoreError(self._name, operation, failure)
@@ -107,7 +113,7 @@ class SqlTranscriptStore(_SqlStore):
     async def append(
         self, session_id: str, entries: Sequence[TranscriptEntry]
     ) -> tuple[TranscriptEntry, ...]:
-        Transcript(session_id=session_id)  # refuses an id the transcript model refuses
+        _check_session_id(session_id)
         if not entries:
             return ()
         return await self._guarded("append to a session", lambda: self._append(session_id, entries))
@@ -155,7 +161,7 @@ class SqlTranscriptStore(_SqlStore):
         return numbered
 
     async def load(self, session_id: str) -> Transcript:
-        Transcript(session_id=session_id)
+        _check_session_id(session_id)
 
         async def read() -> Sequence[str]:
             async with self._begin() as connection:
@@ -167,9 +173,14 @@ class SqlTranscriptStore(_SqlStore):
                 return rows.scalars().all()
 
         bodies = await self._guarded("load a session", read)
-        return Transcript(
-            session_id=session_id, entries=tuple(_ENTRY.validate_json(body) for body in bodies)
-        )
+        decoded = True
+        try:
+            entries = tuple(_ENTRY.validate_json(body) for body in bodies)
+        except ValueError:  # pydantic's error text would repeat the stored content
+            decoded = False
+        if not decoded:
+            raise StoreError(self._name, "decode a stored session")
+        return Transcript(session_id=session_id, entries=entries)
 
     async def list_sessions(self) -> Sequence[str]:
         async def read() -> list[str]:
@@ -200,6 +211,12 @@ class SqlTranscriptStore(_SqlStore):
         await self._guarded("delete a session", remove)
 
 
+def _check_session_id(session_id: str) -> None:
+    # The transcript model's own error would repeat the id.
+    if not 1 <= len(session_id) <= SESSION_ID_LENGTH:
+        raise ValueError(f"refused session id: it must be 1 to {SESSION_ID_LENGTH} characters")
+
+
 def _check_key(key: str) -> None:
     if len(key) > TOKEN_KEY_LENGTH:
         raise ValueError(f"refused token key: it must be at most {TOKEN_KEY_LENGTH} characters")
@@ -222,7 +239,15 @@ class SqlTokenStore(_SqlStore):
                 return found
 
         data = await self._guarded("get a token set", read)
-        return None if data is None else TokenSet.from_storage(json.loads(data))
+        if data is None:
+            return None
+        tokens: TokenSet | None = None
+        # The decoder's error would repeat the stored token values.
+        with contextlib.suppress(ValueError, TypeError, KeyError, AttributeError):
+            tokens = TokenSet.from_storage(json.loads(data))
+        if tokens is None:
+            raise StoreError(self._name, "decode a stored token set")
+        return tokens
 
     async def put(self, key: str, tokens: TokenSet) -> None:
         _check_key(key)

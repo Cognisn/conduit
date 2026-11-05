@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- The SQL stores refuse a stored row they cannot decode with `StoreError`, refuse a session id outside 1 to 256 characters with an error that does not repeat it, and name the driver's error class in `StoreError`. A JSON store write whose directory cannot be synced after the replace is no longer reported as failed (Q0018).
+
 ## [0.1.0a3] - 2026-11-04
 
 Wave 2, second merge: JSON and SQL stores (`feat/0.1.0-stores`).
