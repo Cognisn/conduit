@@ -127,6 +127,28 @@ def test_a_library_with_several_owners_is_admitted_by_each_and_no_other(tmp_path
     }
 
 
+def test_google_genai_is_owned_by_the_gemini_adapter_only(tmp_path: Path) -> None:
+    assert OPTIONAL_LIBRARIES["google.genai"] == ("conduit.providers.gemini",)
+    src = _tree(
+        tmp_path,
+        {
+            "conduit/providers/__init__.py": "",
+            "conduit/providers/gemini/__init__.py": "from google import genai\n",
+            "conduit/providers/gemini/factory.py": (
+                "import importlib\nimportlib.import_module('google.genai.types')\n"
+            ),
+            "conduit/providers/ollama/__init__.py": "import google.genai\n",
+            "conduit/embeddings/__init__.py": "from google.genai import types\n",
+        },
+    )
+    found = {(e.importer, e.imported) for e in optional_library_violations(scan_tree(src))}
+    assert found == {
+        ("conduit.providers.ollama", "google.genai"),
+        ("conduit.embeddings", "google.genai"),
+        ("conduit.embeddings", "google.genai.types"),
+    }
+
+
 @pytest.mark.parametrize("driver", ["asyncpg", "aiosqlite"])
 def test_the_sql_drivers_are_owned_by_the_sql_store_only(tmp_path: Path, driver: str) -> None:
     # The sql extra's database drivers, like sqlalchemy and alembic, belong to
