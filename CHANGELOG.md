@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a7] - 2026-11-04
+
+Wave 2, sixth merge: the Gemini and Ollama adapters (`feat/0.1.0-provider-gemini-ollama`).
+
+### Added
+
+- The Gemini adapter (`conduit.providers.gemini`, `gemini` extra with google-genai):
+  - an API key as a secret reference, with the key, backend and base URL pinned against the environment;
+  - streaming text and function calls, with Gemini thought signatures remembered per call and returned on the next turn;
+  - usage from the final chunk, with cached prompt tokens reported as cache reads;
+  - cache breakpoints ignored, because Gemini caching is managed separately.
+- The Ollama adapter (`conduit.providers.ollama`, `ollama` extra with httpx):
+  - an httpx client with a loopback default, ignoring the environment's proxies and never following redirects;
+  - `/api/chat` NDJSON streaming with stream lines bounded at 8 MiB; text, tool calls, and usage with cached prompt tokens as cache reads where Ollama reports them;
+  - a call whose response finished is not failed by an error closing the body.
+- Both adapters map every failure to a provider failure that carries no part of the failing exception, and a failing close never replaces a failure.
+- Catalogue: four current Gemini models.
+- The import tripwire allows a library several owning layers: httpx is owned by the Ollama adapter and the MCP layer, asyncpg and aiosqlite by the SQL stores, and google.genai is pinned to the Gemini adapter.
+
+### Changed
+
+- `builtin_factories()` includes the Gemini and Ollama factories.
+- Catalogue: `nomic-embed-text`'s context window is 2048, and the catalogue's version is 2026.11.5.
+
+### Removed
+
+- Catalogue: Gemini 2.5 Pro and Gemini 2.5 Flash, which Google has deprecated.
+
+
 ## [0.1.0a6] - 2026-11-04
 
 Wave 2, fifth merge: the OpenAI-compatible adapter (`feat/0.1.0-provider-openai-compat`).
