@@ -9,8 +9,14 @@ from collections.abc import AsyncIterator, Iterator
 
 import pytest
 
+from conduit.core import facade
 from conduit.core.errors import FacadeError
+from conduit.core.events import MemoryEventSink, ModelCallFinishedEvent
 from conduit.core.facade import LoopThread, SyncFacade, default_loop, sync
+from conduit.core.registry import ProviderRegistry
+from conduit.core.secrets import LiteralSecretResolver
+from conduit.core.types import Message, ModelRequest
+from tests.unit.core.fakes import CATALOGUE, PARTIAL, FakeFactory
 
 
 @pytest.fixture
@@ -148,3 +154,139 @@ class TestFacade:
     def test_the_default_loop_is_shared(self) -> None:
         assert default_loop() is default_loop()
         assert sync(Service()).add(1, 2) == 3
+
+
+async def _careful(started: threading.Event, cleaned: list[str]) -> AsyncIterator[int]:
+    """A generator whose cleanup awaits, as an SDK stream's does."""
+    try:
+        yield 1
+        started.set()
+        await asyncio.sleep(30)
+        yield 2
+    finally:
+        await asyncio.sleep(0.05)
+        cleaned.append("cleaned")
+
+
+class TestIteratorTimeout:
+    def test_a_step_that_times_out_raises_timeout_after_cleanup(self, loop: LoopThread) -> None:
+        cleaned: list[str] = []
+        iterator = loop.iterate(_careful(threading.Event(), cleaned), timeout=0.2)
+        assert next(iterator) == 1
+        with pytest.raises(TimeoutError):
+            next(iterator)
+        assert cleaned == ["cleaned"]  # unwound before the caller saw the timeout
+
+    def test_a_timed_out_call_has_unwound_when_run_returns(self, loop: LoopThread) -> None:
+        service = Service()
+        with pytest.raises(TimeoutError):
+            loop.run(service.slow(5), timeout=0.05)
+        assert service.cancelled  # no polling: the cancellation finished first
+
+    def test_a_facade_timeout_on_a_metered_stream_is_metered_as_cancelled(
+        self, loop: LoopThread
+    ) -> None:
+        sink = MemoryEventSink()
+        registry = ProviderRegistry(
+            secrets=LiteralSecretResolver({"fake/key": "not-a-real-key"}),
+            catalogue=CATALOGUE,
+            events=sink,
+            factories=[FakeFactory()],
+        )
+        provider = loop.run(
+            registry.build(
+                "p", {"kind": "fake", "api_key": "secret://fake/key", "behaviour": "slow"}
+            )
+        )
+        request = ModelRequest(
+            model="fake-large", messages=(Message.user("hello"),), max_output_tokens=10
+        )
+        with pytest.raises(TimeoutError):
+            list(sync(provider, loop=loop, timeout=0.3).stream(request))
+        with pytest.raises(TimeoutError):
+            sync(provider, loop=loop, timeout=0.3).complete(request)
+        finished = [e for e in sink.events if isinstance(e, ModelCallFinishedEvent)]
+        assert [e.error_type for e in finished] == ["cancelled", "cancelled"]
+        assert all(e.usage == PARTIAL for e in finished)
+
+
+async def _stubborn(cleaned: list[str]) -> AsyncIterator[int]:
+    """A generator whose cleanup takes far longer than the grace period."""
+    try:
+        yield 1
+        await asyncio.sleep(30)
+        yield 2
+    finally:
+        await asyncio.sleep(0.5)
+        cleaned.append("cleaned")
+
+
+class TestStrandedSteps:
+    def test_a_cleanup_that_overruns_the_grace_period_still_releases_the_caller(
+        self, loop: LoopThread, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(facade, "UNWIND_GRACE_S", 0.1)
+        cleaned: list[str] = []
+        iterator = loop.iterate(_stubborn(cleaned), timeout=0.1)
+        assert next(iterator) == 1
+        began = time.monotonic()
+        with pytest.raises(TimeoutError):
+            next(iterator)
+        assert time.monotonic() - began < 0.45  # released before the cleanup finished
+        assert cleaned == []
+        deadline = time.monotonic() + 3
+        while not cleaned and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert cleaned == ["cleaned"]  # the cancelled step closed the generator itself
+
+    def test_a_timeout_the_call_raises_itself_passes_through(self, loop: LoopThread) -> None:
+        async def own() -> None:
+            raise TimeoutError("the call's own deadline")
+
+        with pytest.raises(TimeoutError, match="own deadline"):
+            loop.run(own(), timeout=5)
+
+
+class TestClose:
+    def test_close_releases_a_caller_waiting_without_a_timeout(self) -> None:
+        owned = LoopThread()
+        service = Service()
+        outcome: list[BaseException] = []
+
+        def wait() -> None:
+            try:
+                owned.run(service.slow(30), timeout=None)
+            except BaseException as error:
+                outcome.append(error)
+
+        caller = threading.Thread(target=wait, daemon=True)  # a regression must not hang the run
+        caller.start()
+        deadline = time.monotonic() + 5
+        while owned.thread_id is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.1)
+        owned.close(join_timeout=5)
+        caller.join(5)
+        assert not caller.is_alive()
+        assert len(outcome) == 1 and isinstance(outcome[0], FacadeError)
+        assert service.cancelled
+
+    def test_close_finalises_suspended_generators(self) -> None:
+        owned = LoopThread()
+        service = Service()
+        iterator = owned.iterate(service.numbers(10))
+        assert next(iterator) == 0
+        owned.close(join_timeout=5)
+        assert service.closed_stream
+        iterator.close()  # the loop is closed: nothing more to do, and no error
+
+    def test_close_is_refused_on_the_loops_own_thread(self, loop: LoopThread) -> None:
+        async def close_from_inside() -> str:
+            try:
+                loop.close()
+            except FacadeError as error:
+                return f"refused: {error}"
+            return "closed"
+
+        assert loop.run(close_from_inside(), timeout=3).startswith("refused")
+        assert loop.run(Service().add(1, 1)) == 2  # still serving
