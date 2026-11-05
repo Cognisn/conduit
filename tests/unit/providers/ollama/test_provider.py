@@ -340,13 +340,16 @@ class TestFailures:
             await provider.complete(_request())
         assert caught.value.failure is ProviderFailure.PROTOCOL
 
-    async def test_lines_within_the_limit_and_split_across_chunks_are_read(self) -> None:
+    @pytest.mark.parametrize("size", [1, 7, 1 << 16])
+    async def test_lines_within_the_limit_and_split_across_chunks_are_read(self, size: int) -> None:
+        # One-byte chunks put a newline at the start of a chunk, so a reader that
+        # searches only the newly received part must still find it.
         payload = (NEWLINE.join(_done_lines("Hello there.")) + NEWLINE).encode("utf-8")
 
         class Trickle(httpx.AsyncByteStream):  # type: ignore[misc,name-defined]
             async def __aiter__(self) -> AsyncIterator[bytes]:
-                for i in range(0, len(payload), 7):
-                    yield payload[i : i + 7]
+                for i in range(0, len(payload), size):
+                    yield payload[i : i + size]
 
         def handle(request: Any) -> Any:
             return httpx.Response(200, stream=Trickle())
@@ -354,6 +357,77 @@ class TestFailures:
         provider = _direct(handle, max_line_bytes=200)
         response = await provider.complete(_request())
         assert response.text == "Hello there."
+
+    async def test_a_short_line_after_a_split_line_is_found(self) -> None:
+        # The first line arrives in two chunks; the second chunk also carries a short
+        # line ("{}") whose newline lies before where the previous search ended. A
+        # reader that kept its old search offset would miss it and merge two lines.
+        text, done = _done_lines("Hello there.")
+        chunks = [
+            text[:30].encode("utf-8"),
+            (text[30:] + NEWLINE + "{}" + NEWLINE).encode("utf-8"),
+            (done + NEWLINE).encode("utf-8"),
+        ]
+
+        class Split(httpx.AsyncByteStream):  # type: ignore[misc,name-defined]
+            async def __aiter__(self) -> AsyncIterator[bytes]:
+                for chunk in chunks:
+                    yield chunk
+
+        provider = await _build(lambda request: httpx.Response(200, stream=Split()))
+        assert (await provider.complete(_request())).text == "Hello there."
+
+    @pytest.mark.parametrize("terminated", [True, False])
+    async def test_the_line_bound_is_exact(self, terminated: bool) -> None:
+        # A line of exactly the limit (not counting its newline) is read; one byte
+        # more is a protocol failure.
+        text, done = _done_lines("x" * 40)
+        body = (text + NEWLINE + done + (NEWLINE if terminated else "")).encode("utf-8")
+        longest = max(len(text.encode("utf-8")), len(done.encode("utf-8")))
+
+        def handle(request: Any) -> Any:
+            return httpx.Response(200, content=body)
+
+        exact = _direct(handle, max_line_bytes=longest)
+        assert (await exact.complete(_request())).text == "x" * 40
+        under = _direct(handle, max_line_bytes=longest - 1)
+        with pytest.raises(ProviderError) as caught:
+            await under.complete(_request())
+        assert caught.value.failure is ProviderFailure.PROTOCOL
+
+    async def test_a_failing_body_close_after_the_done_line_is_a_success(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # httpx closes the body when it is exhausted; once the done line has been
+        # read, an error there cannot change the outcome. Only its class is logged.
+        class ClosesBadly(httpx.AsyncByteStream):  # type: ignore[misc,name-defined]
+            async def __aiter__(self) -> AsyncIterator[bytes]:
+                yield (NEWLINE.join(_done_lines("Hi.")) + NEWLINE).encode("utf-8")
+
+            async def aclose(self) -> None:
+                raise httpx.ReadError("secret close detail")
+
+        provider = await _build(lambda request: httpx.Response(200, stream=ClosesBadly()))
+        with caplog.at_level("WARNING", logger="conduit.providers.ollama"):
+            response = await provider.complete(_request())
+        assert response.text == "Hi."
+        assert response.stop_reason is StopReason.END_TURN
+        assert "ReadError" in caplog.text
+        assert "secret close detail" not in caplog.text
+
+    async def test_a_failing_body_close_before_the_done_line_fails_cleanly(self) -> None:
+        class ClosesBadly(httpx.AsyncByteStream):  # type: ignore[misc,name-defined]
+            async def __aiter__(self) -> AsyncIterator[bytes]:
+                yield (_done_lines("Hi.")[0] + NEWLINE).encode("utf-8")
+
+            async def aclose(self) -> None:
+                raise httpx.ReadError("secret close detail")
+
+        provider = await _build(lambda request: httpx.Response(200, stream=ClosesBadly()))
+        with pytest.raises(ProviderError) as caught:
+            await provider.complete(_request())
+        assert caught.value.failure is ProviderFailure.UNAVAILABLE
+        assert_nothing_attached(caught.value, "secret close detail")
 
     async def test_a_line_that_is_not_utf8_is_a_protocol_failure(self) -> None:
         def handle(request: Any) -> Any:

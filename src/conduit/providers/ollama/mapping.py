@@ -241,6 +241,11 @@ class StreamMapper:
             self._called = True
         return events
 
+    @property
+    def stopped(self) -> bool:
+        """Whether the done line has been read (and its ``StreamStopped`` returned)."""
+        return self._stopped is not None
+
     def feed(self, line: str) -> list[StreamEvent]:
         """The events one NDJSON line carries (none for a blank line)."""
         if not line.strip():

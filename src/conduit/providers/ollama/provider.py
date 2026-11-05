@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -34,6 +35,8 @@ from conduit.providers.ollama.mapping import (
     failure_for_status,
 )
 from conduit.providers.ollama.settings import OllamaSettings
+
+logger = logging.getLogger("conduit.providers.ollama")
 
 
 def _classify(error: Exception) -> ProviderFailure | None:
@@ -64,16 +67,20 @@ def _decode(line: bytes) -> str:
 
 
 async def _lines(chunks: AsyncIterator[bytes], limit: int) -> AsyncIterator[str]:
-    """The NDJSON lines of a body, each at most ``limit`` bytes."""
+    """The NDJSON lines of a body, each at most ``limit`` bytes (not counting the
+    newline). Only newly received bytes are searched for a newline."""
     buffer = bytearray()
+    searched = 0  # the leading bytes of the buffer already known to hold no newline
     async for chunk in chunks:
         buffer += chunk
-        while (end := buffer.find(b"\n")) >= 0:
+        while (end := buffer.find(b"\n", searched)) >= 0:
             if end > limit:
                 raise ProviderError(ProviderFailure.PROTOCOL)
             line = bytes(buffer[:end])
             del buffer[: end + 1]
+            searched = 0
             yield _decode(line)
+        searched = len(buffer)
         if len(buffer) > limit:
             raise ProviderError(ProviderFailure.PROTOCOL)
     if buffer:
@@ -95,16 +102,22 @@ async def _send(
         return None, _classify(error) or ProviderFailure.UNAVAILABLE
 
 
-async def _next_line(lines: AsyncIterator[str]) -> tuple[str | None, ProviderFailure | None]:
-    """The next line, ``(None, None)`` at the end of the body, or the failure."""
+async def _next_line(
+    lines: AsyncIterator[str],
+) -> tuple[str | None, ProviderFailure | None, str | None]:
+    """The next line, ``(None, None, None)`` at the end of the body, or the failure.
+
+    For a failure from reading the body (not from conduit's own checks), the third
+    item is the error's class name, for logging; never its text.
+    """
     try:
-        return await anext(lines), None
+        return await anext(lines), None, None
     except StopAsyncIteration:
-        return None, None
+        return None, None, None
     except ProviderError as error:
-        return None, error.failure
+        return None, error.failure, None
     except Exception as error:
-        return None, _classify(error) or ProviderFailure.UNAVAILABLE
+        return None, _classify(error) or ProviderFailure.UNAVAILABLE, type(error).__name__
 
 
 async def _close(lines: Any, response: Any) -> None:
@@ -154,7 +167,13 @@ class OllamaProvider(BaseProvider):
                 # The body is never read: closing the response discards it.
                 raise ProviderError(failure_for_status(response.status_code))
             while True:
-                line, failure = await _next_line(lines)
+                line, failure, kind = await _next_line(lines)
+                if failure is not None and kind is not None and mapper.stopped:
+                    # The done line has been read and its StreamStopped yielded: an
+                    # error ending the body (httpx closes it when exhausted) cannot
+                    # change the outcome. Its class is logged, never its text.
+                    logger.warning("Ollama body ended with %s after the done line", kind)
+                    break
                 if failure is not None:
                     raise ProviderError(failure)
                 if line is None:
