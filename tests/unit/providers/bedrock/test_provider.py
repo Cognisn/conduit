@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -402,3 +403,164 @@ class TestWorkerThreads:
         provider, _ = await built(runtime)
         await provider.aclose()
         assert runtime.closed
+
+
+CONVERSE_RESPONSE = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 1, "outputTokens": 1},
+}
+
+
+class ConverseRuntime:
+    """A fake client whose Converse call waits on ``release`` (if given), then answers."""
+
+    def __init__(
+        self, *, release: threading.Event | None = None, error: Exception | None = None
+    ) -> None:
+        self.release = release
+        self.error = error
+        self.threads: list[threading.Thread] = []
+        self.returned = threading.Event()
+
+    def converse(self, **params: Any) -> Any:
+        self.threads.append(threading.current_thread())
+        try:
+            if self.release is not None:
+                self.release.wait(10)
+            if self.error is not None:
+                raise self.error
+            return CONVERSE_RESPONSE
+        finally:
+            self.returned.set()
+
+
+class TestConverseThread:
+    """Q0020: each Converse call runs on its own daemon thread, as ConverseStream does."""
+
+    async def test_converse_runs_on_its_own_daemon_thread(self) -> None:
+        runtime = ConverseRuntime()
+        provider, _ = await built(runtime, use_converse_stream=False)
+        assert (await provider.complete(REQUEST)).text == "ok"
+        (thread,) = runtime.threads
+        assert thread.daemon
+        assert thread.name == "conduit-bedrock-converse"
+        assert thread is not threading.current_thread()
+
+    async def test_a_timed_out_call_holds_no_executor_thread(self) -> None:
+        # With one executor worker, a call left waiting in the executor would block
+        # the next piece of executor work until the stuck call returned.
+        loop = asyncio.get_running_loop()
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        loop.set_default_executor(executor)
+        release = threading.Event()
+        runtime = ConverseRuntime(release=release)
+        provider, _ = await built(runtime, use_converse_stream=False)
+        try:
+            with pytest.raises(ProviderError) as raised:
+                await provider.complete(REQUEST.model_copy(update={"timeout_s": 0.2}))
+            assert raised.value.failure is ProviderFailure.TIMEOUT
+            assert raised.value.__cause__ is None and raised.value.__context__ is None
+            assert await asyncio.wait_for(loop.run_in_executor(None, lambda: 7), 2) == 7
+        finally:
+            release.set()
+            await asyncio.to_thread(runtime.returned.wait, 5)
+
+    async def test_a_late_answer_after_the_timeout_is_dropped_quietly(self) -> None:
+        release = threading.Event()
+        runtime = ConverseRuntime(release=release)
+        provider, _ = await built(runtime, use_converse_stream=False)
+        loop = asyncio.get_running_loop()
+        reported: list[dict[str, Any]] = []
+        loop.set_exception_handler(lambda _loop, context: reported.append(context))
+        try:
+            with pytest.raises(ProviderError):
+                await provider.complete(REQUEST.model_copy(update={"timeout_s": 0.1}))
+            release.set()
+            await asyncio.to_thread(runtime.returned.wait, 5)
+            (thread,) = runtime.threads
+            await asyncio.to_thread(thread.join, 2)
+            assert not thread.is_alive()
+            for _ in range(5):
+                await asyncio.sleep(0)  # the late answer's callback runs on the loop
+            assert reported == []  # nothing failed on the loop when it arrived
+        finally:
+            loop.set_exception_handler(None)
+
+    async def test_an_error_on_the_thread_carries_its_class_and_no_provider_text(self) -> None:
+        runtime = ConverseRuntime(error=ClientError("ThrottlingException", 429))
+        provider, _ = await built(runtime, use_converse_stream=False)
+        with pytest.raises(ProviderError) as raised:
+            await provider.complete(REQUEST)
+        assert raised.value.failure is ProviderFailure.UNAVAILABLE
+        assert raised.value.__cause__ is None and raised.value.__context__ is None
+        assert NOTES not in str(raised.value)
+
+    async def test_cancelling_the_caller_propagates_unchanged(self) -> None:
+        release = threading.Event()
+        runtime = ConverseRuntime(release=release)
+        provider, _ = await built(runtime, use_converse_stream=False)
+        task = asyncio.create_task(provider.complete(REQUEST))
+        try:
+            while not runtime.threads:
+                await asyncio.sleep(0.01)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            release.set()
+            await asyncio.to_thread(runtime.returned.wait, 5)
+
+
+class TestStalledConsumer:
+    """A consumer that stops iterating without closing: the worker gives up and closes."""
+
+    @staticmethod
+    def _endless() -> Iterator[Any]:
+        while True:
+            yield {"contentBlockDelta": {"delta": {"text": "x"}, "contentBlockIndex": 0}}
+
+    async def test_the_worker_gives_up_after_the_timeout_and_closes_the_stream(self) -> None:
+        runtime = ScriptedRuntime(self._endless())
+        provider, _ = await built(runtime)
+        events = provider.stream(REQUEST.model_copy(update={"timeout_s": 0.3}))
+        assert await anext(events) == TextDelta(text="x")
+        # Neither iterated nor closed from here: the worker waits at the bound.
+        worker = runtime.thread_objects[0]
+        await asyncio.to_thread(worker.join, 5)
+        assert not worker.is_alive()
+        assert runtime.closed_streams >= 1
+        await events.aclose()
+
+    async def test_a_consumer_that_comes_back_after_the_give_up_times_out(self) -> None:
+        runtime = ScriptedRuntime(self._endless())
+        provider, _ = await built(runtime)
+        events = provider.stream(REQUEST.model_copy(update={"timeout_s": 0.3}))
+        await anext(events)
+        await asyncio.to_thread(runtime.thread_objects[0].join, 5)
+        read = 0
+        try:
+            with pytest.raises(ProviderError) as raised:
+                # Only what was buffered before the give-up remains to be read.
+                while read <= STREAM_BUFFER + 2:
+                    await anext(events)
+                    read += 1
+            assert raised.value.failure is ProviderFailure.TIMEOUT
+            assert raised.value.__cause__ is None and raised.value.__context__ is None
+        finally:
+            await events.aclose()
+
+    async def test_a_pause_shorter_than_the_timeout_does_not_give_up(self) -> None:
+        def stream() -> Iterator[Any]:
+            for _ in range(STREAM_BUFFER * 2):
+                yield {"contentBlockDelta": {"delta": {"text": "x"}, "contentBlockIndex": 0}}
+            yield from STOP
+
+        runtime = ScriptedRuntime(stream())
+        provider, _ = await built(runtime)
+        events = provider.stream(REQUEST.model_copy(update={"timeout_s": 1.0}))
+        await anext(events)
+        await asyncio.sleep(0.4)  # the worker waits at the bound, within the timeout
+        rest = [event async for event in events]
+        assert isinstance(rest[-1], StreamStopped)
+        assert sum(isinstance(e, TextDelta) for e in rest) == STREAM_BUFFER * 2 - 1
