@@ -264,3 +264,50 @@ def test_getattr_on_unrelated_objects_is_ignored() -> None:
         return getattr(obj, "Client")(), getattr(json, "dumps")({}), getattr(obj, name)()
     """
     assert _constructions(source, "conduit.providers.example") == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            """
+            from anthropic.lib.bedrock import AsyncAnthropicBedrockMantle
+            client = AsyncAnthropicBedrockMantle()
+            """,
+            id="mantle-from-lib",
+        ),
+        pytest.param(
+            """
+            import importlib
+            sdk = importlib.import_module("anthropic.lib.bedrock")
+            client = sdk.AsyncAnthropicBedrockMantle()
+            """,
+            id="mantle-import-module",
+        ),
+        pytest.param(
+            """
+            import importlib
+            from conduit.providers.bedrock_mantle.auth import bearer_client_class
+            sdk = importlib.import_module("anthropic.lib.bedrock")
+            client = bearer_client_class(sdk.AsyncAnthropicBedrockMantle, keys)(region="x")
+            """,
+            id="mantle-keyed-class",
+        ),
+    ],
+)
+def test_a_bedrock_mantle_client_outside_a_factory_is_caught(source: str) -> None:
+    assert _constructions(source, "conduit.providers.bedrock_mantle.stray") != []
+
+
+def test_a_bedrock_mantle_client_inside_create_client_is_allowed() -> None:
+    source = """
+    import importlib
+    from conduit.providers.bedrock_mantle.auth import bearer_client_class
+
+    class Factory:
+        def create_client(self, settings, secrets):
+            sdk = importlib.import_module("anthropic.lib.bedrock")
+            client_class = bearer_client_class(sdk.AsyncAnthropicBedrockMantle, secrets)
+            return client_class(region=settings.region)
+    """
+    assert _constructions(source, "conduit.providers.bedrock_mantle.factory") == []

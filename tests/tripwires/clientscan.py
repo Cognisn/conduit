@@ -47,6 +47,12 @@ CLIENT_CONSTRUCTORS: frozenset[str] = frozenset(
         "anthropic.AsyncAnthropicVertex",
         "anthropic.AnthropicFoundry",
         "anthropic.AsyncAnthropicFoundry",
+        "anthropic.AnthropicBedrockMantle",
+        "anthropic.AsyncAnthropicBedrockMantle",
+        "anthropic.lib.bedrock.AnthropicBedrockMantle",
+        "anthropic.lib.bedrock.AsyncAnthropicBedrockMantle",
+        # Builds the keyed bedrock-mantle client class; calling it is a construction.
+        "conduit.providers.bedrock_mantle.auth.bearer_client_class",
         "openai.OpenAI",
         "openai.AsyncOpenAI",
         "openai.AzureOpenAI",
