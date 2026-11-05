@@ -58,7 +58,9 @@ all-providers = [
     "httpx>=0.28,<1",
 ]
 # Layers (C12 to C15, C19, C10).
-local-embeddings = []
+# sentence-transformers on CPU-only torch (C13): install torch from
+# https://download.pytorch.org/whl/cpu first (see conduit.embeddings.local).
+local-embeddings = ["sentence-transformers>=6.2,<7", "torch>=2.15,<3"]
 mcp = []
 sql = [
     "sqlalchemy[asyncio]>=2.0.30,<2.1",

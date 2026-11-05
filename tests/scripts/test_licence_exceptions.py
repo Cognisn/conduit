@@ -1,6 +1,8 @@
-"""The agreed licence exceptions: certifi only, and only for weak copyleft (Q0016)."""
+"""The agreed licence exceptions: certifi (Q0016) and tqdm (Q0032), only for weak copyleft."""
 
 from __future__ import annotations
+
+import pytest
 
 from licence_audit import EXCEPTIONS, Package, audit
 
@@ -10,16 +12,24 @@ def _tree(dependency: Package) -> dict[str, Package]:
     return {"root": root, dependency.name: dependency}
 
 
-def test_certifi_is_the_only_named_exception() -> None:
-    assert set(EXCEPTIONS) == {"certifi"}
+def test_certifi_and_tqdm_are_the_only_named_exceptions() -> None:
+    # Re-pointed for Q0032: tqdm joins certifi, agreed for the local-embeddings extra.
+    assert set(EXCEPTIONS) == {"certifi", "tqdm"}
     assert "MPL-2.0" in EXCEPTIONS["certifi"]
+    assert "MPL-2.0 AND MIT" in EXCEPTIONS["tqdm"]
+    assert "Q0032" in EXCEPTIONS["tqdm"]
 
 
-def test_certifi_under_mpl_passes_as_an_exception() -> None:
-    certifi = Package(name="certifi", licences=["MPL-2.0"], requires=[], extras=[])
-    report = audit("root", lookup=_tree(certifi).__getitem__)
+@pytest.mark.parametrize(
+    ("name", "licences"), [("certifi", ["MPL-2.0"]), ("tqdm", ["MPL-2.0 AND MIT"])]
+)
+def test_each_exception_under_its_weak_copyleft_licence_passes(
+    name: str, licences: list[str]
+) -> None:
+    package = Package(name=name, licences=licences, requires=[], extras=[])
+    report = audit("root", lookup=_tree(package).__getitem__)
     assert report.violations == []
-    assert [p.name for p in report.excepted] == ["certifi"]
+    assert [p.name for p in report.excepted] == [name]
 
 
 def test_another_mpl_package_is_still_refused() -> None:
@@ -28,7 +38,8 @@ def test_another_mpl_package_is_still_refused() -> None:
     assert [p.name for p in report.violations] == ["other-bundle"]
 
 
-def test_certifi_under_strong_copyleft_is_refused_despite_the_exception() -> None:
-    certifi = Package(name="certifi", licences=["GPL-3.0-only"], requires=[], extras=[])
-    report = audit("root", lookup=_tree(certifi).__getitem__)
-    assert [p.name for p in report.violations] == ["certifi"]
+@pytest.mark.parametrize("name", ["certifi", "tqdm"])
+def test_an_exception_under_strong_copyleft_is_refused_despite_it(name: str) -> None:
+    package = Package(name=name, licences=["GPL-3.0-only"], requires=[], extras=[])
+    report = audit("root", lookup=_tree(package).__getitem__)
+    assert [p.name for p in report.violations] == [name]
