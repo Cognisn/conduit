@@ -11,11 +11,22 @@ Responses: ConverseStream events, or a whole Converse response, become conduit s
 events ending with one ``StreamStopped`` whose usage comes from the final metadata.
 Bedrock's ``inputTokens`` counts uncached input only, so the four counts map one to
 one: ``inputTokens``, ``outputTokens``, ``cacheReadInputTokens``,
-``cacheWriteInputTokens``. Reasoning content is not surfaced.
+``cacheWriteInputTokens``.
+
+Reasoning: a reasoning block (``reasoningText`` with its text and signature, or
+``redactedContent``), streamed in pieces or whole in a Converse response, is reported
+when it is whole, in its place, as one ``ProviderStateReported``: a ``bedrock`` state
+block of type ``reasoning_content`` whose payload is the block's ``reasoningContent``
+value as JSON (redacted bytes as base64). It is never streamed as text. Sending back,
+each ``bedrock`` state block becomes that ``reasoningContent`` block again, in its place
+in the assistant message, as Claude on Bedrock needs for tool use with reasoning; other
+kinds' state is left out. Bedrock state that is not a whole reasoning block is refused
+as ``REJECTED`` before any call, with nothing of the payload in the error.
 """
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 from collections.abc import Iterator, Mapping, Sequence
@@ -24,6 +35,7 @@ from typing import Any
 
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.streaming import (
+    ProviderStateReported,
     StreamEvent,
     StreamStopped,
     TextDelta,
@@ -45,6 +57,62 @@ from conduit.core.types import (
 
 CACHE_POINT: dict[str, Any] = {"cachePoint": {"type": "default"}}
 MAX_CACHE_POINTS = 4
+#: The provider kind and state type of a reasoning block's state.
+KIND = "bedrock"
+REASONING_STATE = "reasoning_content"
+_REASONING_TEXT_FIELDS = frozenset({"text", "signature"})
+
+
+def _reasoning_text(value: Any) -> dict[str, str] | None:
+    """A ``reasoningText`` value (text, and a signature if any), or ``None``."""
+    if not isinstance(value, Mapping) or "text" not in value:
+        return None
+    if not set(value) <= _REASONING_TEXT_FIELDS:
+        return None
+    if not all(isinstance(item, str) for item in value.values()):
+        return None
+    return dict(value)
+
+
+def reasoning_state(content: Any) -> ProviderStateBlock:
+    """The state block for a Converse ``reasoningContent`` value, or PROTOCOL."""
+    payload: dict[str, Any] | None = None
+    if isinstance(content, Mapping) and len(content) == 1:
+        if "reasoningText" in content:
+            text = _reasoning_text(content["reasoningText"])
+            if text is not None:
+                payload = {"reasoningText": text}
+        elif isinstance(content.get("redactedContent"), bytes):
+            encoded = base64.b64encode(content["redactedContent"]).decode("ascii")
+            payload = {"redactedContent": encoded}
+    if payload is None:
+        raise _protocol()
+    return ProviderStateBlock(
+        provider_kind=KIND,
+        state_type=REASONING_STATE,
+        payload=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+    )
+
+
+def _reasoning_content(state: ProviderStateBlock) -> dict[str, Any]:
+    """The ``reasoningContent`` block a ``bedrock`` state block holds, or REJECTED."""
+    data: Any = None
+    with contextlib.suppress(ValueError):  # UnicodeDecodeError and JSONDecodeError
+        data = json.loads(state.payload.decode("utf-8"))
+    wire: dict[str, Any] | None = None
+    if state.state_type == REASONING_STATE and isinstance(data, dict) and len(data) == 1:
+        if "reasoningText" in data:
+            text = _reasoning_text(data["reasoningText"])
+            if text is not None:
+                wire = {"reasoningText": text}
+        elif isinstance(data.get("redactedContent"), str):
+            with contextlib.suppress(ValueError):  # binascii.Error
+                wire = {"redactedContent": base64.b64decode(data["redactedContent"], validate=True)}
+    # Raised here, after the handlers: their errors quote the payload.
+    if wire is None:
+        raise ProviderError(ProviderFailure.REJECTED)
+    return {"reasoningContent": wire}
+
 
 _IMAGE_FORMATS = {
     "image/png": "png",
@@ -104,7 +172,8 @@ def _content(block: Any, points: _CachePoints) -> list[dict[str, Any]]:
     if isinstance(block, CacheBreakpoint):
         return points.take()
     if isinstance(block, ProviderStateBlock):
-        return []  # not sent back until the adapter round-trips its own state
+        # Its own reasoning goes back in place; another kind's state is left out.
+        return [_reasoning_content(block)] if block.provider_kind == KIND else []
     if isinstance(block, ToolUseBlock):
         return [{"toolUse": {"toolUseId": block.id, "name": block.name, "input": block.input}}]
     if isinstance(block, ToolResultBlock):
@@ -210,11 +279,45 @@ class _OpenCall:
     input: list[str] = field(default_factory=list)
 
 
+@dataclass
+class _OpenReasoning:
+    """A reasoning block streamed in pieces: text and signature, or redacted bytes."""
+
+    text: list[str] = field(default_factory=list)
+    signature: list[str] = field(default_factory=list)
+    redacted: bytes | None = None
+
+    def add(self, piece: Any) -> None:
+        if not isinstance(piece, Mapping) or len(piece) != 1:
+            raise _protocol()
+        ((name, value),) = piece.items()
+        if name == "redactedContent" and isinstance(value, bytes):
+            if self.text or self.signature or self.redacted is not None:
+                raise _protocol()
+            self.redacted = value
+        elif name in _REASONING_TEXT_FIELDS and isinstance(value, str):
+            if self.redacted is not None:
+                raise _protocol()
+            (self.text if name == "text" else self.signature).append(value)
+        else:
+            raise _protocol()
+
+    def whole(self) -> dict[str, Any]:
+        """The block's ``reasoningContent`` value, as a Converse response gives it."""
+        if self.redacted is not None:
+            return {"redactedContent": self.redacted}
+        text = {"text": "".join(self.text)}
+        if self.signature:
+            text["signature"] = "".join(self.signature)
+        return {"reasoningText": text}
+
+
 class StreamMapper:
     """Turns ConverseStream events into conduit stream events, one event at a time."""
 
     def __init__(self) -> None:
         self._calls: dict[int, _OpenCall] = {}
+        self._reasoning: dict[int, _OpenReasoning] = {}
         self._stop: StopReason | None = None
         self._usage: Usage | None = None
 
@@ -255,9 +358,18 @@ class StreamMapper:
                 if open_call is None:
                     raise _protocol()
                 open_call.input.append(delta["toolUse"].get("input", ""))
-            # reasoningContent and other deltas are not surfaced.
+            elif "reasoningContent" in delta:
+                index = body["contentBlockIndex"]
+                if index in self._calls:
+                    raise _protocol()
+                self._reasoning.setdefault(index, _OpenReasoning()).add(delta["reasoningContent"])
+            # Other deltas are not surfaced.
         elif "contentBlockStop" in raw:
-            finished = self._calls.pop(raw["contentBlockStop"]["contentBlockIndex"], None)
+            index = raw["contentBlockStop"]["contentBlockIndex"]
+            reasoning = self._reasoning.pop(index, None)
+            if reasoning is not None:
+                yield ProviderStateReported(state=reasoning_state(reasoning.whole()))
+            finished = self._calls.pop(index, None)
             if finished is not None:
                 yield ToolCallFinished(
                     id=finished.id, name=finished.name, input=_tool_input("".join(finished.input))
@@ -271,7 +383,7 @@ class StreamMapper:
 
     def finish(self) -> Iterator[StreamEvent]:
         """The final ``StreamStopped``, once the stream has ended."""
-        if self._stop is None or self._usage is None or self._calls:
+        if self._stop is None or self._usage is None or self._calls or self._reasoning:
             raise _protocol()
         yield StreamStopped(stop_reason=self._stop, usage=self._usage)
 
@@ -293,6 +405,9 @@ def events_from_converse_response(response: Mapping[str, Any]) -> list[StreamEve
                 events.append(
                     ToolCallFinished(id=use["toolUseId"], name=use["name"], input=use["input"])
                 )
+            elif "reasoningContent" in block:
+                state = reasoning_state(block["reasoningContent"])
+                events.append(ProviderStateReported(state=state))
         events.append(
             StreamStopped(
                 stop_reason=stop_reason_from_bedrock(response["stopReason"]),

@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from typing import Any
 
 import pytest
 
 from conduit.core.errors import ProviderError, ProviderFailure
-from conduit.core.streaming import StreamStopped, TextDelta, ToolCallFinished, ToolCallStarted
+from conduit.core.streaming import (
+    ProviderStateReported,
+    StreamStopped,
+    TextDelta,
+    ToolCallFinished,
+    ToolCallStarted,
+)
 from conduit.core.types import (
     CacheBreakpoint,
     ImageBlock,
@@ -296,6 +304,23 @@ METADATA = {"metadata": {"usage": {"inputTokens": 11, "outputTokens": 7}, "metri
 USAGE = Usage(input_tokens=11, output_tokens=7, cache_read_tokens=0, cache_write_tokens=0)
 
 
+REASONING: dict[str, Any] = {"reasoningText": {"text": "Weighing it up.", "signature": "c2lnLTAx"}}
+REDACTED: dict[str, Any] = {"redactedContent": base64.b64encode(b"\x00encrypted").decode("ascii")}
+
+
+def _reasoning_delta(index: int, delta: Any) -> dict[str, Any]:
+    return {"contentBlockDelta": {"delta": {"reasoningContent": delta}, "contentBlockIndex": index}}
+
+
+def _reasoning_state(payload: dict[str, Any]) -> ProviderStateBlock:
+    """The state block for one reasoning block, as the mapper reports it."""
+    return ProviderStateBlock(
+        provider_kind="bedrock",
+        state_type="reasoning_content",
+        payload=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+    )
+
+
 def run(raw_events: list[dict[str, Any]]) -> list[Any]:
     mapper = StreamMapper()
     out: list[Any] = []
@@ -372,20 +397,89 @@ class TestStream:
         )
         assert events[1] == ToolCallFinished(id="tu-1", name="lookup", input={})
 
-    def test_reasoning_deltas_are_not_surfaced(self) -> None:
+    def test_reasoning_is_reported_whole_as_state_when_its_block_stops(self) -> None:
+        # Re-pointed: reasoning was dropped until the adapter round-tripped its own state.
         events = run(
             [
-                {
-                    "contentBlockDelta": {
-                        "delta": {"reasoningContent": {"text": "thinking"}},
-                        "contentBlockIndex": 0,
-                    }
-                },
+                _reasoning_delta(0, {"text": "Weighing "}),
+                _reasoning_delta(0, {"text": "it up."}),
+                _reasoning_delta(0, {"signature": "c2lnLTAx"}),
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                {"contentBlockDelta": {"delta": {"text": "Answer."}, "contentBlockIndex": 1}},
+                {"contentBlockStop": {"contentBlockIndex": 1}},
                 {"messageStop": {"stopReason": "end_turn"}},
                 METADATA,
             ]
         )
-        assert events == [StreamStopped(stop_reason=StopReason.END_TURN, usage=USAGE)]
+        assert events == [
+            ProviderStateReported(state=_reasoning_state(REASONING)),
+            TextDelta(text="Answer."),
+            StreamStopped(stop_reason=StopReason.END_TURN, usage=USAGE),
+        ]
+
+    def test_reasoning_text_is_never_streamed_as_text(self) -> None:
+        events = run(
+            [
+                _reasoning_delta(0, {"text": "zz-private-reasoning-zz"}),
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                {"messageStop": {"stopReason": "end_turn"}},
+                METADATA,
+            ]
+        )
+        assert not [e for e in events if isinstance(e, TextDelta)]
+
+    def test_redacted_reasoning_is_kept_whole(self) -> None:
+        events = run(
+            [
+                _reasoning_delta(0, {"redactedContent": b"\x00encrypted"}),
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                {"messageStop": {"stopReason": "end_turn"}},
+                METADATA,
+            ]
+        )
+        assert events[0] == ProviderStateReported(state=_reasoning_state(REDACTED))
+
+    @pytest.mark.parametrize(
+        "deltas",
+        [
+            [{"text": 5}],
+            [{"signature": None}],
+            [{"redactedContent": "not bytes"}],
+            [{"text": "t"}, {"redactedContent": b"x"}],
+            [{"somethingElse": "x"}],
+            ["not a mapping"],
+        ],
+    )
+    def test_malformed_reasoning_is_a_protocol_failure(self, deltas: list[Any]) -> None:
+        raw = [_reasoning_delta(0, d) for d in deltas]
+        raw += [
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+            {"messageStop": {"stopReason": "end_turn"}},
+            METADATA,
+        ]
+        with pytest.raises(ProviderError) as raised:
+            run(raw)
+        assert raised.value.failure is ProviderFailure.PROTOCOL
+        assert raised.value.__cause__ is None and raised.value.__context__ is None
+
+    @pytest.mark.parametrize("piece", [{"text": 5}, {"signature": None}, {"text": b"t"}])
+    def test_a_malformed_piece_fails_at_its_own_delta(self, piece: dict[str, Any]) -> None:
+        # Refused when it arrives, not later when the block stops.
+        mapper = StreamMapper()
+        with pytest.raises(ProviderError) as raised:
+            list(mapper.feed(_reasoning_delta(0, piece)))
+        assert raised.value.failure is ProviderFailure.PROTOCOL
+
+    def test_reasoning_never_stopped_is_a_protocol_failure(self) -> None:
+        with pytest.raises(ProviderError) as raised:
+            run(
+                [
+                    _reasoning_delta(0, {"text": "t"}),
+                    {"messageStop": {"stopReason": "end_turn"}},
+                    METADATA,
+                ]
+            )
+        assert raised.value.failure is ProviderFailure.PROTOCOL
 
     @pytest.mark.parametrize(
         "raw_events",
@@ -503,24 +597,137 @@ class TestConverseResponse:
         assert raised.value.failure is ProviderFailure.PROTOCOL
         assert raised.value.__cause__ is None and raised.value.__context__ is None
 
+    def test_reasoning_in_a_converse_response_becomes_state_in_place(self) -> None:
+        events = events_from_converse_response(
+            {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"reasoningContent": REASONING},
+                            {"reasoningContent": {"redactedContent": b"\x00encrypted"}},
+                            {"text": "Answer."},
+                        ],
+                    }
+                },
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 11, "outputTokens": 7},
+            }
+        )
+        assert events[:3] == [
+            ProviderStateReported(state=_reasoning_state(REASONING)),
+            ProviderStateReported(state=_reasoning_state(REDACTED)),
+            TextDelta(text="Answer."),
+        ]
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            {"reasoningText": {"text": 1}},
+            {"reasoningText": {"text": "t", "signature": 2}},
+            {"reasoningText": {"text": "t", "other": "x"}},
+            {"redactedContent": "not bytes"},
+            {"reasoningText": {"text": "t"}, "redactedContent": b"x"},
+            {},
+        ],
+    )
+    def test_malformed_reasoning_in_a_converse_response_is_a_protocol_failure(
+        self, block: dict[str, Any]
+    ) -> None:
+        with pytest.raises(ProviderError) as raised:
+            events_from_converse_response(
+                {
+                    "output": {"message": {"content": [{"reasoningContent": block}]}},
+                    "stopReason": "end_turn",
+                    "usage": {"inputTokens": 1, "outputTokens": 1},
+                }
+            )
+        assert raised.value.failure is ProviderFailure.PROTOCOL
+        assert raised.value.__cause__ is None and raised.value.__context__ is None
+
+
+def _sent_back(*content: Any) -> list[Any]:
+    params = build_converse_request(
+        request(
+            messages=(
+                Message.user("Hello"),
+                Message(role="assistant", content=content),
+                Message.user("Again"),
+            )
+        ),
+        prompt_caching=True,
+    )
+    sent: list[Any] = params["messages"][1]["content"]
+    return sent
+
 
 class TestProviderState:
-    """Until the adapter round-trips its own state, every kind's state is left out."""
+    """Bedrock's own reasoning goes back unchanged, in place; other kinds' state does not."""
 
-    @pytest.mark.parametrize("kind", ["gemini", "bedrock"])
-    def test_provider_state_is_not_sent(self, kind: str) -> None:
+    def test_own_reasoning_is_sent_back_in_place(self) -> None:
+        call = ToolUseBlock(id="tu-1", name="lookup", input={"host": "a"})
+        sent = _sent_back(_reasoning_state(REASONING), TextBlock(text="Hi."), call)
+        assert sent == [
+            {"reasoningContent": REASONING},
+            {"text": "Hi."},
+            {"toolUse": {"toolUseId": "tu-1", "name": "lookup", "input": {"host": "a"}}},
+        ]
+
+    def test_redacted_reasoning_goes_back_as_bytes(self) -> None:
+        sent = _sent_back(_reasoning_state(REDACTED), TextBlock(text="Hi."))
+        assert sent[0] == {"reasoningContent": {"redactedContent": b"\x00encrypted"}}
+
+    def test_a_reasoning_block_without_a_signature_goes_back_without_one(self) -> None:
+        unsigned = {"reasoningText": {"text": "Weighing it up."}}
+        assert _sent_back(_reasoning_state(unsigned))[0] == {"reasoningContent": unsigned}
+
+    @pytest.mark.parametrize("kind", ["gemini", "anthropic", "stub"])
+    def test_other_kinds_state_is_left_out(self, kind: str) -> None:
         state = ProviderStateBlock(
             provider_kind=kind, state_type="reasoning", payload=b"zz-state-marker-zz"
         )
-        params = build_converse_request(
-            request(
-                messages=(
-                    Message.user("Hello"),
-                    Message(role="assistant", content=(state, TextBlock(text="Hi."))),
-                    Message.user("Again"),
-                )
-            ),
-            prompt_caching=False,
+        sent = _sent_back(state, TextBlock(text="Hi."))
+        assert sent == [{"text": "Hi."}]
+        assert "zz-state-marker-zz" not in repr(sent)
+
+    def test_a_breakpoint_after_state_stays_in_place(self) -> None:
+        sent = _sent_back(_reasoning_state(REASONING), CacheBreakpoint(), TextBlock(text="Hi."))
+        assert sent == [{"reasoningContent": REASONING}, CACHE_POINT, {"text": "Hi."}]
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            b"not json zz-state-marker-zz",
+            b"\xff zz-state-marker-zz",
+            b'["zz-state-marker-zz"]',
+            b"{}",
+            b'{"reasoningText": {"text": 1}}',
+            b'{"reasoningText": {"text": "t", "signature": 2}}',
+            b'{"reasoningText": {"text": "t", "extra": "zz-state-marker-zz"}}',
+            b'{"reasoningText": "zz-state-marker-zz"}',
+            b'{"redactedContent": "%%zz-state-marker-zz%%"}',
+            # Decodes once the stray characters are dropped: only strict base64 is taken.
+            b'{"redactedContent": "eA==!!"}',
+            b'{"redactedContent": 5}',
+            b'{"reasoningText": {"text": "t"}, "redactedContent": "eA=="}',
+        ],
+    )
+    def test_own_state_that_is_not_reasoning_is_refused_cleanly(self, payload: bytes) -> None:
+        state = ProviderStateBlock(
+            provider_kind="bedrock", state_type="reasoning_content", payload=payload
         )
-        assert params["messages"][1]["content"] == [{"text": "Hi."}]
-        assert "zz-state-marker-zz" not in repr(params)
+        with pytest.raises(ProviderError) as raised:
+            _sent_back(state)
+        assert raised.value.failure is ProviderFailure.REJECTED
+        assert raised.value.__cause__ is None and raised.value.__context__ is None
+        for text in (str(raised.value), repr(raised.value), *map(repr, raised.value.args)):
+            assert "zz-state-marker-zz" not in text
+
+    def test_own_state_of_another_type_is_refused(self) -> None:
+        good = _reasoning_state(REASONING)
+        state = ProviderStateBlock(
+            provider_kind="bedrock", state_type="future", payload=good.payload
+        )
+        with pytest.raises(ProviderError) as raised:
+            _sent_back(state)
+        assert raised.value.failure is ProviderFailure.REJECTED
