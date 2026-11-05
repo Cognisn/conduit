@@ -59,9 +59,15 @@ def postgres_server() -> Iterator[str]:
     except ImportError:
         _unavailable("testcontainers is not installed (the dev extra)")
         raise  # pragma: no cover - _unavailable raises
-    container = PostgresContainer(
-        IMAGE, username=USER, password=PASSWORD, dbname=DATABASE, driver="asyncpg"
-    )
+    try:
+        # Making the container object already reaches Docker (it fails here on macOS
+        # runners, which have no Docker).
+        container = PostgresContainer(
+            IMAGE, username=USER, password=PASSWORD, dbname=DATABASE, driver="asyncpg"
+        )
+    except Exception as error:
+        _unavailable(f"no Docker client could be made ({type(error).__name__})")
+        raise  # pragma: no cover - _unavailable raises
     port = os.environ.get(PORT_VARIABLE)
     # testcontainers binds every interface; docker-py takes (address, port), or
     # (address,) for a free port on that address only.
