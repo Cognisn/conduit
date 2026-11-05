@@ -4,6 +4,9 @@ The client is made by ``OllamaFactory.create_client``; this module only uses it,
 imports httpx (for its exception classes) only when a call fails, so it loads without
 the ollama extra. ``request.timeout_s`` applies to connecting and to the wait for each
 next line of the stream, so a stalled model fails with ``TIMEOUT`` rather than hanging.
+A line longer than ``MAX_LINE_BYTES`` (or the provider's ``max_line_bytes``), or one
+that is not UTF-8, fails with ``PROTOCOL``. A redirect is never followed: any status
+but 200 is a failure (3xx and 4xx ``REJECTED``).
 If the consumer stops early, the response is closed.
 
 Every error becomes ``ProviderError(failure)`` raised ``from None``, so Ollama's text
@@ -40,18 +43,55 @@ def _classify(error: Exception) -> ProviderFailure | None:
     return None
 
 
+#: The longest NDJSON line read. A line carries one piece of the reply (a token, a
+#: tool call, the final counts), so this is generous; a longer one is refused rather
+#: than buffered without bound.
+MAX_LINE_BYTES = 8 << 20
+
+
+def _decode(line: bytes) -> str:
+    try:
+        return line.rstrip(b"\r").decode("utf-8")
+    except UnicodeDecodeError:
+        raise ProviderError(ProviderFailure.PROTOCOL) from None
+
+
+async def _lines(chunks: AsyncIterator[bytes], limit: int) -> AsyncIterator[str]:
+    """The NDJSON lines of a body, each at most ``limit`` bytes."""
+    buffer = bytearray()
+    async for chunk in chunks:
+        buffer += chunk
+        while (end := buffer.find(b"\n")) >= 0:
+            if end > limit:
+                raise ProviderError(ProviderFailure.PROTOCOL)
+            line = bytes(buffer[:end])
+            del buffer[: end + 1]
+            yield _decode(line)
+        if len(buffer) > limit:
+            raise ProviderError(ProviderFailure.PROTOCOL)
+    if buffer:
+        yield _decode(bytes(buffer))
+
+
 class OllamaProvider(BaseProvider):
     """One configured Ollama server, around an httpx ``AsyncClient``."""
 
     kind = "ollama"
 
     def __init__(
-        self, name: str, settings: OllamaSettings, client: Any, *, catalogue: Catalogue
+        self,
+        name: str,
+        settings: OllamaSettings,
+        client: Any,
+        *,
+        catalogue: Catalogue,
+        max_line_bytes: int = MAX_LINE_BYTES,
     ) -> None:
         self.name = name
         self.settings = settings
         self.client = client
         self._catalogue = catalogue
+        self._max_line_bytes = max_line_bytes
 
     def num_ctx(self, model: str) -> int | None:
         """The context length to ask for: the setting, else the catalogue's window."""
@@ -68,9 +108,9 @@ class OllamaProvider(BaseProvider):
                 "POST", CHAT_PATH, json=body, timeout=request.timeout_s
             ) as response:
                 if response.status_code != 200:
-                    await response.aread()  # drain; the body is never read further
+                    # The body is never read: closing the response discards it.
                     raise ProviderError(failure_for_status(response.status_code))
-                async for line in response.aiter_lines():
+                async for line in _lines(response.aiter_bytes(), self._max_line_bytes):
                     for event in mapper.feed(line):
                         yield event
         except ProviderError:

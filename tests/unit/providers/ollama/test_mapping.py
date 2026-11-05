@@ -227,6 +227,19 @@ class TestStream:
             input_tokens=10, output_tokens=0, cache_read_tokens=30, cache_write_tokens=0
         )
 
+    @pytest.mark.parametrize("key", ["prompt_eval_count", "prompt_eval_cached_count", "eval_count"])
+    def test_a_negative_count_is_a_protocol_failure_without_the_value(self, key: str) -> None:
+        with pytest.raises(ProviderError) as caught:
+            _run([_done("stop", **{key: -7031})])
+        assert caught.value.failure is ProviderFailure.PROTOCOL
+        assert "-7031" not in str(caught.value)
+        assert caught.value.__cause__ is None
+
+    def test_a_done_line_without_counts_reports_zero_usage(self) -> None:
+        stop = _run([_done()])[-1]
+        assert isinstance(stop, StreamStopped)
+        assert stop.usage == Usage.zero()
+
     def test_a_cached_count_above_the_prompt_count_is_a_protocol_failure(self) -> None:
         with pytest.raises(ProviderError) as caught:
             _run([_done(prompt_eval_count=10, prompt_eval_cached_count=30)])

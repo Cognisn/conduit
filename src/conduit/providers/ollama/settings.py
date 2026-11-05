@@ -20,8 +20,10 @@ class OllamaSettings(ProviderSettings):
     ``local`` scope means the deployment's own hosts), but the URL may not carry
     credentials, a query or a fragment: conduit's settings hold credentials only as
     secret references. ``num_ctx`` caps the context length requested from Ollama;
-    left unset, the catalogue entry's ``context_window`` is requested, because
-    Ollama's own default is far smaller than the catalogue declares.
+    left unset, the catalogue entry's full ``context_window`` is requested (131072 for
+    llama3.1:8b), because Ollama's own default is far smaller than the catalogue
+    declares. A full window needs memory on the Ollama host to match; set ``num_ctx``
+    to request less.
     """
 
     kind: Literal["ollama"] = "ollama"

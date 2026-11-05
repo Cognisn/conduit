@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from conduit.core.catalogue import default_catalogue
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.registry import MeteredProvider, ProviderRegistry
 from conduit.core.secrets import LiteralSecretResolver
@@ -26,13 +27,15 @@ from conduit.core.types import (
     ToolUseBlock,
     Usage,
 )
-from conduit.providers.ollama import OllamaFactory
+from conduit.providers.ollama import OllamaFactory, OllamaProvider
+from conduit.providers.ollama.provider import MAX_LINE_BYTES
 from conduit.testing.replay import Replay, load_recording
 from tests.unit.providers.ollama import recordings
 
 httpx = pytest.importorskip("httpx", reason="needs the ollama extra")
 
 Handler = Callable[[Any], Any]
+NEWLINE = chr(10)
 
 TOOL = ToolSpec(
     name="lookup_host",
@@ -65,6 +68,19 @@ def replaying(replay: Replay) -> Handler:
         return _ndjson(recorded["lines"], recorded["status"])
 
     return handle
+
+
+def _direct(handler: Handler, *, max_line_bytes: int) -> OllamaProvider:
+    """The adapter itself, with a small line limit (the registry builds the default)."""
+    factory = OllamaFactory(transport=httpx.MockTransport(handler))
+    settings = factory.settings_model.model_validate({"kind": "ollama"})
+    return OllamaProvider(
+        "local",
+        settings,
+        factory.create_client(settings, {}),
+        catalogue=default_catalogue(),
+        max_line_bytes=max_line_bytes,
+    )
 
 
 async def _build(handler: Handler, settings: dict[str, Any] | None = None) -> MeteredProvider:
@@ -285,6 +301,72 @@ class TestFailures:
         assert "secret detail" not in str(caught.value)
         assert caught.value.__cause__ is None
         assert caught.value.__suppress_context__
+
+    @pytest.mark.parametrize("status", [301, 302, 307])
+    async def test_a_redirect_is_rejected_and_not_followed(self, status: int) -> None:
+        seen: list[str] = []
+
+        def handle(request: Any) -> Any:
+            seen.append(str(request.url))
+            return httpx.Response(status, headers={"location": "https://elsewhere.example.net/"})
+
+        provider = await _build(handle)
+        with pytest.raises(ProviderError) as caught:
+            await provider.complete(_request())
+        assert caught.value.failure is ProviderFailure.REJECTED
+        assert seen == ["http://127.0.0.1:11434/api/chat"]
+
+    @pytest.mark.parametrize("terminated", [True, False])
+    async def test_an_overlong_line_is_a_protocol_failure(self, terminated: bool) -> None:
+        # A line longer than the limit fails rather than growing without bound,
+        # whether or not its newline ever arrives. The stream is otherwise valid
+        # (it ends with a done line), so only the limit can fail it.
+        text, done = _done_lines("x" * 200)
+        if terminated:
+            body = (text + NEWLINE + done + NEWLINE).encode("utf-8")
+        else:
+            final = json.loads(done)
+            final["message"]["content"] = "x" * 200
+            body = json.dumps(final).encode("utf-8")
+        assert len(body) > 200
+
+        def handle(request: Any) -> Any:
+            return httpx.Response(200, content=body)
+
+        within = _direct(handle, max_line_bytes=len(body))
+        assert (await within.complete(_request())).text == "x" * 200
+        provider = _direct(handle, max_line_bytes=100)
+        with pytest.raises(ProviderError) as caught:
+            await provider.complete(_request())
+        assert caught.value.failure is ProviderFailure.PROTOCOL
+
+    async def test_lines_within_the_limit_and_split_across_chunks_are_read(self) -> None:
+        payload = (NEWLINE.join(_done_lines("Hello there.")) + NEWLINE).encode("utf-8")
+
+        class Trickle(httpx.AsyncByteStream):  # type: ignore[misc,name-defined]
+            async def __aiter__(self) -> AsyncIterator[bytes]:
+                for i in range(0, len(payload), 7):
+                    yield payload[i : i + 7]
+
+        def handle(request: Any) -> Any:
+            return httpx.Response(200, stream=Trickle())
+
+        provider = _direct(handle, max_line_bytes=200)
+        response = await provider.complete(_request())
+        assert response.text == "Hello there."
+
+    async def test_a_line_that_is_not_utf8_is_a_protocol_failure(self) -> None:
+        def handle(request: Any) -> Any:
+            return httpx.Response(200, content=bytes([0xFF, 0xFE]) + b"{}" + NEWLINE.encode())
+
+        provider = await _build(handle)
+        with pytest.raises(ProviderError) as caught:
+            await provider.complete(_request())
+        assert caught.value.failure is ProviderFailure.PROTOCOL
+        assert caught.value.__cause__ is None
+
+    def test_the_default_line_limit_is_generous_but_bounded(self) -> None:
+        assert 1 << 20 <= MAX_LINE_BYTES <= 64 << 20
 
     async def test_an_error_line_mid_stream(self) -> None:
         def handle(request: Any) -> Any:

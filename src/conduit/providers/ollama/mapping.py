@@ -14,7 +14,9 @@ lines into conduit stream events ending with one ``StreamStopped``.
   report ``prompt_eval_cached_count`` count the part read from its cache, so input is
   the difference and the cached part is ``cache_read_tokens``. Without the cached
   count, the cache counts are zero. Nothing is ever written to a cache that conduit
-  could count, so ``cache_write_tokens`` is always zero.
+  could count, so ``cache_write_tokens`` is always zero. A ``done`` line without
+  counts (some Ollama versions omit ``prompt_eval_count`` when the whole prompt was
+  cached) reports zero for each missing count; a negative count is a protocol failure.
 
 Every failure is ``ProviderError(failure)`` raised ``from None``: Ollama's error text
 never reaches a log, an exception or an event.
