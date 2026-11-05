@@ -8,7 +8,9 @@ is an ``Identifier``, which cannot hold prose. The event-content tripwire in
 
 ``FanOutSink`` delivers each event to several product-supplied sinks concurrently.
 It enforces its own capture policy on the way through: content the policy does not
-allow is removed before any sink sees it, whatever policy the emitter used. A failing
+allow is removed before any sink sees it, whatever policy the emitter used. A field
+declared as tool content (``ToolContent``) is treated as tool content whatever kind its
+emitter labelled it. A failing
 sink is logged (its class and the exception class only) and never stops the others.
 
 Upper layers define their own event classes by subclassing ``Event``.
@@ -19,12 +21,24 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import types
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import (
+    Annotated,
+    Any,
+    Literal,
+    Protocol,
+    Union,
+    get_args,
+    get_origin,
+    runtime_checkable,
+)
 
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, NonNegativeInt
+from pydantic.fields import FieldInfo
 
 from conduit.core.errors import ProviderFailure
 from conduit.core.identifiers import Identifier, new_id
@@ -69,6 +83,23 @@ class CapturePolicy(SettingsModel):
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CaptureAs:
+    """Field metadata: the field holds content of ``kind``, whatever an emitter labels it.
+
+    ``enforce_capture`` relabels such a field's ``CapturedContent`` to ``kind`` before
+    applying the policy, so tool content labelled as a prompt is still held to the
+    tool-content setting.
+    """
+
+    kind: ContentKind
+
+
+#: A ``CapturedContent`` field holding tool arguments or results. Upper layers use it
+#: for their own events' tool fields.
+ToolContent = Annotated[CapturedContent, CaptureAs(ContentKind.TOOL)]
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -102,7 +133,13 @@ class ModelCallStartedEvent(Event):
 
 
 class ModelCallFinishedEvent(Event):
-    """One model call's outcome, with its final usage (the single metering point)."""
+    """One model call's outcome, with its final usage (the single metering point).
+
+    Every call has exactly one, however it ends. A failed call carries the last usage
+    the provider reported, if any. ``error_type`` is the exception's class name, or
+    ``cancelled`` for a call cancelled part-way (a facade timeout, for example), or
+    ``abandoned`` for a stream its consumer closed before the end.
+    """
 
     type: Literal["model_call_finished"] = "model_call_finished"
     call_id: Identifier
@@ -125,8 +162,8 @@ class ToolCallEvent(Event):
     tool: Identifier
     outcome: CallOutcome
     error_code: Identifier | None = None
-    arguments: CapturedContent
-    result: CapturedContent | None = None
+    arguments: ToolContent
+    result: ToolContent | None = None
     duration_ms: NonNegativeFloat
 
 
@@ -152,27 +189,55 @@ class NullEventSink:
         return None
 
 
-def _enforce(value: Any, policy: CapturePolicy, removed: list[ContentKind]) -> Any:
+def _marked_kind(annotation: Any) -> ContentKind | None:
+    """The ``CaptureAs`` kind inside ``annotation``, looking through unions
+    (``ToolContent | None``), where pydantic does not lift the metadata to the field."""
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        inner, *metadata = get_args(annotation)
+        marked = next((m.kind for m in metadata if isinstance(m, CaptureAs)), None)
+        return marked if marked is not None else _marked_kind(inner)
+    if origin in (Union, types.UnionType):
+        return next(
+            (k for k in (_marked_kind(a) for a in get_args(annotation)) if k is not None), None
+        )
+    return None
+
+
+def _declared_kind(field: FieldInfo) -> ContentKind | None:
+    direct = next((m.kind for m in field.metadata if isinstance(m, CaptureAs)), None)
+    return direct if direct is not None else _marked_kind(field.annotation)
+
+
+def _enforce(
+    value: Any,
+    policy: CapturePolicy,
+    removed: list[ContentKind],
+    declared: ContentKind | None = None,
+) -> Any:
     if isinstance(value, CapturedContent):
-        if value.text is not None and not policy.allows(value.kind):
-            removed.append(value.kind)
-            return value.model_copy(update={"text": None})
-        return value
+        # A field's declared kind wins over the emitter's label.
+        kind = declared if declared is not None else value.kind
+        update: dict[str, Any] = {} if kind is value.kind else {"kind": kind}
+        if value.text is not None and not policy.allows(kind):
+            removed.append(kind)
+            update["text"] = None
+        return value.model_copy(update=update) if update else value
     if isinstance(value, BaseModel):
         updates: dict[str, Any] = {}
-        for name in type(value).model_fields:
+        for name, field in type(value).model_fields.items():
             current = getattr(value, name)
-            enforced = _enforce(current, policy, removed)
+            enforced = _enforce(current, policy, removed, _declared_kind(field))
             if enforced is not current:
                 updates[name] = enforced
         return value.model_copy(update=updates) if updates else value
     if isinstance(value, tuple | list):
-        items = [_enforce(item, policy, removed) for item in value]
+        items = [_enforce(item, policy, removed, declared) for item in value]
         if any(a is not b for a, b in zip(items, value, strict=True)):
             return type(value)(items)
         return value
     if isinstance(value, dict):
-        enforced_dict = {k: _enforce(v, policy, removed) for k, v in value.items()}
+        enforced_dict = {k: _enforce(v, policy, removed, declared) for k, v in value.items()}
         if any(enforced_dict[k] is not value[k] for k in value):
             return enforced_dict
         return value

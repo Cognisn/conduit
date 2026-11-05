@@ -2,9 +2,21 @@
   "schema": 1,
   "python": {
     "version": "3.12",
-    "install": ["-e", ".[dev]"],
+    "install": ["-e", ".[dev,sql]"],
     "import_check": "conduit"
   },
-  "services": [],
-  "notes": "No sandbox services yet: nothing in conduit needs a running service until the stores workstream adds Postgres for the sql extra (with its offset and a Compose template). The default test run never calls a live model or the network; live provider checks are marked integration and run only on the maintainer's word."
+  "services": [
+    {
+      "name": "postgres",
+      "offset": 32,
+      "notes": "Postgres for manual checks of the sql extra (dev/compose.worktree.yml): start it with compose_up from ports.txt, stop it with compose_down. A running stack is a heavy workload."
+    },
+    {
+      "name": "postgres_test",
+      "offset": 33,
+      "notes": "The host port for the testcontainers Postgres the sql tests start: set CONDUIT_POSTGRES_TEST_PORT to it (and TESTCONTAINERS_RYUK_DISABLED=true) so the container binds 127.0.0.1 inside the slot. A test run is a heavy workload."
+    }
+  ],
+  "compose_template": "dev/compose.worktree.yml",
+  "notes": "The sql extra's tests start a throwaway Postgres through testcontainers when Docker is available (CONDUIT_POSTGRES_TESTS=auto, skip or require); every other test needs no service. The default test run never calls a live model or the network; live provider checks are marked integration and run only on the maintainer's word."
 }

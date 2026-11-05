@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, GetCoreSchemaHandler, SecretStr
-from pydantic_core import core_schema
+from pydantic_core import core_schema  # installed with pydantic: no extra dependency
 
 from conduit.core.errors import SecretUnavailable
 

@@ -53,7 +53,12 @@ all-providers = []
 # Layers (C12 to C15, C19, C10).
 local-embeddings = []
 mcp = []
-sql = []
+sql = [
+    "sqlalchemy[asyncio]>=2.0.30,<2.1",
+    "alembic>=1.13,<2",
+    "asyncpg>=0.30,<1",
+    "aiosqlite>=0.20,<1",
+]
 konfig = []
 warden = []
 otel = []
@@ -66,6 +71,8 @@ dev = [
     "ruff>=0.6",
     # The licence audit reads requirement specifiers with packaging.
     "packaging>=24",
+    # Postgres tests for the sql extra start a throwaway container (no psycopg: LGPL).
+    "testcontainers[postgres]>=4.9,<5",
 ]
 
 [project.urls]

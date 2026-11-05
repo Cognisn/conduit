@@ -186,6 +186,43 @@ class TranscriptStoreSuite(ConformanceSuite):
 
         self._scenario(body)
 
+    def test_an_append_that_would_not_load_is_refused_whole(self) -> None:
+        """A compaction point may replace only earlier entries. An append that breaks
+        the rule raises ``ValueError`` and stores nothing, so the session stays
+        loadable (and a session it would have started does not appear)."""
+
+        async def refused(
+            store: TranscriptStore, session: str, batch: list[TranscriptEntry]
+        ) -> None:
+            try:
+                await store.append(session, batch)
+            except ValueError:
+                return
+            raise AssertionError("an append replacing later entries was accepted")
+
+        def ahead(through: int) -> CompactionPoint:
+            return CompactionPoint(
+                summary=Message.user("Summary of what has not happened."),
+                replaces_through=through,
+                strategy="summary",
+            )
+
+        async def body(store: TranscriptStore) -> None:
+            await store.append("sess_guarded", [_message("one")])
+            await refused(store, "sess_guarded", [_message("two"), ahead(9)])
+            await refused(store, "sess_guarded", [ahead(2)])  # it would itself be seq 2
+            await refused(store, "sess_unborn", [ahead(1)])
+            reopened = await self.reopen_store(store)
+            loaded = await reopened.load("sess_guarded")
+            assert [_text(e) for e in loaded.entries] == ["one"]
+            assert "sess_unborn" not in set(await reopened.list_sessions())
+            assert (await reopened.load("sess_unborn")).entries == ()
+            stored = await reopened.append("sess_guarded", [_message("two"), ahead(2)])
+            assert [e.seq for e in stored] == [2, 3]
+            assert len((await reopened.load("sess_guarded")).active_messages()) == 1
+
+        self._scenario(body)
+
     # Concurrency
 
     def test_concurrent_sessions_do_not_interfere(self) -> None:

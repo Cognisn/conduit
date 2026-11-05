@@ -9,8 +9,9 @@ Provider adapter tests give their SDK a fake client that answers from ``Replay.n
 Recordings are committed to a public repository, so ``save_recording`` and
 ``load_recording`` refuse anything that looks unscrubbed: cloud access keys and API
 keys, bearer tokens, email addresses outside example.com, example.org and example.net,
-IPv4 addresses outside the documentation ranges and loopback, and AWS account numbers
-other than the documentation account 123456789012.
+IPv4 addresses outside the documentation ranges and loopback, IPv6 addresses outside
+2001:db8::/32 and loopback, and any 12-digit number (a possible AWS account id, in an
+ARN or on its own) other than the documentation account 123456789012.
 
 ``ReplayProvider`` replays conduit stream events, for upper-layer tests recorded from a
 real provider.
@@ -56,11 +57,20 @@ _SECRETS = [
 ]
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 _IPV4 = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])")
-_ACCOUNT = re.compile(r"arn:aws[a-z-]*:[^:\s]*:[^:\s]*:(\d{12}):")
+# Candidate IPv6 addresses: two to seven colons between hex groups, not inside a longer
+# token. Each candidate is confirmed by ipaddress, so times such as 12:30:45 pass.
+_IPV6 = re.compile(
+    r"(?<![0-9A-Za-z:.])((?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4})(?![0-9A-Za-z:])"
+)
+# Any bare 12-digit number is a possible AWS account id (in an ARN or on its own).
+_ACCOUNT = re.compile(r"(?<![\w.])(\d{12})(?![\w.])")
 _SYNTHETIC_DOMAINS = ("example.com", "example.org", "example.net")
 _DOCUMENTATION_NETWORKS = [
     ipaddress.ip_network(n)
     for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "127.0.0.0/8", "0.0.0.0/32")
+]
+_DOCUMENTATION_NETWORKS_V6 = [
+    ipaddress.ip_network(n) for n in ("2001:db8::/32", "::1/128", "::/128")
 ]
 _DOCUMENTATION_ACCOUNT = "123456789012"
 
@@ -91,6 +101,13 @@ def _problems(text: str) -> Iterator[str]:
             continue
         if not any(address in network for network in _DOCUMENTATION_NETWORKS):
             yield "IPv4 address outside the documentation ranges"
+    for found in _IPV6.findall(text):
+        try:
+            address6 = ipaddress.IPv6Address(found)
+        except ValueError:
+            continue
+        if not any(address6 in network for network in _DOCUMENTATION_NETWORKS_V6):
+            yield "IPv6 address outside 2001:db8::/32"
     for account in _ACCOUNT.findall(text):
         if account != _DOCUMENTATION_ACCOUNT:
             yield "AWS account number other than 123456789012"

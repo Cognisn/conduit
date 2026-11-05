@@ -51,7 +51,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: pip install -e ".[dev]"
+      # Every runtime extra, so mypy sees each layer's libraries (Q0008).
+      - name: Install with every runtime extra
+        shell: bash
+        run: |
+          pip install -e ".[dev]"
+          extras=$(python -c "import importlib.metadata as m; print(','.join(e for e in m.metadata('cognisn-conduit').get_all('Provides-Extra') or [] if e != 'dev'))")
+          pip install -e ".[dev,$extras]"
       # Paths come from [tool.mypy] files: src, scripts and tests.
       - run: mypy --strict
 
@@ -70,8 +76,36 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: pip install -e ".[dev]"
+      # Every runtime extra, so each layer's tests run and the licence audit test sees
+      # the full install (Q0008). Names come from the package metadata, so a new extra
+      # is picked up without editing this file.
+      - name: Install with every runtime extra
+        shell: bash
+        run: |
+          pip install -e ".[dev]"
+          extras=$(python -c "import importlib.metadata as m; print(','.join(e for e in m.metadata('cognisn-conduit').get_all('Provides-Extra') or [] if e != 'dev'))")
+          pip install -e ".[dev,$extras]"
+      # The Postgres tests run once, in the postgres job below.
       - run: pytest -ra
+        env:
+          CONDUIT_POSTGRES_TESTS: skip
+
+  # The sql extra against a real Postgres, started by testcontainers. Ubuntu only:
+  # macOS runners have no Docker and Windows runners run Windows containers.
+  # CONDUIT_POSTGRES_TESTS=require turns a container that fails to start into a
+  # failure, so this job can never pass by skipping.
+  postgres:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev,sql]"
+      - run: pytest -ra tests/unit/stores/sql tests/conformance/test_sql_stores.py
+        env:
+          CONDUIT_POSTGRES_TESTS: require
 
   # Build both distributions, check them, and import the package from the wheel
   # in a clean environment (the version file must ship inside the package).
