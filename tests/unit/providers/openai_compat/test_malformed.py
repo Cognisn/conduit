@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import pytest
 
+from conduit.core.catalogue import default_catalogue
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.types import Message, ModelRequest
 from conduit.providers.openai_compat import OpenAICompatProvider
@@ -132,7 +133,9 @@ def _chain(error: BaseException) -> list[BaseException]:
 async def test_malformed_chunks_are_protocol_failures_without_provider_text(
     chunks: list[Any],
 ) -> None:
-    provider = OpenAICompatProvider(_Client(chunks), catalogue_provider="openai")
+    provider = OpenAICompatProvider(
+        _Client(chunks), catalogue_provider="openai", catalogue=default_catalogue()
+    )
     request = ModelRequest(model="gpt-5", messages=(Message.user("hi"),), max_output_tokens=10)
     with pytest.raises(ProviderError) as caught:
         async for _ in provider.stream(request):
@@ -177,7 +180,9 @@ async def test_an_unvalidated_sdk_chunk_is_refused_without_warnings() -> None:
             "choices": [{"index": 0, "delta": {"content": {"x": MARK}}, "finish_reason": None}],
         },
     )
-    provider = OpenAICompatProvider(_Client([chunk]), catalogue_provider="openai")
+    provider = OpenAICompatProvider(
+        _Client([chunk]), catalogue_provider="openai", catalogue=default_catalogue()
+    )
     request = ModelRequest(model="gpt-5", messages=(Message.user("hi"),), max_output_tokens=10)
     with warnings.catch_warnings(record=True) as seen:
         warnings.simplefilter("always")
@@ -198,7 +203,9 @@ async def test_a_result_that_is_not_a_stream_is_a_protocol_failure() -> None:
         async def create(self, **kwargs: Any) -> Any:
             return _NotAStream()
 
-    provider = OpenAICompatProvider(_OddClient([]), catalogue_provider="openai")
+    provider = OpenAICompatProvider(
+        _OddClient([]), catalogue_provider="openai", catalogue=default_catalogue()
+    )
     request = ModelRequest(model="gpt-5", messages=(Message.user("hi"),), max_output_tokens=10)
     with pytest.raises(ProviderError) as caught:
         async for _ in provider.stream(request):
@@ -225,7 +232,9 @@ def _request() -> ModelRequest:
 
 async def test_a_failing_close_on_its_own_is_a_provider_error_without_a_chain() -> None:
     chunks = [_choice({"content": "hi"}), STOP, USAGE]
-    provider = OpenAICompatProvider(_ClosingClient(chunks), catalogue_provider="openai")
+    provider = OpenAICompatProvider(
+        _ClosingClient(chunks), catalogue_provider="openai", catalogue=default_catalogue()
+    )
     with pytest.raises(ProviderError) as caught:
         async for _ in provider.stream(_request()):
             pass
@@ -237,7 +246,9 @@ async def test_a_failing_close_on_its_own_is_a_provider_error_without_a_chain() 
 
 async def test_a_failing_close_never_replaces_the_error_already_leaving() -> None:
     chunks = [_choice({"content": "hi"}), {"choices": MARK}]
-    provider = OpenAICompatProvider(_ClosingClient(chunks), catalogue_provider="openai")
+    provider = OpenAICompatProvider(
+        _ClosingClient(chunks), catalogue_provider="openai", catalogue=default_catalogue()
+    )
     with pytest.raises(ProviderError) as caught:
         async for _ in provider.stream(_request()):
             pass
@@ -249,7 +260,9 @@ async def test_a_failing_close_never_replaces_the_error_already_leaving() -> Non
 
 async def test_a_failing_close_on_an_abandoned_stream_is_quiet() -> None:
     chunks = [_choice({"content": "hi"}), _choice({"content": "there"}), STOP, USAGE]
-    provider = OpenAICompatProvider(_ClosingClient(chunks), catalogue_provider="openai")
+    provider = OpenAICompatProvider(
+        _ClosingClient(chunks), catalogue_provider="openai", catalogue=default_catalogue()
+    )
     stream = cast(AsyncGenerator[Any, None], provider.stream(_request()))
     async for _ in stream:
         break
@@ -286,7 +299,9 @@ class _CancellingClient(_Client):
 )
 async def test_a_cancellation_during_close_propagates_unchanged(chunks: list[Any]) -> None:
     client = _CancellingClient(chunks)
-    provider = OpenAICompatProvider(client, catalogue_provider="openai")
+    provider = OpenAICompatProvider(
+        client, catalogue_provider="openai", catalogue=default_catalogue()
+    )
     with pytest.raises(asyncio.CancelledError) as caught:
         async for _ in provider.stream(_request()):
             pass

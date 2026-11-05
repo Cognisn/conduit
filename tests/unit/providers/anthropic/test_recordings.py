@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from conduit.core.catalogue import default_catalogue
 from conduit.core.types import (
     CacheBreakpoint,
     Message,
@@ -46,7 +47,9 @@ def _request(*messages: Message, tools: tuple[ToolSpec, ...] = ()) -> ModelReque
 
 async def test_cached_conversation() -> None:
     replay = Replay(_load(recordings.cached_conversation()))
-    provider = AnthropicProvider(replay_client(replay), name="claude")
+    provider = AnthropicProvider(
+        replay_client(replay), name="claude", catalogue=default_catalogue()
+    )
 
     first = await provider.complete(_request(Message.user("Say hello.")))
     assert first.text == "Hello."
@@ -68,7 +71,9 @@ async def test_cached_conversation() -> None:
 
 async def test_tool_round_trip() -> None:
     replay = Replay(_load(recordings.tool_round_trip()))
-    provider = AnthropicProvider(replay_client(replay), name="claude")
+    provider = AnthropicProvider(
+        replay_client(replay), name="claude", catalogue=default_catalogue()
+    )
     tool = ToolSpec.model_validate(recordings.TOOL)
     ask = Message.user("Which network is host-a.example.com on?")
 

@@ -234,6 +234,45 @@ def thinking_block(index: int) -> list[Event]:
     ]
 
 
+def thinking_text_block(index: int, *pieces: str, signature: str = "c2lnLTAx") -> list[Event]:
+    """A thinking block whose text arrives in ``pieces``, then its signature."""
+    events: list[Event] = [
+        {
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+        }
+    ]
+    events += [
+        {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "thinking_delta", "thinking": p},
+        }
+        for p in pieces
+    ]
+    events.append(
+        {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "signature_delta", "signature": signature},
+        }
+    )
+    events.append({"type": "content_block_stop", "index": index})
+    return events
+
+
+def redacted_block(index: int, data: str = "ZW5jcnlwdGVk") -> list[Event]:
+    return [
+        {
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {"type": "redacted_thinking", "data": data},
+        },
+        {"type": "content_block_stop", "index": index},
+    ]
+
+
 def message_end(stop_reason: str | None, delta_usage: dict[str, Any]) -> list[Event]:
     return [
         {

@@ -1,12 +1,20 @@
 """The Bedrock provider: Converse and ConverseStream, run off the event loop (C3).
 
-boto3 is synchronous, so each call runs in a worker thread. A ConverseStream call gets
-its own daemon thread, which reads the event stream and hands each raw event to the
+boto3 is synchronous, so each call runs on its own daemon thread, never on the loop or
+in its default executor (Q0020). A Converse call's thread hands its answer back to the
+loop; if ``request.timeout_s`` passes first, the call fails with ``TIMEOUT`` at once and
+the thread's late answer is dropped, so a timed-out call holds no executor thread (the
+thread itself lives until botocore's ``read_timeout_s``).
+
+A ConverseStream call's thread reads the event stream and hands each raw event to the
 loop through a bounded queue (``STREAM_BUFFER`` events), waiting for space, so it never
 reads far ahead of the consumer; the loop maps each event and yields conduit events, so
 a slow or stalled stream never blocks the loop. ``request.timeout_s`` bounds the wait for
-each next event (and, for Converse, the whole call). If the consumer stops early, the
-thread is told to stop and the underlying stream is closed.
+each next event. If the consumer stops early and closes the stream, the thread is told
+to stop and the underlying stream is closed. If the consumer stops iterating without
+closing it, the thread waits for space at most ``request.timeout_s`` for any one event,
+then gives up and closes the stream; a consumer that comes back reads what was already
+queued and then fails with ``TIMEOUT``.
 
 Every error becomes ``ProviderError(failure)``, raised after its handler so that it has
 no cause and no context: provider text reaches no log, exception or event.
@@ -18,6 +26,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 import threading
+import time
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
@@ -78,17 +87,35 @@ class BedrockProvider(BaseProvider):
             yield event
 
     async def _converse(self, params: dict[str, Any], timeout: float) -> Mapping[str, Any]:
-        failure: ProviderFailure | None = None
+        loop = asyncio.get_running_loop()
+        answered: asyncio.Future[tuple[Any, Exception | None]] = loop.create_future()
+
+        def settle(outcome: tuple[Any, Exception | None]) -> None:
+            if not answered.done():  # a late answer, after the timeout, is dropped
+                answered.set_result(outcome)
+
+        def call() -> None:
+            outcome: tuple[Any, Exception | None]
+            try:
+                outcome = (self._client.converse(**params), None)
+            except Exception as error:
+                outcome = (None, error)
+            with contextlib.suppress(RuntimeError):  # the loop has closed: nobody waits
+                loop.call_soon_threadsafe(settle, outcome)
+
+        threading.Thread(target=call, name="conduit-bedrock-converse", daemon=True).start()
+        timed_out = False
         try:
-            response: Mapping[str, Any] = await asyncio.wait_for(
-                asyncio.to_thread(lambda: self._client.converse(**params)), timeout
-            )
-        except Exception as error:
-            failure = classify(error)
-        if failure is not None:
-            # Raised after the handler, so the SDK's error is neither cause nor context.
-            raise ProviderError(failure)
-        return response
+            response, error = await asyncio.wait_for(answered, timeout)
+        except TimeoutError:
+            timed_out = True
+        # Raised outside any handler, so the SDK's error is neither cause nor context.
+        if timed_out:
+            raise ProviderError(ProviderFailure.TIMEOUT)
+        if error is not None:
+            raise ProviderError(classify(error))
+        result: Mapping[str, Any] = response
+        return result
 
     async def _converse_stream(
         self, params: dict[str, Any], timeout: float
@@ -99,7 +126,8 @@ class BedrockProvider(BaseProvider):
         opened: list[Any] = []
 
         def hand(kind: str, item: Any) -> None:
-            # Wait for space in the bounded queue, giving up if the consumer goes.
+            # Wait for space in the bounded queue, giving up if the consumer goes, or
+            # stops taking events for longer than the request's timeout.
             if abandoned.is_set():
                 return
             try:
@@ -107,13 +135,16 @@ class BedrockProvider(BaseProvider):
             except RuntimeError:  # the loop has closed
                 abandoned.set()
                 return
+            deadline = time.monotonic() + timeout
             while True:
                 try:
                     put.result(timeout=0.1)
                     return
                 except concurrent.futures.TimeoutError:
-                    if abandoned.is_set() or loop.is_closed():
+                    stalled = time.monotonic() >= deadline
+                    if abandoned.is_set() or loop.is_closed() or stalled:
                         put.cancel()
+                        abandoned.set()  # the reader stops and closes the stream
                         return
                 except concurrent.futures.CancelledError:
                     return
@@ -126,6 +157,8 @@ class BedrockProvider(BaseProvider):
                     if abandoned.is_set():
                         break
                     hand(_EVENT, raw)
+                    if abandoned.is_set():
+                        break  # given up: close now, not after another upstream event
                 hand(_END, None)
             except Exception as error:
                 hand(_ERROR, error)
