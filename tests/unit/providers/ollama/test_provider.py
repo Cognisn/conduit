@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from conduit.core.catalogue import default_catalogue
+from conduit.core.catalogue import Catalogue, CatalogueOverlay, default_catalogue
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.registry import MeteredProvider, ProviderRegistry
 from conduit.core.secrets import LiteralSecretResolver
@@ -84,10 +84,27 @@ def _direct(handler: Handler, *, max_line_bytes: int) -> OllamaProvider:
     )
 
 
-async def _build(handler: Handler, settings: dict[str, Any] | None = None) -> MeteredProvider:
+async def _build(
+    handler: Handler,
+    settings: dict[str, Any] | None = None,
+    *,
+    catalogue: Catalogue | None = None,
+) -> MeteredProvider:
     factory = OllamaFactory(transport=httpx.MockTransport(handler))
-    registry = ProviderRegistry(secrets=LiteralSecretResolver({}), factories=[factory])
+    registry = ProviderRegistry(
+        secrets=LiteralSecretResolver({}), catalogue=catalogue, factories=[factory]
+    )
     return await registry.build("local", {"kind": "ollama", **(settings or {})})
+
+
+def _overlaid(**update: Any) -> Catalogue:
+    """The default catalogue with the recorded model's entry changed."""
+    entry = default_catalogue().require("ollama", recordings.MODEL)
+    capabilities = {k: update.pop(k) for k in list(update) if k == "structured_output"}
+    changed = entry.model_copy(
+        update={**update, "capabilities": entry.capabilities.model_copy(update=capabilities)}
+    )
+    return default_catalogue().apply(CatalogueOverlay(name="overlay", override=(changed,)))
 
 
 def _request(*messages: Message, **fields: Any) -> ModelRequest:
@@ -220,6 +237,48 @@ class TestRequests:
         provider = await _build(handle)
         await provider.complete(_request())
         assert bodies[0]["options"]["num_ctx"] == 131072
+
+    async def test_num_ctx_follows_the_registry_catalogue(self) -> None:
+        bodies: list[dict[str, Any]] = []
+
+        def handle(request: Any) -> Any:
+            bodies.append(json.loads(request.content))
+            return _ndjson(_done_lines())
+
+        provider = await _build(handle, catalogue=_overlaid(context_window=32768))
+        await provider.complete(_request())
+        assert bodies[0]["options"]["num_ctx"] == 32768
+
+    async def test_structured_output_is_refused_where_the_catalogue_says_no(self) -> None:
+        bodies: list[dict[str, Any]] = []
+
+        def handle(request: Any) -> Any:
+            bodies.append(json.loads(request.content))
+            return _ndjson(_done_lines("{}"))
+
+        provider = await _build(handle, catalogue=_overlaid(structured_output=False))
+        with pytest.raises(ProviderError) as caught:
+            await provider.complete(_request(output_schema={"type": "object"}))
+        assert caught.value.failure is ProviderFailure.REJECTED
+        assert bodies == []  # refused before any call
+
+    async def test_structured_output_is_sent_where_the_catalogue_allows_it(self) -> None:
+        bodies: list[dict[str, Any]] = []
+
+        def handle(request: Any) -> Any:
+            bodies.append(json.loads(request.content))
+            return _ndjson(_done_lines("{}"))
+
+        provider = await _build(handle)
+        await provider.complete(_request(output_schema={"type": "object"}))
+        assert bodies[0]["format"] == {"type": "object"}
+
+    def test_without_the_registry_the_factory_uses_the_default_catalogue(self) -> None:
+        factory = OllamaFactory(transport=httpx.MockTransport(lambda r: _ndjson(_done_lines())))
+        settings = factory.settings_model.model_validate({"kind": "ollama"})
+        provider = factory.create_provider("local", settings, object())
+        assert isinstance(provider, OllamaProvider)
+        assert provider.num_ctx(recordings.MODEL) == 131072
 
     async def test_the_num_ctx_setting_wins(self) -> None:
         bodies: list[dict[str, Any]] = []

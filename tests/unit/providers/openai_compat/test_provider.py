@@ -95,7 +95,7 @@ async def _build(
         secrets=LiteralSecretResolver({}),
         catalogue=catalogue,
         events=events,
-        factories=[OpenAICompatFactory(catalogue=catalogue)],
+        factories=[OpenAICompatFactory()],
     )
     return await registry.build("test", settings, client=client)
 
@@ -198,6 +198,33 @@ class TestXAI:
             input_tokens=27, output_tokens=2, cache_read_tokens=98, cache_write_tokens=0
         )
 
+    @staticmethod
+    def _reasoning_outside(chunk: Any) -> Any:
+        """The usage chunk with 10 reasoning tokens that total_tokens counts separately."""
+        usage = chunk.get("usage")
+        if not usage:
+            return chunk
+        prompt, completion = usage["prompt_tokens"], usage["completion_tokens"]
+        changed = {
+            **usage,
+            "completion_tokens_details": {"reasoning_tokens": 10},
+            "total_tokens": prompt + completion + 10,
+        }
+        return {**chunk, "usage": changed}
+
+    async def test_reasoning_outside_the_completion_is_output_for_xai(self) -> None:
+        # Q0021: decided from total_tokens, for the xai service.
+        client = FakeClient(recordings.load("xai-text-cached"), wrap=self._reasoning_outside)
+        provider = await _build(XAI, client)
+        response = await provider.complete(_request("grok-4.3", Message.user("Say hello.")))
+        assert response.usage.output_tokens == 12
+
+    async def test_the_openai_service_keeps_the_completion_count(self) -> None:
+        client = FakeClient(recordings.load("openai-text-cached"), wrap=self._reasoning_outside)
+        provider = await _build(OPENAI, client)
+        response = await provider.complete(_request("gpt-5", Message.user("Say hello.")))
+        assert response.usage.output_tokens == 24
+
     async def test_models_are_looked_up_under_xai(self) -> None:
         provider = await _build(XAI, FakeClient(recordings.load("xai-text-cached")))
         with pytest.raises(UndeclaredModel):
@@ -276,7 +303,9 @@ class TestErrors:
     async def test_a_stream_left_early_is_closed(self) -> None:
         client = FakeClient(recordings.load("openai-text-cached"))
         # The adapter's own stream; the metered wrapper leaves closing to the loop.
-        provider = OpenAICompatProvider(client, catalogue_provider="openai")
+        provider = OpenAICompatProvider(
+            client, catalogue_provider="openai", catalogue=default_catalogue()
+        )
         stream = cast(
             AsyncGenerator[StreamEvent, None],
             provider.stream(_request("gpt-5", Message.user("Say hello."))),
@@ -304,7 +333,9 @@ class TestLifecycle:
         assert client.closed
 
     async def test_a_client_without_close_is_fine(self) -> None:
-        provider = OpenAICompatProvider(object(), catalogue_provider="openai")
+        provider = OpenAICompatProvider(
+            object(), catalogue_provider="openai", catalogue=default_catalogue()
+        )
         await provider.aclose()
 
     def test_the_factory_is_built_in(self) -> None:

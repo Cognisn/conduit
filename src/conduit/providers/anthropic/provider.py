@@ -19,6 +19,19 @@ sets the ``anthropic`` logger to DEBUG itself takes on the same exposure.
 
 The SDK is imported only inside ``create_client``. Errors name the variable, never its
 value.
+
+Foundry takes an API key or Microsoft Entra ID (Q0011). Entra ID shares the
+OpenAI-compatible adapter's approach (``conduit.providers.openai_compat.entra``):
+azure-identity's ``DefaultAzureCredential`` and a bearer token provider, which the SDK
+calls for every request, sending ``Authorization: Bearer`` and no key. If the SDK
+client cannot be built, the credential is closed before the error goes on; closing the
+provider closes the credential after the SDK client. With Entra ID the SDK would read
+``ANTHROPIC_FOUNDRY_API_KEY`` from the environment, though never send it while it has
+a token, so the key is cleared from the client.
+
+Capability checks (structured output) read the catalogue the registry passes to
+``create_provider``: the one it applied the product's overlays to. A factory called
+without one, outside a registry, uses conduit's default catalogue.
 """
 
 from __future__ import annotations
@@ -28,12 +41,13 @@ import importlib
 import inspect
 import logging
 import os
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import SecretStr
 
-from conduit.core.catalogue import default_catalogue
+from conduit.core.catalogue import Catalogue, default_catalogue
 from conduit.core.errors import ConfigurationError, ProviderError, ProviderFailure
 from conduit.core.provider import BaseProvider, Provider
 from conduit.core.settings import ProviderSettings
@@ -43,16 +57,13 @@ from conduit.providers.anthropic.errors import failure_for
 from conduit.providers.anthropic.request import build_params
 from conduit.providers.anthropic.settings import DEFAULT_BASE_URL, AnthropicSettings
 from conduit.providers.anthropic.stream import translate
+from conduit.providers.openai_compat.entra import (
+    close_quietly,
+    close_soon,
+    entra_id_token_provider,
+)
 
 logger = logging.getLogger("conduit.providers.anthropic")
-
-StructuredOutputCheck = Callable[[str], bool]
-
-
-def default_structured_output(model: str) -> bool:
-    """Whether the default catalogue says ``model`` supports structured output."""
-    entry = default_catalogue().get("anthropic", model)
-    return entry is not None and entry.capabilities.structured_output
 
 
 async def _close(resource: Any) -> None:
@@ -79,7 +90,11 @@ async def _close_quietly(resource: Any, what: str) -> None:
 
 
 class AnthropicProvider(BaseProvider):
-    """Claude through the Messages API, streaming."""
+    """Claude through the Messages API, streaming.
+
+    ``catalogue`` answers capability checks, looked up under ``catalogue_provider``
+    (``anthropic`` unless the settings name another).
+    """
 
     kind = "anthropic"
 
@@ -88,14 +103,21 @@ class AnthropicProvider(BaseProvider):
         client: Any,
         *,
         name: str,
-        structured_output: StructuredOutputCheck = default_structured_output,
+        catalogue: Catalogue,
+        catalogue_provider: str = "anthropic",
     ) -> None:
         self.name = name
         self._client = client
-        self._structured_output = structured_output
+        self._catalogue = catalogue
+        self._catalogue_provider = catalogue_provider
+
+    def structured_output(self, model: str) -> bool:
+        """Whether the catalogue says ``model`` supports structured output."""
+        entry = self._catalogue.get(self._catalogue_provider, model)
+        return entry is not None and entry.capabilities.structured_output
 
     async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
-        supported = self._structured_output(request.model)
+        supported = self.structured_output(request.model)
         if request.output_schema is not None and not supported:
             raise ProviderError(ProviderFailure.REJECTED)
         params = build_params(request, structured_output=supported)
@@ -144,6 +166,28 @@ def _check_environment(endpoint: str) -> None:
         )
 
 
+@dataclass(eq=False)
+class FoundryEntraClient:
+    """The Foundry SDK client with the Entra ID credential that signs its requests.
+
+    ``close`` closes the SDK client and then, whatever happened, the credential; a
+    failing credential close is logged by class name and never replaces the SDK's.
+    """
+
+    sdk: Any
+    credential: Any
+
+    @property
+    def messages(self) -> Any:
+        return self.sdk.messages
+
+    async def close(self) -> None:
+        try:
+            await self.sdk.close()
+        finally:
+            await close_quietly(self.credential)  # never replaces the SDK's failure
+
+
 def _settings(settings: ProviderSettings) -> AnthropicSettings:
     if not isinstance(settings, AnthropicSettings):
         raise ConfigurationError("anthropic settings expected")
@@ -167,21 +211,48 @@ class AnthropicFactory:
                 "the anthropic provider needs the anthropic extra: "
                 "pip install 'cognisn-conduit[anthropic]'"
             )
-        key = secrets["api_key"].get_secret_value()
-        if validated.endpoint == "foundry":
+        if validated.endpoint == "direct":
+            return sdk.AsyncAnthropic(
+                api_key=secrets["api_key"].get_secret_value(),
+                base_url=validated.base_url or DEFAULT_BASE_URL,
+                max_retries=validated.max_retries,
+                open_telemetry=False,
+            )
+        if validated.entra_id is None:
             return sdk.AsyncAnthropicFoundry(
-                api_key=key,
+                api_key=secrets["api_key"].get_secret_value(),
                 base_url=validated.base_url,
                 max_retries=validated.max_retries,
                 open_telemetry=False,
             )
-        return sdk.AsyncAnthropic(
-            api_key=key,
-            base_url=validated.base_url or DEFAULT_BASE_URL,
-            max_retries=validated.max_retries,
-            open_telemetry=False,
-        )
+        credential, token_provider = entra_id_token_provider(validated.entra_id)
+        try:
+            client = sdk.AsyncAnthropicFoundry(
+                azure_ad_token_provider=token_provider,
+                base_url=validated.base_url,
+                max_retries=validated.max_retries,
+                open_telemetry=False,
+            )
+        except Exception:
+            close_soon(credential)
+            raise
+        # The SDK reads a key from the environment when none is given; with Entra ID
+        # the token always wins, and the client holds no key at all.
+        client.api_key = None
+        return FoundryEntraClient(sdk=client, credential=credential)
 
-    def create_provider(self, name: str, settings: ProviderSettings, client: Any) -> Provider:
-        _settings(settings)
-        return AnthropicProvider(client, name=name)
+    def create_provider(
+        self,
+        name: str,
+        settings: ProviderSettings,
+        client: Any,
+        *,
+        catalogue: Catalogue | None = None,
+    ) -> Provider:
+        validated = _settings(settings)
+        return AnthropicProvider(
+            client,
+            name=name,
+            catalogue=catalogue if catalogue is not None else default_catalogue(),
+            catalogue_provider=validated.catalogue_provider,
+        )
