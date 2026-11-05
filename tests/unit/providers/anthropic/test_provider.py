@@ -190,6 +190,63 @@ class TestToolUse:
             _ = [event async for event in translate(source())]
         assert caught.value.failure is ProviderFailure.PROTOCOL
 
+    async def test_a_tool_call_cut_off_before_any_input_is_dropped(self) -> None:
+        body = [
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "toolu_01", "name": "x", "input": {}},
+            },
+            {"type": "content_block_stop", "index": 0},
+        ]
+        client = scripted_client(_simple(*body, stop_reason="max_tokens"))
+        events = await _events(_provider(client))
+        assert not [e for e in events if isinstance(e, ToolCallStarted | ToolCallFinished)]
+        assert _stopped(events).stop_reason is StopReason.MAX_TOKENS
+
+    async def test_a_tool_call_followed_by_another_block_survives_max_tokens(self) -> None:
+        body = [*tool_block(0, "toolu_01", "x", '{"a": 1}'), *text_block(1, "and then")]
+        client = scripted_client(_simple(*body, stop_reason="max_tokens"))
+        response = await _provider(client).complete(_request())
+        assert response.tool_uses == (ToolUseBlock(id="toolu_01", name="x", input={"a": 1}),)
+
+    async def test_invalid_tool_json_followed_by_another_block_is_a_protocol_failure(
+        self,
+    ) -> None:
+        body = [*tool_block(0, "toolu_01", "x", '{"a": '), *text_block(1, "more")]
+        client = scripted_client(_simple(*body, stop_reason="max_tokens"))
+        with pytest.raises(ProviderError) as caught:
+            await _events(_provider(client))
+        assert caught.value.failure is ProviderFailure.PROTOCOL
+
+    async def test_interleaved_tool_blocks_are_assembled_by_index(self) -> None:
+        def start(index: int, call_id: str, name: str) -> dict[str, Any]:
+            return {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {"type": "tool_use", "id": call_id, "name": name, "input": {}},
+            }
+
+        def piece(index: int, text: str) -> dict[str, Any]:
+            return {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "input_json_delta", "partial_json": text},
+            }
+
+        body = [
+            start(0, "a", "x"),
+            start(1, "b", "y"),
+            piece(1, '{"q":'),
+            piece(0, '{"p":1}'),
+            piece(1, "2}"),
+            {"type": "content_block_stop", "index": 1},
+            {"type": "content_block_stop", "index": 0},
+        ]
+        client = scripted_client(_simple(*body, stop_reason="tool_use"))
+        response = await _provider(client).complete(_request())
+        assert {t.id: t.input for t in response.tool_uses} == {"a": {"p": 1}, "b": {"q": 2}}
+
     async def test_a_tool_call_cut_off_by_max_tokens_is_dropped(self) -> None:
         body = [*text_block(0, "partial"), *tool_block(1, "toolu_01", "x", '{"a": "unfinis')]
         client = scripted_client(_simple(*body, stop_reason="max_tokens"))
@@ -324,6 +381,16 @@ class TestBrokenStreams:
 
     async def test_a_tool_block_never_stopped(self) -> None:
         events = _simple(*tool_block(0, "toolu_01", "x", "{}")[:-1], stop_reason="tool_use")
+        assert await self._failure(events) is ProviderFailure.PROTOCOL
+
+    async def test_a_tool_block_stopped_after_message_delta(self) -> None:
+        events = [
+            message_start(usage(5)),
+            *tool_block(0, "toolu_01", "x", "{}")[:-1],
+            *message_end("tool_use", {"output_tokens": 2})[:1],
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_stop"},
+        ]
         assert await self._failure(events) is ProviderFailure.PROTOCOL
 
     async def test_an_error_event_in_the_stream(self) -> None:

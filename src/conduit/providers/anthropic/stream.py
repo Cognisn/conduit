@@ -2,9 +2,12 @@
 
 Events arrive as the SDK's event models (read through ``model_dump``) or as mappings in
 the API's wire format (recorded responses). Text deltas stream as they come. A tool
-call is reported when its block stops, with its input assembled from the JSON deltas;
-a call cut off by ``max_tokens`` is dropped, since its input is incomplete. Thinking,
-server-tool and unknown blocks are not streamed.
+call is reported once it is known to be whole, with its input assembled from the JSON
+deltas: when another block starts after it, or at ``message_delta``. The last tool call
+of a response that stops on ``max_tokens`` is dropped, since it may have been cut off,
+even before any input arrived. A tool call whose input is not a JSON object is a
+protocol failure unless it is that dropped call. Thinking, server-tool and unknown
+blocks are not streamed.
 
 Usage: ``message_start`` carries the input counts (uncached input, cache reads and
 cache writes) and ``message_delta`` the final, cumulative counts. Each count the final
@@ -104,7 +107,7 @@ class _Translator:
         self.blocks: dict[int, _Block] = {}
         self.started = False
         self.stop_reason: StopReason | None = None
-        self.truncated = 0
+        self.held: _Block | None = None  # the last stopped tool call, not yet reported
         self.finished = False
 
     def _block(self, event: Mapping[str, Any]) -> _Block:
@@ -145,12 +148,31 @@ class _Translator:
             reason = delta.get("stop_reason") if isinstance(delta, Mapping) else None
             self.stop_reason = _STOP_REASONS.get(reason, StopReason.OTHER)  # type: ignore[arg-type]
             self.counts.update(event.get("usage") or {})
-            return []
+            if self.stop_reason is StopReason.MAX_TOKENS:
+                self.held = None  # possibly cut off: dropped
+            return self._release()
         if kind == "message_stop":
             return self._finish()
         return []  # an event type added after this adapter was written
 
+    def _release(self) -> list[StreamEvent]:
+        """The held tool call's events, now that it is known to be whole."""
+        block, self.held = self.held, None
+        if block is None:
+            return []
+        try:
+            arguments = json.loads("".join(block.json).strip() or "{}")
+        except ValueError:
+            raise _broken() from None
+        if not isinstance(arguments, dict):
+            raise _broken()
+        return [
+            ToolCallStarted(id=block.id, name=block.name),
+            ToolCallFinished(id=block.id, name=block.name, input=arguments),
+        ]
+
     def _start(self, event: Mapping[str, Any]) -> list[StreamEvent]:
+        released = self._release()
         index = event.get("index")
         block = event.get("content_block")
         if not isinstance(index, int) or index in self.blocks or not isinstance(block, Mapping):
@@ -161,11 +183,11 @@ class _Translator:
             if not isinstance(call_id, str) or not isinstance(name, str):
                 raise _broken()
             self.blocks[index] = _Block("tool_use", id=call_id, name=name)
-            return []
+            return released
         self.blocks[index] = _Block(str(kind))
         if kind == "text" and block.get("text"):
-            return [TextDelta(text=str(block["text"]))]
-        return []
+            return [*released, TextDelta(text=str(block["text"]))]
+        return released
 
     def _delta(self, event: Mapping[str, Any]) -> list[StreamEvent]:
         block = self._block(event)
@@ -185,24 +207,15 @@ class _Translator:
         block.stopped = True
         if block.kind != "tool_use":
             return []
-        text = "".join(block.json).strip() or "{}"
-        try:
-            arguments = json.loads(text)
-        except ValueError:
-            self.truncated += 1  # acceptable only if the call stops on max_tokens
-            return []
-        if not isinstance(arguments, dict):
-            raise _broken()
-        return [
-            ToolCallStarted(id=block.id, name=block.name),
-            ToolCallFinished(id=block.id, name=block.name, input=arguments),
-        ]
+        released = self._release()  # an earlier call is whole once a later one stops
+        self.held = block
+        return released
 
     def _finish(self) -> list[StreamEvent]:
         if self.stop_reason is None or any(not b.stopped for b in self.blocks.values()):
             raise _broken()
-        if self.truncated and self.stop_reason is not StopReason.MAX_TOKENS:
-            raise _broken()
+        if self.held is not None:
+            raise _broken()  # a tool call stopped after message_delta
         self.finished = True
         return [StreamStopped(stop_reason=self.stop_reason, usage=self.counts.usage())]
 
