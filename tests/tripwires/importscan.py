@@ -54,6 +54,9 @@ OPTIONAL_LIBRARIES: Mapping[str, tuple[str, ...]] = {
     "mcp": ("conduit.mcp",),
     "sqlalchemy": ("conduit.stores.sql",),
     "alembic": ("conduit.stores.sql",),
+    # The sql extra's database drivers.
+    "asyncpg": ("conduit.stores.sql",),
+    "aiosqlite": ("conduit.stores.sql",),
     "konfig": ("conduit.integrations.konfig",),
     "warden": ("conduit.integrations.warden",),
     "opentelemetry": ("conduit.integrations.otel",),

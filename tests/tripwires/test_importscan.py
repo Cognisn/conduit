@@ -127,6 +127,30 @@ def test_a_library_with_several_owners_is_admitted_by_each_and_no_other(tmp_path
     }
 
 
+@pytest.mark.parametrize("driver", ["asyncpg", "aiosqlite"])
+def test_the_sql_drivers_are_owned_by_the_sql_store_only(tmp_path: Path, driver: str) -> None:
+    # The sql extra's database drivers, like sqlalchemy and alembic, belong to
+    # conduit.stores.sql alone: not the memory and JSON stores, not the core.
+    assert OPTIONAL_LIBRARIES[driver] == ("conduit.stores.sql",)
+    src = _tree(
+        tmp_path,
+        {
+            "conduit/stores/__init__.py": f"import {driver}\n",
+            "conduit/stores/sql/__init__.py": f"import {driver}\n",
+            "conduit/stores/sql/engine.py": f"def f():\n    from {driver} import connect\n",
+            "conduit/stores/json.py": f"import importlib\nimportlib.import_module('{driver}')\n",
+            "conduit/core/__init__.py": f"from {driver} import connect\n",
+        },
+    )
+    found = {(e.importer, e.imported) for e in optional_library_violations(scan_tree(src))}
+    assert found == {
+        ("conduit.stores", driver),
+        ("conduit.stores.json", driver),
+        ("conduit.core", driver),
+        ("conduit.core", f"{driver}.connect"),
+    }
+
+
 def test_the_real_table_lists_httpx_for_ollama_and_mcp_only(tmp_path: Path) -> None:
     # Q0006: httpx has two owners. Every other library keeps exactly one.
     assert OPTIONAL_LIBRARIES["httpx"] == ("conduit.providers.ollama", "conduit.mcp")
