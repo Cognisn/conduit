@@ -35,6 +35,23 @@ class ConfigurationError(ConduitError, ValueError):
     """Settings, a catalogue or an overlay cannot be accepted."""
 
 
+class SettingsRefused(ConfigurationError):
+    """A configured provider's settings failed validation against its adapter's model.
+
+    Names the provider and the fields that failed (dotted paths), never pydantic's text
+    or any value given, so a plaintext credential in the input cannot reach it.
+    """
+
+    def __init__(
+        self, provider: str, fields: tuple[str, ...], reasons: tuple[str, ...] = ()
+    ) -> None:
+        why = f" ({'; '.join(reasons)})" if reasons else ""
+        super().__init__(f"provider {provider!r}: settings refused at {', '.join(fields)}{why}")
+        self.provider = provider
+        self.fields = fields
+        self.reasons = reasons
+
+
 class UndeclaredModel(ConfigurationError, LookupError):
     """A model is not declared in the catalogue for the provider asked for."""
 

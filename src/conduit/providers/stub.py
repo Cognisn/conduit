@@ -33,6 +33,7 @@ from typing import Any, Literal, Self
 
 from pydantic import PositiveInt, SecretStr, model_validator
 
+from conduit.core.catalogue import Catalogue
 from conduit.core.errors import ConfigurationError, ProviderError
 from conduit.core.provider import BaseProvider, Provider
 from conduit.core.settings import ProviderSettings
@@ -241,15 +242,21 @@ class StubFactory:
     def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
         return None  # the stub has no client
 
-    def create_provider(self, name: str, settings: ProviderSettings, client: Any) -> Provider:
+    def create_provider(
+        self,
+        name: str,
+        settings: ProviderSettings,
+        client: Any,
+        *,
+        catalogue: Catalogue | None = None,
+    ) -> Provider:
+        """The stub for one configured name. The stub consults no catalogue."""
         if not isinstance(settings, StubSettings):
             raise ConfigurationError("stub settings expected")
-        try:
-            script = self._scripts[settings.script]
-        except KeyError:
-            raise ConfigurationError(f"no stub script named {settings.script!r}") from None
+        if settings.script not in self._scripts:
+            raise ConfigurationError(f"no stub script named {settings.script!r}")
         return StubProvider(
-            script,
+            self._scripts[settings.script],
             not_for_production=settings.not_for_production,
             chunk_size=settings.chunk_size,
         )

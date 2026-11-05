@@ -105,10 +105,9 @@ class LiteralSecretResolver:
         self._values = dict(values)
 
     async def resolve(self, ref: SecretRef) -> SecretStr:
-        try:
-            return SecretStr(self._values[ref.name])
-        except KeyError:
-            raise SecretUnavailable(f"{ref} is not held by this resolver") from None
+        if ref.name not in self._values:
+            raise SecretUnavailable(f"{ref} is not held by this resolver")
+        return SecretStr(self._values[ref.name])
 
     def __repr__(self) -> str:
         return f"LiteralSecretResolver(<{len(self._values)} values>)"

@@ -82,14 +82,23 @@ class FakeFactory:
     def __init__(self) -> None:
         self.clients: list[FakeClient] = []
         self.providers: list[FakeProvider] = []
+        self.catalogues: list[Catalogue | None] = []
 
     def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
         client = FakeClient(secrets["api_key"])
         self.clients.append(client)
         return client
 
-    def create_provider(self, name: str, settings: ProviderSettings, client: Any) -> Provider:
+    def create_provider(
+        self,
+        name: str,
+        settings: ProviderSettings,
+        client: Any,
+        *,
+        catalogue: Catalogue | None = None,
+    ) -> Provider:
         assert isinstance(settings, FakeSettings)
+        self.catalogues.append(catalogue)
         provider = FakeProvider(name, settings, client)
         self.providers.append(provider)
         return provider

@@ -25,7 +25,7 @@ from pydantic import Field, PositiveInt, ValidationError, model_validator
 
 from conduit.core.errors import ConfigurationError, UndeclaredModel
 from conduit.core.residency import ResidencyScope
-from conduit.core.settings import SettingsModel
+from conduit.core.settings import SettingsModel, failed_fields
 
 _REGION_BOUND = frozenset({ResidencyScope.IN_REGION, ResidencyScope.CROSS_REGION})
 
@@ -169,14 +169,20 @@ class _CatalogueFile(SettingsModel):
 
 def load_catalogue(source: Mapping[str, Any] | str | Path) -> Catalogue:
     """A catalogue from a mapping or a JSON file of ``{"version", "models"}``."""
+    problem = ""
     try:
         if isinstance(source, Mapping):
             data = _CatalogueFile.model_validate(source)
         else:
             text = Path(source).read_text(encoding="utf-8")
             data = _CatalogueFile.model_validate(json.loads(text))
-    except (ValidationError, json.JSONDecodeError) as error:
-        raise ConfigurationError(f"catalogue cannot be loaded: {error}") from None
+    except ValidationError as error:
+        problem = f"invalid at {', '.join(failed_fields(error))}"
+    except json.JSONDecodeError as error:
+        problem = f"not JSON (line {error.lineno}, column {error.colno})"
+    if problem:
+        # Raised after the handler: the error keeps neither pydantic's text nor the input.
+        raise ConfigurationError(f"catalogue cannot be loaded: {problem}")
     return Catalogue(data.models, version=data.version)
 
 

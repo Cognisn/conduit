@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from conduit.core.errors import ConfigurationError, ReplayMismatch
 from conduit.core.provider import BaseProvider
+from conduit.core.settings import failed_fields
 from conduit.core.streaming import StreamEvent
 from conduit.core.types import ModelRequest
 
@@ -136,10 +137,15 @@ def save_recording(recording: Recording, path: str | Path) -> None:
 
 
 def load_recording(path: str | Path) -> Recording:
+    fields: list[str] | None = None
     try:
         recording = Recording.model_validate_json(Path(path).read_text(encoding="utf-8"))
     except ValidationError as error:
-        raise ConfigurationError(f"recording {path} cannot be loaded: {error}") from None
+        fields = failed_fields(error)
+    if fields is not None:
+        raise ConfigurationError(
+            f"recording {path} cannot be loaded: invalid at {', '.join(fields)}"
+        )
     check_scrubbed(recording)
     return recording
 

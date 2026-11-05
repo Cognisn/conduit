@@ -119,19 +119,24 @@ class LoopThread:
         # Wait with exception(), then read the result: it raises TimeoutError only when the
         # wait expires, never for a TimeoutError the call raised itself, and it wakes when
         # close() cancels the future (concurrent.futures.wait would not).
+        # conduit's own errors are raised after the handler, so neither keeps the
+        # exception it replaces (no __cause__, no __context__).
+        stranded = False
         try:
             future.exception(None if timeout is None else timeout + UNWIND_GRACE_S)
             return future.result()
         except concurrent.futures.CancelledError:
-            if self._closed:
-                raise FacadeError("the conduit loop was closed while the call waited") from None
-            raise
+            if not self._closed:
+                raise
         except TimeoutError:
             if future.done():
                 raise  # the call's own TimeoutError, from result()
             # Cancelled on the loop at its deadline, but still unwinding after the grace
             # period. It is not cancelled again, which would cut its cleanup short.
-            raise _Stranded(f"conduit call did not finish within {timeout} s") from None
+            stranded = True
+        if stranded:
+            raise _Stranded(f"conduit call did not finish within {timeout} s")
+        raise FacadeError("the conduit loop was closed while the call waited")
 
     def iterate[T](
         self, iterator: AsyncIterator[T], *, timeout: float | None = DEFAULT_TIMEOUT_S
@@ -213,9 +218,10 @@ async def _within[T](awaitable: Awaitable[T], timeout: float | None) -> T:
         async with deadline:
             return await awaitable
     except TimeoutError:
-        if deadline.expired():
-            raise TimeoutError(f"conduit call did not finish within {timeout} s") from None
-        raise
+        if not deadline.expired():
+            raise  # the call's own TimeoutError
+    # Raised after the handler, so it keeps neither the deadline's error nor its context.
+    raise TimeoutError(f"conduit call did not finish within {timeout} s")
 
 
 async def _next[T](iterator: AsyncIterator[T]) -> T:

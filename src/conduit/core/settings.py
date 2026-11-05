@@ -7,15 +7,25 @@ anything else is refused when the class is defined. Validation errors never echo
 
 The generic ``ProviderSettings`` (what ``ConduitSettings.providers`` holds before the
 provider registry re-validates each entry against its adapter's own model) keeps
-unknown fields, but a credential-like unknown field must already be a reference.
+unknown fields, but no unknown field may hold a plaintext credential, at any depth: a
+value under a credential-like name (``api_key``, ``auth.token``, ``bearer``,
+``Authorization``) must be a ``secret://`` reference, and a string that reads as an HTTP
+authorisation value (``Bearer ...``, ``Basic ...``) is refused under any name. The
+refusal names the field, never the value.
+
+A validator's own message (a ``ValueError`` it raises) must not quote its input.
+``refusals`` reports it only when it holds no string from the input, and never
+pydantic's own wording.
 """
 
 from __future__ import annotations
 
+import re
 import types
+from collections.abc import Iterator, Mapping
 from typing import Any, ClassVar, Self, Union, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field, PositiveInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, ValidationError, model_validator
 
 from conduit.core.errors import ConfigurationError
 from conduit.core.secrets import SecretRef
@@ -28,8 +38,121 @@ CREDENTIAL_SEGMENTS = frozenset(
 KIND_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
 
 
+#: How ``failed_fields`` names a failure that belongs to no single field.
+WHOLE = "(the whole object)"
+
+
+#: Input strings shorter than this are not looked for in a validator's message.
+_SHORTEST_ECHO = 3
+
+
+class FieldsRefused(ValueError):
+    """Raised by a settings validator about named fields. The message names them only."""
+
+    def __init__(self, reason: str, fields: list[str]) -> None:
+        super().__init__(f"{reason}: {', '.join(fields)}")
+        self.reason = reason
+        self.fields = tuple(fields)
+
+
+def _strings(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():  # keys are field names, not input values
+            yield from _strings(item)
+    elif isinstance(value, list | tuple | set | frozenset):
+        for item in value:
+            yield from _strings(item)
+    elif isinstance(value, BaseModel):
+        yield from _strings(value.model_dump(warnings=False))
+    elif value is not None and not isinstance(value, bool | int | float):
+        yield str(value)
+
+
+def _quotes(message: str, value: str) -> bool:
+    """Whether ``message`` holds ``value`` as a whole token (not inside a longer name)."""
+    pattern = rf"(?<![A-Za-z0-9_]){re.escape(value)}(?![A-Za-z0-9_])"
+    return re.search(pattern, message) is not None
+
+
+def refusals(error: ValidationError, given: Any = None) -> tuple[list[str], list[str]]:
+    """Where validation failed, and why, without pydantic's text or any input value.
+
+    The first list holds the dotted paths of the failing fields, in order and without
+    repeats; a failure raised for the object as a whole is named by the fields a
+    ``FieldsRefused`` lists, or ``WHOLE``. The second holds the messages of the
+    ``ValueError``s validators raised, each kept only if it holds no string of
+    ``given`` (the input); pydantic's own messages are never kept.
+    """
+    echoes = [s for s in _strings(given) if len(s) >= _SHORTEST_ECHO]
+    fields: list[str] = []
+    reasons: list[str] = []
+    for detail in error.errors(include_url=False, include_input=False):
+        location = ".".join(str(part) for part in detail["loc"])
+        cause = (detail.get("ctx") or {}).get("error")
+        if isinstance(cause, FieldsRefused):
+            names = [f"{location}.{f}" if location else f for f in cause.fields]
+            reason = cause.reason
+        else:
+            names = [location or WHOLE]
+            reason = str(cause) if isinstance(cause, ValueError) else ""
+        fields += [name for name in names if name not in fields]
+        if reason and reason not in reasons and not any(_quotes(reason, e) for e in echoes):
+            reasons.append(reason)
+    return fields, reasons
+
+
+def failed_fields(error: ValidationError) -> list[str]:
+    """The dotted paths of the fields that failed (``refusals`` without the reasons)."""
+    return refusals(error)[0]
+
+
+#: Further name segments that mark an unknown (extra) field as a credential.
+EXTRA_CREDENTIAL_SEGMENTS = CREDENTIAL_SEGMENTS | frozenset(
+    {"bearer", "auth", "authorization", "authorisation", "pwd", "passwd", "jwt", "cookie"}
+)
+#: A value that reads as an HTTP authorisation header value: refused under any name.
+_AUTHORISATION_VALUE = re.compile(r"^\s*(bearer|basic|digest|token)\s+\S", re.IGNORECASE)
+_SEGMENT = re.compile(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])")
+
+
 def is_credential_name(name: str) -> bool:
     return any(segment in CREDENTIAL_SEGMENTS for segment in name.lower().split("_"))
+
+
+def _is_extra_credential_name(name: str) -> bool:
+    """A broader test for unknown fields: any separator, camelCase, and more segments."""
+    compact = re.sub(r"[^a-z0-9]", "", name.lower())
+    segments = {s.lower() for s in _SEGMENT.findall(name)} | {compact}
+    return bool(segments & EXTRA_CREDENTIAL_SEGMENTS)
+
+
+def _is_reference(value: Any) -> bool:
+    if isinstance(value, SecretRef):
+        return True
+    try:
+        SecretRef.parse(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _plaintext_credentials(value: Any, path: str, credential: bool) -> Iterator[str]:
+    """The paths under ``value`` holding a credential that is not a reference."""
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            name = str(key)
+            yield from _plaintext_credentials(
+                item, f"{path}.{name}" if path else name, _is_extra_credential_name(name)
+            )
+    elif isinstance(value, list | tuple):
+        for index, item in enumerate(value):
+            yield from _plaintext_credentials(item, f"{path}.{index}", credential)
+    elif (credential and not _is_reference(value)) or (
+        isinstance(value, str) and _AUTHORISATION_VALUE.match(value)
+    ):
+        yield path
 
 
 def _is_reference_annotation(annotation: Any) -> bool:
@@ -73,10 +196,10 @@ class ProviderSettings(BaseModel):
     def _check_extra_fields(self) -> Self:
         extra = self.model_extra or {}
         if extra and type(self) is not ProviderSettings and not self.allow_extra_fields:
-            raise ValueError(f"unknown fields: {', '.join(sorted(extra))}")
-        for name, value in extra.items():
-            if is_credential_name(name):
-                SecretRef.parse(value)  # raises without echoing the value
+            raise FieldsRefused("unknown fields", sorted(extra))
+        plaintext = list(_plaintext_credentials(extra, "", False))
+        if plaintext:
+            raise FieldsRefused("a credential must be a secret:// reference", plaintext)
         return self
 
     @property
