@@ -389,6 +389,7 @@ class TestProviderState:
         "payload",
         [
             b"not json zz-state-marker-zz",
+            b"[" * 200_000,  # nested past the decoder's recursion limit
             b"\xff\xfe zz-state-marker-zz",
             b'["zz-state-marker-zz"]',
             b'{"type": "thinking", "thinking": "zz-state-marker-zz"}',

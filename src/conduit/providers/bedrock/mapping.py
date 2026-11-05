@@ -97,7 +97,8 @@ def reasoning_state(content: Any) -> ProviderStateBlock:
 def _reasoning_content(state: ProviderStateBlock) -> dict[str, Any]:
     """The ``reasoningContent`` block a ``bedrock`` state block holds, or REJECTED."""
     data: Any = None
-    with contextlib.suppress(ValueError):  # UnicodeDecodeError and JSONDecodeError
+    # UnicodeDecodeError and JSONDecodeError; RecursionError for deep nesting.
+    with contextlib.suppress(ValueError, RecursionError):
         data = json.loads(state.payload.decode("utf-8"))
     wire: dict[str, Any] | None = None
     if state.state_type == REASONING_STATE and isinstance(data, dict) and len(data) == 1:

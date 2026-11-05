@@ -71,7 +71,8 @@ def is_thinking_block(block: Any) -> bool:
 def _thinking(state: ProviderStateBlock) -> Block:
     """The thinking block an ``anthropic`` state block holds, or REJECTED."""
     block: Any = None
-    with contextlib.suppress(ValueError):  # UnicodeDecodeError and JSONDecodeError
+    # UnicodeDecodeError and JSONDecodeError; RecursionError for deep nesting.
+    with contextlib.suppress(ValueError, RecursionError):
         block = json.loads(state.payload.decode("utf-8"))
     # Raised here, after the handler: the decoding error quotes the payload.
     if not is_thinking_block(block) or block["type"] != state.state_type:

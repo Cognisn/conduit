@@ -120,7 +120,8 @@ def signature_state(call_id: str, signature: bytes) -> ProviderStateBlock:
 def _from_state(state: ProviderStateBlock) -> tuple[str, bytes]:
     """The call id and signature a ``gemini`` state block holds, or REJECTED."""
     data: Any = None
-    with contextlib.suppress(ValueError):  # UnicodeDecodeError and JSONDecodeError
+    # UnicodeDecodeError and JSONDecodeError; RecursionError for deep nesting.
+    with contextlib.suppress(ValueError, RecursionError):
         data = json.loads(state.payload.decode("utf-8"))
     signature: bytes | None = None
     if (
