@@ -48,7 +48,9 @@ def test_nothing_outside_cli_imports_cli() -> None:
 def test_every_owner_layer_sits_in_an_existing_package() -> None:
     # An owner may be a module a later wave creates, but its parent package must
     # exist now, so a misspelt owner cannot silently admit an import everywhere.
+    # Every owner of a library with several is checked, not only the first.
     modules = {module_name(path, SRC_ROOT) for path in source_files()}
-    for library, owner in OPTIONAL_LIBRARIES.items():
-        parent = owner.rpartition(".")[0]
-        assert owner in modules or parent in modules, f"{library}: no package for {owner}"
+    for library, owners in OPTIONAL_LIBRARIES.items():
+        for owner in owners:
+            parent = owner.rpartition(".")[0]
+            assert owner in modules or parent in modules, f"{library}: no package for {owner}"

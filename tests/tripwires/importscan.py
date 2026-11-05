@@ -9,7 +9,9 @@ name is seen too.
 - ``conduit.core`` imports nothing from any other conduit package, nor the
   top-level ``conduit`` package itself.
 - Each optional third-party library (a provider SDK or a layer's own
-  dependency) is imported only inside the layer of the extra that installs it.
+  dependency) is imported only inside the layer, or layers, of the extras that
+  install it. Most libraries have one owner; a library two layers need (httpx,
+  for the Ollama adapter and the MCP client) lists each owner by name.
 - Nothing outside ``conduit.cli`` imports ``conduit.cli``.
 """
 
@@ -26,31 +28,35 @@ PACKAGE = "conduit"
 CORE = "conduit.core"
 CLI = "conduit.cli"
 
-#: Optional third-party libraries and the only layer allowed to import each.
-#: A later workstream that needs another library behind an extra adds it here
-#: (this file is a shared module: the change goes through the integration session).
-OPTIONAL_LIBRARIES: Mapping[str, str] = {
+#: Optional third-party libraries and the only layers allowed to import each.
+#: Each value is a tuple of one or more distinct owning layers (Q0006). A later
+#: workstream that needs another library behind an extra, or another owner for
+#: one, adds it here (this file is a shared module: the change goes through the
+#: integration session).
+OPTIONAL_LIBRARIES: Mapping[str, tuple[str, ...]] = {
     # Provider SDKs (C6), each behind its own extra.
-    "boto3": "conduit.providers.bedrock",
-    "botocore": "conduit.providers.bedrock",
-    "aioboto3": "conduit.providers.bedrock",
-    "aiobotocore": "conduit.providers.bedrock",
-    "anthropic": "conduit.providers.anthropic",
-    "openai": "conduit.providers.openai_compat",
-    "azure.identity": "conduit.providers.openai_compat",
-    "google.genai": "conduit.providers.gemini",
-    "google.generativeai": "conduit.providers.gemini",
-    "ollama": "conduit.providers.ollama",
+    "boto3": ("conduit.providers.bedrock",),
+    "botocore": ("conduit.providers.bedrock",),
+    "aioboto3": ("conduit.providers.bedrock",),
+    "aiobotocore": ("conduit.providers.bedrock",),
+    "anthropic": ("conduit.providers.anthropic",),
+    "openai": ("conduit.providers.openai_compat",),
+    "azure.identity": ("conduit.providers.openai_compat",),
+    "google.genai": ("conduit.providers.gemini",),
+    "google.generativeai": ("conduit.providers.gemini",),
+    "ollama": ("conduit.providers.ollama",),
+    # The HTTP client behind the ollama and mcp extras.
+    "httpx": ("conduit.providers.ollama", "conduit.mcp"),
     # Layer dependencies behind their extras.
-    "sentence_transformers": "conduit.embeddings.local",
-    "torch": "conduit.embeddings.local",
-    "transformers": "conduit.embeddings.local",
-    "mcp": "conduit.mcp",
-    "sqlalchemy": "conduit.stores.sql",
-    "alembic": "conduit.stores.sql",
-    "konfig": "conduit.integrations.konfig",
-    "warden": "conduit.integrations.warden",
-    "opentelemetry": "conduit.integrations.otel",
+    "sentence_transformers": ("conduit.embeddings.local",),
+    "torch": ("conduit.embeddings.local",),
+    "transformers": ("conduit.embeddings.local",),
+    "mcp": ("conduit.mcp",),
+    "sqlalchemy": ("conduit.stores.sql",),
+    "alembic": ("conduit.stores.sql",),
+    "konfig": ("conduit.integrations.konfig",),
+    "warden": ("conduit.integrations.warden",),
+    "opentelemetry": ("conduit.integrations.otel",),
 }
 
 
@@ -163,14 +169,34 @@ def core_violations(edges: Iterable[ImportEdge]) -> list[ImportEdge]:
     ]
 
 
+def check_owners(libraries: Mapping[str, tuple[str, ...]]) -> None:
+    """Raise ``ValueError`` unless every library has a tuple of distinct, named owners.
+
+    A bare string would otherwise be read as one owner per character, and an empty
+    tuple would ban a library everywhere without saying why.
+    """
+    for library, owners in libraries.items():
+        if (
+            not isinstance(owners, tuple)
+            or not owners
+            or not all(isinstance(owner, str) and owner for owner in owners)
+            or len(set(owners)) != len(owners)
+        ):
+            raise ValueError(f"{library}: owners must be a tuple of distinct layer names")
+
+
 def optional_library_violations(
-    edges: Iterable[ImportEdge], libraries: Mapping[str, str] = OPTIONAL_LIBRARIES
+    edges: Iterable[ImportEdge],
+    libraries: Mapping[str, tuple[str, ...]] = OPTIONAL_LIBRARIES,
 ) -> list[ImportEdge]:
-    """An optional library imported outside the layer of its extra."""
+    """An optional library imported outside every layer that owns it."""
+    check_owners(libraries)
     found: list[ImportEdge] = []
     for edge in edges:
-        for library, owner in libraries.items():
-            if within(edge.imported, library) and not within(edge.importer, owner):
+        for library, owners in libraries.items():
+            if within(edge.imported, library) and not any(
+                within(edge.importer, owner) for owner in owners
+            ):
                 found.append(edge)
                 break
     return found
