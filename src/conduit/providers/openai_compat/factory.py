@@ -47,6 +47,7 @@ from conduit.providers.openai_compat.settings import (
     FoundryService,
     OpenAICompatSettings,
     OpenAIService,
+    XAIService,
 )
 
 logger = logging.getLogger("conduit.providers.openai_compat")
@@ -176,4 +177,5 @@ class OpenAICompatFactory:
             client,
             catalogue_provider=settings.catalogue_provider,
             catalogue=catalogue if catalogue is not None else default_catalogue(),
+            reasoning_by_total=isinstance(settings.service, XAIService),
         )

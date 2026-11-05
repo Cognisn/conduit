@@ -135,6 +135,82 @@ class TestUsage:
         assert caught.value.failure is ProviderFailure.PROTOCOL
 
 
+def _reasoning_usage(prompt: int, completion: int, reasoning: Any, total: Any) -> dict[str, Any]:
+    usage: dict[str, Any] = {"prompt_tokens": prompt, "completion_tokens": completion}
+    if total is not None:
+        usage["total_tokens"] = total
+    if reasoning is not None:
+        usage["completion_tokens_details"] = {"reasoning_tokens": reasoning}
+    return usage
+
+
+class TestReasoningFromTotal:
+    """Q0021: for X.AI, total_tokens shows whether completion_tokens holds the reasoning."""
+
+    # X.AI's documented example: 32 + 9 + 94 = 135, so the reasoning is not in the 9.
+    EXCLUDED: ClassVar[dict[str, Any]] = _reasoning_usage(32, 9, 94, 135)
+    # OpenAI's shape: 2048 + 120 = 2168, so the 64 reasoning tokens are in the 120.
+    INCLUDED: ClassVar[dict[str, Any]] = _reasoning_usage(2048, 120, 64, 2168)
+
+    def test_reasoning_outside_the_completion_is_added_to_output(self) -> None:
+        usage = usage_from_openai(self.EXCLUDED, reasoning_by_total=True)
+        assert usage.output_tokens == 103
+        assert usage.input_tokens == 32
+
+    def test_reasoning_inside_the_completion_is_not_added_again(self) -> None:
+        assert usage_from_openai(self.INCLUDED, reasoning_by_total=True).output_tokens == 120
+
+    def test_without_the_rule_the_completion_stands(self) -> None:
+        assert usage_from_openai(self.EXCLUDED).output_tokens == 9
+
+    @pytest.mark.parametrize(
+        ("reasoning", "total"),
+        [(0, 41), (None, 135), (94, None), (94, 200), (94, 41)],
+        ids=["no-reasoning", "no-details", "no-total", "total-matches-neither", "total-without"],
+    )
+    def test_anything_else_keeps_the_completion(self, reasoning: Any, total: Any) -> None:
+        usage = usage_from_openai(
+            _reasoning_usage(32, 9, reasoning, total), reasoning_by_total=True
+        )
+        assert usage.output_tokens == 9
+
+    def test_cached_tokens_do_not_change_the_arithmetic(self) -> None:
+        body = {**self.EXCLUDED, "prompt_tokens_details": {"cached_tokens": 30}}
+        usage = usage_from_openai(body, reasoning_by_total=True)
+        assert (usage.input_tokens, usage.cache_read_tokens, usage.output_tokens) == (2, 30, 103)
+
+    def test_missing_or_null_details_keep_the_completion(self) -> None:
+        body = {**_reasoning_usage(32, 9, None, 135), "completion_tokens_details": None}
+        assert usage_from_openai(body, reasoning_by_total=True).output_tokens == 9
+        body = {**body, "completion_tokens_details": {"reasoning_tokens": None}}
+        assert usage_from_openai(body, reasoning_by_total=True).output_tokens == 9
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            _reasoning_usage(32, 9, -1, 40),
+            _reasoning_usage(32, 9, "94", 135),
+            _reasoning_usage(32, 9, True, 42),
+            _reasoning_usage(32, 9, 94, -1),
+            _reasoning_usage(32, 9, 94, "135"),
+            {"prompt_tokens": 32, "completion_tokens": 9, "completion_tokens_details": [94]},
+        ],
+    )
+    def test_impossible_reasoning_counts_are_a_protocol_error(self, body: dict[str, Any]) -> None:
+        with pytest.raises(ProviderError) as caught:
+            usage_from_openai(body, reasoning_by_total=True)
+        assert caught.value.failure is ProviderFailure.PROTOCOL
+
+    def test_the_stream_mapper_applies_the_rule_to_the_final_usage(self) -> None:
+        mapper = StreamMapper(reasoning_by_total=True)
+        events = mapper.feed(_chunk({"content": "Hi."}, finish="stop"))
+        events += mapper.feed({"id": "chatcmpl-example", "choices": [], "usage": self.EXCLUDED})
+        events += mapper.finish()
+        stop = events[-1]
+        assert isinstance(stop, StreamStopped)
+        assert stop.usage.output_tokens == 103
+
+
 class TestText:
     def test_text_deltas_then_one_stop_with_the_final_usage(self) -> None:
         events = _run(

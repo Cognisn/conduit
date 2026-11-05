@@ -73,15 +73,24 @@ class OpenAICompatProvider(BaseProvider):
 
     ``client`` is the SDK client (or a test's stand-in) with an optional async
     ``close``. Structured output is sent only for models the catalogue marks
-    ``structured_output``, looked up under ``catalogue_provider``.
+    ``structured_output``, looked up under ``catalogue_provider``. ``reasoning_by_total``
+    applies the X.AI usage rule (see ``conduit.providers.openai_compat.mapping``).
     """
 
     kind = "openai_compat"
 
-    def __init__(self, client: Any, *, catalogue_provider: str, catalogue: Catalogue) -> None:
+    def __init__(
+        self,
+        client: Any,
+        *,
+        catalogue_provider: str,
+        catalogue: Catalogue,
+        reasoning_by_total: bool = False,
+    ) -> None:
         self._client = client
         self._catalogue_provider = catalogue_provider
         self._catalogue = catalogue
+        self._reasoning_by_total = reasoning_by_total
 
     def _structured_output(self, model: str) -> bool:
         entry = self._catalogue.get(self._catalogue_provider, model)
@@ -114,7 +123,7 @@ class OpenAICompatProvider(BaseProvider):
     async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
         body = build_request(request, structured_output=self._structured_output(request.model))
         chunks = await self._create(body, request.timeout_s)
-        mapper = StreamMapper()
+        mapper = StreamMapper(reasoning_by_total=self._reasoning_by_total)
         try:
             iterator: AsyncIterator[Any] = _protocol(aiter, chunks)
             while (chunk := await self._next(iterator)) is not _END:
