@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 from collections.abc import Awaitable
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,8 @@ from pydantic import SecretStr, ValidationError
 from conduit.core.backends import TokenSet, TokenStore
 from conduit.core.transcript import CompactionPoint, MessageEntry, TranscriptStore
 from conduit.core.types import Message
+from conduit.stores import json as json_stores
+from conduit.stores.errors import StoreError
 from conduit.stores.json import JsonTokenStore, JsonTranscriptStore
 
 
@@ -248,3 +251,103 @@ async def test_token_files_are_private_to_the_owner(tmp_path: Path) -> None:
     await store.put("mcp:example", TokenSet(access_token=SecretStr("a-1")))
     [path] = _files(tmp_path)
     assert path.stat().st_mode & 0o077 == 0
+
+
+def test_appends_from_two_threads_with_their_own_loops_are_all_kept(tmp_path: Path) -> None:
+    # A product mixing async calls with the sync facade has two event loops in one
+    # process; asyncio locks alone do not serialise them.
+    def worker(tag: str) -> None:
+        async def run() -> None:
+            store = JsonTranscriptStore(tmp_path)
+            for i in range(30):
+                await store.append("sess_1", [_message(f"{tag}{i}")])
+
+        asyncio.run(run())
+
+    threads = [threading.Thread(target=worker, args=(tag,)) for tag in "AB"]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    loaded = asyncio.run(JsonTranscriptStore(tmp_path).load("sess_1"))
+    assert [e.seq for e in loaded.entries] == list(range(1, 61))
+
+
+def test_tokens_from_two_threads_with_their_own_loops_are_all_kept(tmp_path: Path) -> None:
+    def worker(tag: str) -> None:
+        async def run() -> None:
+            store = JsonTokenStore(tmp_path)
+            for i in range(20):
+                await store.put(f"mcp:{tag}{i}", TokenSet(access_token=SecretStr(f"a-{tag}{i}")))
+
+        asyncio.run(run())
+
+    threads = [threading.Thread(target=worker, args=(tag,)) for tag in "AB"]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(_files(tmp_path)) == 40
+
+
+async def test_the_directory_is_synced_after_a_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Directory fsync exists on POSIX only; the flag lets the order be checked anywhere.
+    synced: list[str] = []
+    opened: dict[int, str] = {}
+    real_open, real_fsync, real_close = os.open, os.fsync, os.close
+
+    def fake_open(path: Any, flags: int, *args: Any) -> int:
+        if Path(path) == tmp_path:
+            opened[-7] = "directory"
+            return -7
+        return real_open(path, flags, *args)
+
+    def fake_fsync(fd: int) -> None:
+        if fd == -7:
+            synced.append("directory")
+        else:
+            synced.append("file")
+            real_fsync(fd)
+
+    def fake_close(fd: int) -> None:
+        if fd != -7:
+            real_close(fd)
+
+    monkeypatch.setattr(json_stores, "_SYNC_DIRECTORY", True)
+    monkeypatch.setattr(os, "open", fake_open)
+    monkeypatch.setattr(os, "fsync", fake_fsync)
+    monkeypatch.setattr(os, "close", fake_close)
+    await JsonTranscriptStore(tmp_path).append("sess_1", [_message("one")])
+    await JsonTokenStore(tmp_path).put("mcp:example", TokenSet(access_token=SecretStr("a-1")))
+    assert synced == ["file", "directory", "file", "directory"]
+
+
+async def test_a_token_file_that_is_not_a_record_is_refused_without_echo(tmp_path: Path) -> None:
+    store = JsonTokenStore(tmp_path)
+    await store.put("mcp:example", TokenSet(access_token=SecretStr("a-1")))
+    [path] = _files(tmp_path)
+    for content in ('["SECRET-content"]\n', "SECRET-content not json\n", '"SECRET-content"\n'):
+        path.write_text(content, encoding="utf-8")
+        with pytest.raises(StoreError) as raised:
+            await store.get("mcp:example")
+        assert "SECRET" not in str(raised.value) and "SECRET" not in repr(raised.value)
+        assert raised.value.__cause__ is None and raised.value.__context__ is None
+
+
+async def test_a_damaged_transcript_file_is_refused_without_echo(tmp_path: Path) -> None:
+    store = JsonTranscriptStore(tmp_path)
+    await store.append("sess_1", [_message("one")])
+    [path] = _files(tmp_path)
+    for content in (
+        '{"format": "conduit.transcript/1", "session_id": "sess_1", '
+        '"entries": [{"type": "message", "message": "SECRET-content"}]}\n',
+        "SECRET-content not json\n",
+    ):
+        path.write_text(content, encoding="utf-8")
+        for call in (store.load("sess_1"), store.append("sess_1", [_message("two")])):
+            with pytest.raises(StoreError) as raised:
+                await call
+            assert "SECRET" not in str(raised.value) and "SECRET" not in repr(raised.value)
+            assert raised.value.__cause__ is None and raised.value.__context__ is None

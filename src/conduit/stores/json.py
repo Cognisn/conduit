@@ -8,10 +8,17 @@ so a mistake is reported rather than silently hashed.
 
 Every write goes to a temporary file in the same directory, is flushed to disk, and
 then replaces the record in one step: a reader sees the old record or the new one,
-never part of either. Writes are serialised per record across every store object on
-the same directory in the process; the stores do not lock across processes.
+never part of either. On POSIX systems the directory is synced too, so the replace
+itself survives a crash.
 
-File I/O runs in a worker thread, so the event loop is not blocked.
+Calls are serialised per record across every store object, task, event loop and thread
+in the process: an asyncio lock per loop keeps tasks in order, and a thread lock held
+in the worker thread around each read, read-modify-write and removal keeps loops in
+different threads (the sync facade's, for one) from losing each other's writes. The
+stores do not lock across processes.
+
+File I/O runs in a worker thread, so the event loop is not blocked. A record that
+cannot be read raises ``StoreError``, which never repeats the file's content.
 """
 
 from __future__ import annotations
@@ -22,6 +29,7 @@ import hashlib
 import json
 import os
 import tempfile
+import threading
 import time
 import unicodedata
 import weakref
@@ -33,6 +41,7 @@ from pydantic import BaseModel, ConfigDict
 
 from conduit.core.backends import TokenSet
 from conduit.core.transcript import Transcript, TranscriptEntry
+from conduit.stores.errors import StoreError
 
 __all__ = ["JsonTokenStore", "JsonTranscriptStore"]
 
@@ -43,6 +52,8 @@ _TOKEN_KEY_LIMIT = 512
 # On Windows a file another handle has open cannot be replaced or opened while a
 # replace is pending; such a clash is brief, so it is retried.
 _RETRIES = 20
+# Directories can be opened and synced on POSIX systems only.
+_SYNC_DIRECTORY = os.name == "posix"
 
 
 def _check_name(value: str, *, what: str, limit: int) -> None:
@@ -97,6 +108,27 @@ def _lock_for(path: Path) -> asyncio.Lock:
     return lock
 
 
+# Thread locks, striped by record: a fixed set, so the table never grows. Two records
+# may share a stripe, which only serialises them; no code holds two at once.
+_STRIPES = tuple(threading.Lock() for _ in range(64))
+
+
+def _thread_lock(path: Path) -> threading.Lock:
+    digest = hashlib.sha256(os.path.normcase(str(path)).encode("utf-8")).digest()
+    return _STRIPES[digest[0] % len(_STRIPES)]
+
+
+async def _in_thread[T](path: Path, action: Callable[..., T], *args: Any) -> T:
+    """Run ``action`` in a worker thread, holding the record's asyncio and thread locks."""
+
+    def locked() -> T:
+        with _thread_lock(path):
+            return action(*args)
+
+    async with _lock_for(path):
+        return await asyncio.to_thread(locked)
+
+
 def _retrying[T](action: Callable[..., T], *args: Any) -> T:
     for attempt in range(_RETRIES):
         try:
@@ -127,6 +159,12 @@ def _write_atomic(path: Path, text: str) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         _retrying(os.replace, temporary, path)
+        if _SYNC_DIRECTORY:
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
     except BaseException:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary)
@@ -168,7 +206,12 @@ class JsonTranscriptStore:
         raw = _read(path)
         if raw is None:
             return ()
-        held = _TranscriptFile.model_validate_json(raw)
+        held: _TranscriptFile | None = None
+        # Raised below, after the error is dropped, so nothing is chained to it.
+        with contextlib.suppress(ValueError):
+            held = _TranscriptFile.model_validate_json(raw)
+        if held is None:
+            raise StoreError("JSON transcript store", "read a session's file")
         return held.entries if held.session_id == session_id else ()
 
     def _append(
@@ -192,13 +235,11 @@ class JsonTranscriptStore:
         path = self._path(session_id)
         if not entries:
             return ()
-        async with _lock_for(path):
-            return await asyncio.to_thread(self._append, session_id, path, list(entries))
+        return await _in_thread(path, self._append, session_id, path, list(entries))
 
     async def load(self, session_id: str) -> Transcript:
         path = self._path(session_id)
-        async with _lock_for(path):
-            entries = await asyncio.to_thread(self._held, session_id, path)
+        entries = await _in_thread(path, self._held, session_id, path)
         return Transcript(session_id=session_id, entries=entries)
 
     def _list(self) -> list[str]:
@@ -228,8 +269,7 @@ class JsonTranscriptStore:
 
     async def delete(self, session_id: str) -> None:
         path = self._path(session_id)
-        async with _lock_for(path):
-            await asyncio.to_thread(_remove, path)
+        await _in_thread(path, _remove, path)
 
 
 class JsonTokenStore:
@@ -256,24 +296,34 @@ class JsonTokenStore:
         raw = _read(path)
         if raw is None:
             return None
-        document = json.loads(raw)
-        if document.get("format") != _TOKENS_FORMAT or document.get("key") != key:
+        tokens: TokenSet | None = None
+        foreign = False
+        try:
+            document = json.loads(raw)
+            if not isinstance(document, dict):
+                raise ValueError("not a record")
+            if document.get("format") != _TOKENS_FORMAT or document.get("key") != key:
+                foreign = True
+            else:
+                tokens = TokenSet.from_storage(document["tokens"])
+        except (ValueError, KeyError, TypeError):
+            pass  # raised below, outside the handler, so nothing is chained
+        if foreign:
             return None
-        return TokenSet.from_storage(document["tokens"])
+        if tokens is None:
+            raise StoreError("JSON token store", "read a token file")
+        return tokens
 
     async def get(self, key: str) -> TokenSet | None:
         path = self._path(key)
-        async with _lock_for(path):
-            return await asyncio.to_thread(self._get, key, path)
+        return await _in_thread(path, self._get, key, path)
 
     async def put(self, key: str, tokens: TokenSet) -> None:
         path = self._path(key)
         document = {"format": _TOKENS_FORMAT, "key": key, "tokens": tokens.to_storage()}
         text = json.dumps(document, ensure_ascii=False) + "\n"
-        async with _lock_for(path):
-            await asyncio.to_thread(_write_atomic, path, text)
+        await _in_thread(path, _write_atomic, path, text)
 
     async def delete(self, key: str) -> None:
         path = self._path(key)
-        async with _lock_for(path):
-            await asyncio.to_thread(_remove, path)
+        await _in_thread(path, _remove, path)
