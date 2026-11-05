@@ -241,9 +241,12 @@ async def test_every_migration_is_reversible(engine: AsyncEngine) -> None:
 async def test_downgrade_to_base_removes_every_conduit_table(engine: AsyncEngine) -> None:
     await migrate(engine)
     await downgrade(engine, "base")
-    names = set().union(*(await _tables(engine)).values())
+    tables = await _tables(engine)
+    names = set().union(*tables.values())
     assert names & TABLES == set()
     assert await current_revision(engine) is None
+    # As documented: the (empty) version table stays, in the conduit schema on Postgres.
+    assert tables[SCHEMA if _postgres(engine) else None] == {VERSION_TABLE}
 
 
 async def test_the_models_match_the_migrated_schema(engine: AsyncEngine) -> None:

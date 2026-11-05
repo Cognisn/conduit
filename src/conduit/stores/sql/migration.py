@@ -94,7 +94,12 @@ async def migrate(engine: AsyncEngine, revision: str = "head") -> None:
 
 
 async def downgrade(engine: AsyncEngine, revision: str) -> None:
-    """Downgrade conduit's tables to ``revision`` (``"base"`` removes them all)."""
+    """Downgrade conduit's tables to ``revision``.
+
+    ``"base"`` drops every conduit table but leaves, on Postgres, the ``conduit`` schema
+    and an empty ``conduit_alembic_version`` table in it (on SQLite, the empty version
+    table). Drop those by hand to remove every trace of conduit.
+    """
 
     await _run(engine, lambda connection: command.downgrade(_config(connection), revision))
 
