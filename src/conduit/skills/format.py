@@ -36,8 +36,9 @@ Any other key is refused. Every refusal is a ``SkillInvalid`` with a fixed reaso
 and the front-matter line, never the text it found.
 
 Resource paths are relative POSIX paths inside the skill's folder (``references/x.md``):
-segments of letters, digits, ``_``, ``.`` and ``-`` that do not start with a dot, no
-``..``, no absolute or drive paths and no backslashes. ``SKILL.md`` itself is not a
+segments of letters, digits, ``_``, ``.`` and ``-`` that neither start nor end with a
+dot (Windows drops a trailing dot, so ``x.md.`` would open ``x.md``), no ``..``, no
+absolute or drive paths and no backslashes. ``SKILL.md`` itself is not a
 resource. ``check_resource_path`` applies the rule; a filesystem source also refuses a
 path that a link carries outside the folder.
 """
@@ -59,6 +60,7 @@ __all__ = [
     "SKILL_FILE",
     "SkillDocument",
     "check_resource_path",
+    "is_skill_description",
     "is_skill_name",
     "is_skill_version",
     "parse_skill_md",
@@ -78,7 +80,11 @@ _VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
 _TOOL = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,127}")
 _METADATA_KEY = re.compile(r"[a-z][a-z0-9_-]{0,63}")
 _KEY_LINE = re.compile(r"([A-Za-z0-9_-]+):(?:[ \t]+(.*))?")
-_SEGMENT = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}")
+# A segment may not end in a dot: Windows drops trailing dots, so "x.md." opens "x.md".
+_SEGMENT = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,126}[A-Za-z0-9_-])?")
+#: Characters no single-line text field may hold: C0 and C1 controls (tab included),
+#: DEL and the Unicode line and paragraph separators.
+_CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 _DRIVE = re.compile(r"[A-Za-z]:")
 
 _FIELDS = ("name", "description", "version", "license", "compatibility", "allowed-tools")
@@ -90,6 +96,16 @@ _Value = str | list[str] | dict[str, str]
 def is_skill_name(name: object) -> bool:
     """Whether ``name`` is a valid skill name."""
     return isinstance(name, str) and len(name) <= MAX_NAME_LENGTH and bool(_NAME.fullmatch(name))
+
+
+def is_skill_description(description: object) -> bool:
+    """Whether ``description`` is a valid skill description: one line, 1 to 1,024
+    characters, without control or line-separator characters."""
+    return (
+        isinstance(description, str)
+        and 0 < len(description) <= MAX_DESCRIPTION_LENGTH
+        and _CONTROL.search(description) is None
+    )
 
 
 def is_skill_version(version: object) -> bool:
@@ -251,13 +267,13 @@ def _text_field(
     if key not in values:
         return None
     value = values[key]
-    if not isinstance(value, str) or not value or len(value) > limit:
+    if not isinstance(value, str) or not value or len(value) > limit or _CONTROL.search(value):
         raise _Refusal(f"{key.replace('-', '_')}_invalid", where[key])
     return value
 
 
 def _document(text: str, expected_name: str | None) -> SkillDocument:
-    text = text.removeprefix("﻿").replace("\r\n", "\n").replace("\r", "\n")
+    text = text.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     lines = text.split("\n")
     if not lines or lines[0].rstrip() != "---":
         raise _Refusal("front_matter_missing", 1)
@@ -295,7 +311,10 @@ def _document(text: str, expected_name: str | None) -> SkillDocument:
     if "metadata" in values:
         given = values["metadata"]
         if not isinstance(given, dict) or not all(
-            _METADATA_KEY.fullmatch(k) and v and len(v) <= _MAX_METADATA_VALUE
+            _METADATA_KEY.fullmatch(k)
+            and v
+            and len(v) <= _MAX_METADATA_VALUE
+            and not _CONTROL.search(v)
             for k, v in given.items()
         ):
             raise _Refusal("metadata_invalid", where["metadata"])

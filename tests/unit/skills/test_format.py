@@ -151,6 +151,27 @@ class TestRefusals:
         error = _refused(f"---\nname: a\ndescription: {text}d\n---\nb\n")
         assert error.reason == "description_invalid"
 
+    @pytest.mark.parametrize(
+        "char", ["\t", "\x00", "\x1b", "\x7f", "\x85", "\u2028", "\u2029", "\x0b", "\x0c"]
+    )
+    def test_a_control_or_line_separator_in_a_text_field_is_refused(self, char: str) -> None:
+        for field in ("description", "license", "compatibility"):
+            extra = "" if field == "description" else "description: d\n"
+            text = f"---\nname: a\n{extra}{field}: one{char}two\n---\nb\n"
+            assert _refused(text).reason == f"{field}_invalid"
+
+    def test_a_control_character_in_a_metadata_value_is_refused(self) -> None:
+        error = _refused("---\nname: a\ndescription: d\nmetadata:\n  k: a\u2028b\n---\nb\n")
+        assert error.reason == "metadata_invalid"
+
+    def test_the_byte_order_mark_is_written_as_an_escape(self) -> None:
+        from pathlib import Path
+
+        import conduit.skills.format as module
+
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        assert "\ufeff" not in source
+
     def test_a_name_that_differs_from_its_folder_is_refused(self) -> None:
         assert _refused(VALID, expected_name="other").reason == "name_mismatch"
 
@@ -228,6 +249,11 @@ class TestResourcePaths:
             ("nul\x00.md", "path_invalid"),
             ("SKILL.md", "path_reserved"),
             (".hidden", "path_invalid"),
+            # Windows drops trailing dots, so these would alias SKILL.md and x.md.
+            ("SKILL.md.", "path_invalid"),
+            ("x.md.", "path_invalid"),
+            ("dir./x.md", "path_invalid"),
+            ("x.md..", "path_invalid"),
             ("dir/.hidden", "path_invalid"),
             ("a" * 257, "path_invalid"),
             ("/".join(["abcdefgh"] * 29), "path_invalid"),
