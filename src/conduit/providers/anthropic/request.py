@@ -13,13 +13,25 @@ last marks the conversation so far, which is what a following call reads back.
 
 Sampling parameters are never sent: API version 2026-10-21 rejects ``temperature``,
 ``top_p`` and ``top_k`` on every model, so ``ModelRequest.temperature`` is not used.
+
+Provider state: an assistant message's ``anthropic`` state blocks are the thinking and
+redacted thinking blocks of the response it came from (see
+``conduit.providers.anthropic.stream``), and each goes back unchanged in its place, as
+the API requires for tool use with thinking. The API refuses ``cache_control`` on a
+thinking block, so a breakpoint after one marks the block before it. Every other
+kind's state is left out, so a conversation can move between providers. Anthropic
+state that is not a whole thinking block is refused as ``REJECTED`` before any call,
+with nothing of the payload in the error.
 """
 
 from __future__ import annotations
 
 import base64
+import contextlib
+import json
 from typing import Any
 
+from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.types import (
     CacheBreakpoint,
     ImageBlock,
@@ -33,8 +45,39 @@ from conduit.core.types import (
 #: The Messages API's limit on ``cache_control`` blocks in one request.
 MAX_CACHE_BREAKPOINTS = 4
 _EPHEMERAL = {"type": "ephemeral"}
+#: The provider kind of this adapter's state blocks.
+KIND = "anthropic"
+#: Each thinking block type and the string fields it carries, exactly.
+THINKING_FIELDS: dict[str, frozenset[str]] = {
+    "thinking": frozenset({"type", "thinking", "signature"}),
+    "redacted_thinking": frozenset({"type", "data"}),
+}
 
 Block = dict[str, Any]
+
+
+def is_thinking_block(block: Any) -> bool:
+    """Whether ``block`` is a whole thinking or redacted thinking block, as the API sends."""
+    if not isinstance(block, dict):
+        return False
+    fields = THINKING_FIELDS.get(block.get("type"))  # type: ignore[arg-type]
+    return (
+        fields is not None
+        and set(block) == fields
+        and all(isinstance(block[name], str) for name in fields)
+    )
+
+
+def _thinking(state: ProviderStateBlock) -> Block:
+    """The thinking block an ``anthropic`` state block holds, or REJECTED."""
+    block: Any = None
+    with contextlib.suppress(ValueError):  # UnicodeDecodeError and JSONDecodeError
+        block = json.loads(state.payload.decode("utf-8"))
+    # Raised here, after the handler: the decoding error quotes the payload.
+    if not is_thinking_block(block) or block["type"] != state.state_type:
+        raise ProviderError(ProviderFailure.REJECTED)
+    result: Block = block
+    return result
 
 
 def _image(block: ImageBlock) -> Block:
@@ -119,7 +162,9 @@ def build_params(request: ModelRequest, *, structured_output: bool) -> dict[str,
         content: list[Block] = []
         for block in message.content:
             if isinstance(block, ProviderStateBlock):
-                continue  # not sent back until the adapter round-trips its own state
+                if block.provider_kind == KIND:
+                    content.append(_thinking(block))  # never a cache_control target
+                continue  # another kind's state: left out
             if isinstance(block, CacheBreakpoint):
                 marks.breakpoint()
             else:

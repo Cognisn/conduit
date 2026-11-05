@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -10,6 +11,7 @@ import pytest
 from conduit.core.catalogue import Catalogue, CatalogueOverlay, default_catalogue
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.streaming import (
+    ProviderStateReported,
     StreamEvent,
     StreamStopped,
     TextDelta,
@@ -17,7 +19,16 @@ from conduit.core.streaming import (
     ToolCallStarted,
     UsageReported,
 )
-from conduit.core.types import Message, ModelRequest, StopReason, ToolUseBlock, Usage
+from conduit.core.types import (
+    Message,
+    ModelRequest,
+    ProviderStateBlock,
+    StopReason,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    Usage,
+)
 from conduit.providers.anthropic import AnthropicProvider
 from conduit.providers.anthropic.errors import failure_for
 from conduit.providers.anthropic.stream import translate
@@ -26,9 +37,11 @@ from . import fakes
 from .fakes import (
     message_end,
     message_start,
+    redacted_block,
     scripted_client,
     text_block,
     thinking_block,
+    thinking_text_block,
     tool_block,
     usage,
 )
@@ -114,7 +127,8 @@ class TestText:
         response = await _provider(client).complete(_request())
         assert response.text == "ok"
 
-    async def test_thinking_and_unknown_blocks_are_not_streamed(self) -> None:
+    async def test_thinking_is_state_not_text_and_unknown_blocks_are_not_streamed(self) -> None:
+        # Re-pointed from Q0023's drop: thinking is now reported as provider state.
         body = [
             *thinking_block(0),
             *text_block(1, "answer"),
@@ -123,7 +137,7 @@ class TestText:
         ]
         events = await _events(_provider(scripted_client(_simple(*body))))
         kinds = {type(e) for e in events}
-        assert kinds == {UsageReported, TextDelta, StreamStopped}
+        assert kinds == {UsageReported, ProviderStateReported, TextDelta, StreamStopped}
         assert [e.text for e in events if isinstance(e, TextDelta)] == ["answer"]
 
     async def test_the_request_goes_to_the_sdk_as_mapped(self) -> None:
@@ -152,6 +166,140 @@ class TestText:
         client = scripted_client()
         await _provider(client).aclose()
         assert client.closed
+
+
+def _states(events: list[Any]) -> list[ProviderStateBlock]:
+    return [e.state for e in events if isinstance(e, ProviderStateReported)]
+
+
+class TestThinking:
+    """Thinking blocks are reported whole as Anthropic provider state, to be sent back."""
+
+    async def test_a_thinking_block_is_assembled_from_its_deltas(self) -> None:
+        body = [*thinking_text_block(0, "Weighing ", "it up."), *text_block(1, "answer")]
+        events = await _events(_provider(scripted_client(_simple(*body))))
+        (state,) = _states(events)
+        assert state.provider_kind == "anthropic"
+        assert state.state_type == "thinking"
+        assert json.loads(state.payload) == {
+            "type": "thinking",
+            "thinking": "Weighing it up.",
+            "signature": "c2lnLTAx",
+        }
+
+    async def test_the_state_is_reported_when_its_block_stops(self) -> None:
+        body = [*thinking_text_block(0, "t"), *text_block(1, "answer")]
+        events = await _events(_provider(scripted_client(_simple(*body))))
+        kinds = [type(e) for e in events]
+        assert kinds.index(ProviderStateReported) < kinds.index(TextDelta)
+
+    async def test_a_redacted_thinking_block_is_kept_whole(self) -> None:
+        body = [*redacted_block(0, "ZW5jcnlwdGVk"), *text_block(1, "answer")]
+        events = await _events(_provider(scripted_client(_simple(*body))))
+        (state,) = _states(events)
+        assert state.state_type == "redacted_thinking"
+        assert json.loads(state.payload) == {"type": "redacted_thinking", "data": "ZW5jcnlwdGVk"}
+
+    async def test_thinking_text_is_never_streamed_as_text(self) -> None:
+        body = [*thinking_text_block(0, "zz-private-reasoning-zz"), *text_block(1, "answer")]
+        events = await _events(_provider(scripted_client(_simple(*body))))
+        texts = [e.text for e in events if isinstance(e, TextDelta)]
+        assert texts == ["answer"]
+
+    async def test_complete_keeps_thinking_before_the_tool_call(self) -> None:
+        body = [
+            *thinking_text_block(0, "Look it up."),
+            *tool_block(1, "toolu_01", "lookup", '{"host": "a.example.com"}'),
+        ]
+        client = scripted_client(_simple(*body, stop_reason="tool_use"))
+        response = await _provider(client).complete(_request())
+        assert [type(b).__name__ for b in response.content] == [
+            "ProviderStateBlock",
+            "ToolUseBlock",
+        ]
+
+    async def test_a_tool_round_trip_sends_the_thinking_back_unchanged(self) -> None:
+        first = [
+            *thinking_text_block(0, "Look it up."),
+            *tool_block(1, "toolu_01", "lookup", '{"host": "a.example.com"}'),
+        ]
+        client = scripted_client(
+            _simple(*first, stop_reason="tool_use"), _simple(*text_block(0, "Done."))
+        )
+        provider = _provider(client)
+        response = await provider.complete(_request())
+        follow_up = _request().model_copy(
+            update={
+                "messages": (
+                    Message.user("hello"),
+                    Message(role="assistant", content=response.content),
+                    Message(
+                        role="user",
+                        content=(
+                            ToolResultBlock(
+                                tool_use_id="toolu_01", content=(TextBlock(text="web tier"),)
+                            ),
+                        ),
+                    ),
+                )
+            }
+        )
+        await provider.complete(follow_up)
+        sent = client.messages.calls[1]["messages"][1]["content"]
+        assert sent[0] == {"type": "thinking", "thinking": "Look it up.", "signature": "c2lnLTAx"}
+        assert sent[1]["type"] == "tool_use"
+
+    @pytest.mark.parametrize(
+        "delta",
+        [
+            {"type": "thinking_delta", "thinking": 5},
+            {"type": "signature_delta", "signature": None},
+        ],
+    )
+    async def test_a_malformed_thinking_delta_is_a_protocol_failure(
+        self, delta: dict[str, Any]
+    ) -> None:
+        events = thinking_text_block(0, "t")
+        events.insert(1, {"type": "content_block_delta", "index": 0, "delta": delta})
+        with pytest.raises(ProviderError) as caught:
+            await _events(_provider(scripted_client(_simple(*events))))
+        assert caught.value.failure is ProviderFailure.PROTOCOL
+        # The translator itself refuses it, rather than failing on the value later.
+        with pytest.raises(ProviderError) as direct:
+            await _translated(_simple(*events))
+        assert direct.value.failure is ProviderFailure.PROTOCOL
+        assert direct.value.__context__ is None
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            {"type": "thinking", "thinking": 1, "signature": ""},
+            {"type": "thinking", "thinking": "", "signature": 2},
+            {"type": "redacted_thinking", "data": None},
+        ],
+    )
+    async def test_a_malformed_thinking_start_is_a_protocol_failure(
+        self, block: dict[str, Any]
+    ) -> None:
+        events = [
+            {"type": "content_block_start", "index": 0, "content_block": block},
+            {"type": "content_block_stop", "index": 0},
+        ]
+        with pytest.raises(ProviderError) as caught:
+            await _events(_provider(scripted_client(_simple(*events))))
+        assert caught.value.failure is ProviderFailure.PROTOCOL
+        with pytest.raises(ProviderError) as direct:
+            await _translated(_simple(*events))
+        assert direct.value.failure is ProviderFailure.PROTOCOL
+        assert direct.value.__context__ is None
+
+
+async def _translated(events: list[Any]) -> list[StreamEvent]:
+    async def source() -> AsyncIterator[Any]:
+        for event in events:
+            yield event
+
+    return [event async for event in translate(source())]
 
 
 class TestToolUse:
