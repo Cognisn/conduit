@@ -34,6 +34,7 @@ Usage
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import re
 from collections.abc import Mapping
@@ -200,8 +201,12 @@ def usage_from_openai(usage: Mapping[str, Any]) -> Usage:
     """Usage from a Chat Completions ``usage`` object, cached tokens split out."""
     prompt = _count(usage.get("prompt_tokens"))
     completion = _count(usage.get("completion_tokens"))
-    details = usage.get("prompt_tokens_details") or {}
-    cached_value = details.get("cached_tokens") if isinstance(details, Mapping) else None
+    details = usage.get("prompt_tokens_details")
+    if details is None:
+        details = {}
+    elif not isinstance(details, Mapping):
+        raise _protocol()
+    cached_value = details.get("cached_tokens")
     cached = 0 if cached_value is None else _count(cached_value)
     if cached > prompt:
         raise _protocol()
@@ -216,6 +221,21 @@ def usage_from_openai(usage: Mapping[str, Any]) -> Usage:
 # Stream ---------------------------------------------------------------------------
 
 
+def _sequence(value: Any) -> list[Any]:
+    """A list from a chunk; ``None`` is empty, anything but a list is a protocol error."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise _protocol()
+    return value
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is not None and not isinstance(value, str):
+        raise _protocol()
+    return value
+
+
 @dataclass
 class _ToolCall:
     id: str
@@ -224,10 +244,11 @@ class _ToolCall:
 
     def finished(self) -> ToolCallFinished:
         text = "".join(self.arguments).strip()
-        try:
+        value: Any = None
+        # Suppressed, then refused below, so the decoder's error (which holds the
+        # provider's text) is never chained to the protocol error.
+        with contextlib.suppress(json.JSONDecodeError):
             value = json.loads(text) if text else {}
-        except json.JSONDecodeError:
-            raise _protocol() from None
         if not isinstance(value, dict):
             raise _protocol()
         return ToolCallFinished(id=self.id, name=self.name, input=value)
@@ -243,33 +264,50 @@ class StreamMapper:
         self._refused = False
 
     def feed(self, chunk: Mapping[str, Any]) -> list[StreamEvent]:
+        """The events one chunk carries. Any value of the wrong shape is a protocol error."""
+        if not isinstance(chunk, Mapping):
+            raise _protocol()
         events: list[StreamEvent] = []
         usage = chunk.get("usage")
-        if usage:
+        if usage is not None:
+            if not isinstance(usage, Mapping):
+                raise _protocol()
             self._usage = usage_from_openai(usage)  # the last report wins; never summed
-        for choice in chunk.get("choices") or ():
+        for choice in _sequence(chunk.get("choices")):
+            if not isinstance(choice, Mapping):
+                raise _protocol()
             if choice.get("index", 0) != 0:
                 continue
-            delta = choice.get("delta") or {}
-            content = delta.get("content")
+            delta = choice.get("delta")
+            if delta is None:
+                delta = {}
+            elif not isinstance(delta, Mapping):
+                raise _protocol()
+            content = _optional_text(delta.get("content"))
             if content:
                 events.append(TextDelta(text=content))
-            refusal = delta.get("refusal")
+            refusal = _optional_text(delta.get("refusal"))
             if refusal:
                 self._refused = True
                 events.append(TextDelta(text=refusal))
-            for call in delta.get("tool_calls") or ():
+            for call in _sequence(delta.get("tool_calls")):
                 events.extend(self._tool_delta(call))
-            finish = choice.get("finish_reason")
+            finish = _optional_text(choice.get("finish_reason"))
             if finish:
                 self._finish = finish
         return events
 
-    def _tool_delta(self, call: Mapping[str, Any]) -> list[StreamEvent]:
+    def _tool_delta(self, call: Any) -> list[StreamEvent]:
+        if not isinstance(call, Mapping):
+            raise _protocol()
         index = call.get("index")
         if not isinstance(index, int) or isinstance(index, bool):
             raise _protocol()
-        function = call.get("function") or {}
+        function = call.get("function")
+        if function is None:
+            function = {}
+        elif not isinstance(function, Mapping):
+            raise _protocol()
         call_id = call.get("id")
         events: list[StreamEvent] = []
         state = self._calls.get(index)

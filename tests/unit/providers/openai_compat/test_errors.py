@@ -68,6 +68,12 @@ def test_a_status_code_that_is_not_an_int_is_ignored() -> None:
     assert classify(error) is ProviderFailure.UNAVAILABLE
 
 
+@pytest.mark.parametrize("code", [["content_filter"], {"a": 1}, 7, None])
+def test_a_code_that_is_not_a_string_is_ignored(code: object) -> None:
+    error = _error("BadRequestError", APIStatusError, status_code=400, code=code)
+    assert classify(error) is ProviderFailure.REJECTED
+
+
 def test_classes_from_the_sdk() -> None:
     openai = pytest.importorskip("openai")
     httpx = pytest.importorskip("httpx2", reason="the openai SDK's HTTP client")

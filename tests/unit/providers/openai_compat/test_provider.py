@@ -255,7 +255,7 @@ class TestErrors:
         assert caught.value.failure is ProviderFailure.UNAVAILABLE
         assert self.TEXT not in str(caught.value)
         assert caught.value.__cause__ is None
-        assert caught.value.__suppress_context__
+        assert caught.value.__context__ is None
 
     async def test_an_error_mid_stream_is_a_provider_error_and_the_stream_is_closed(
         self,
@@ -270,6 +270,7 @@ class TestErrors:
         assert caught.value.failure is ProviderFailure.TIMEOUT
         assert self.TEXT not in str(caught.value)
         assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
         assert client.streams[0].closed
 
     async def test_a_stream_left_early_is_closed(self) -> None:

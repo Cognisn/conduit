@@ -124,6 +124,9 @@ class TestUsage:
                 "completion_tokens": 1,
                 "prompt_tokens_details": {"cached_tokens": -1},
             },
+            {"prompt_tokens": 10, "completion_tokens": 1, "prompt_tokens_details": "cached"},
+            {"prompt_tokens": 10, "completion_tokens": 1, "prompt_tokens_details": [5]},
+            {"prompt_tokens": 10, "completion_tokens": 1, "prompt_tokens_details": 5},
         ],
     )
     def test_impossible_usage_is_a_protocol_error(self, body: dict[str, Any]) -> None:

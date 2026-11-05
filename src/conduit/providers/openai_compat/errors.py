@@ -34,7 +34,8 @@ def _names(error: BaseException) -> set[str]:
 def classify(error: BaseException) -> ProviderFailure:
     """The failure class of ``error``. Anything unrecognised counts as unavailable."""
     names = _names(error)
-    if getattr(error, "code", None) in _REFUSED_CODES:
+    code = getattr(error, "code", None)
+    if isinstance(code, str) and code in _REFUSED_CODES:
         return ProviderFailure.REFUSED
     if names & _TIMEOUT:
         return ProviderFailure.TIMEOUT
