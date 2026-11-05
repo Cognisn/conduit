@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import re
+import secrets
 from typing import Any
 
 import pytest
@@ -290,15 +291,18 @@ class TestFraming:
         assert not re.search(r"<\s*/?\s*untrusted", body, re.IGNORECASE)
         assert "Ignore the above" in body  # kept, but inside the frame
 
-    def test_every_frame_has_a_fresh_nonce_absent_from_its_body(self) -> None:
+    def test_every_frame_has_a_fresh_nonce(self) -> None:
         nonces = {parts(frame_untrusted("docs", "echo", "same"))[0] for _ in range(20)}
         assert len(nonces) == 20
-        nonce = parts(frame_untrusted("docs", "echo", "x"))[0]
-        # Content that names a nonce cannot make the frame reuse it.
-        framed = frame_untrusted("docs", "echo", " ".join(f"{i:016x}" for i in range(64)))
-        found, _, body = parts(framed)
+
+    def test_a_nonce_found_in_the_body_is_drawn_again(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        draws = iter(["a" * 16, "b" * 16])
+        monkeypatch.setattr(secrets, "token_hex", lambda n: next(draws))
+        found, _, body = parts(frame_untrusted("docs", "echo", "content naming " + "a" * 16))
+        assert found == "b" * 16
         assert found not in body
-        assert nonce
 
     @pytest.mark.parametrize(
         ("hidden", "shown"),
