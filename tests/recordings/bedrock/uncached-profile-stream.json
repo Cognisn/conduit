@@ -1,0 +1,139 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "operation": "ConverseStream",
+        "params": {
+          "inferenceConfig": {
+            "maxTokens": 1024
+          },
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "Incident notes: host-a.example.com stopped answering on 192.0.2.10 at 09:00."
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "modelId": "eu.anthropic.claude-sonnet-4-6",
+          "system": [
+            {
+              "text": "You summarise incident notes for the operations team at example.com."
+            }
+          ],
+          "toolConfig": {
+            "tools": [
+              {
+                "toolSpec": {
+                  "description": "Look a host up in the inventory.",
+                  "inputSchema": {
+                    "json": {
+                      "properties": {
+                        "host": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "host"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "name": "lookup_host"
+                }
+              }
+            ]
+          }
+        },
+        "region": "eu-west-2"
+      },
+      "response": [
+        {
+          "messageStart": {
+            "role": "assistant"
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 0,
+            "delta": {
+              "text": "Checking "
+            }
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 0,
+            "delta": {
+              "text": "the inventory."
+            }
+          }
+        },
+        {
+          "contentBlockStop": {
+            "contentBlockIndex": 0
+          }
+        },
+        {
+          "contentBlockStart": {
+            "contentBlockIndex": 1,
+            "start": {
+              "toolUse": {
+                "name": "lookup_host",
+                "toolUseId": "tooluse_example0001"
+              }
+            }
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 1,
+            "delta": {
+              "toolUse": {
+                "input": "{\"host\": \"host-a"
+              }
+            }
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 1,
+            "delta": {
+              "toolUse": {
+                "input": ".example.com\"}"
+              }
+            }
+          }
+        },
+        {
+          "contentBlockStop": {
+            "contentBlockIndex": 1
+          }
+        },
+        {
+          "messageStop": {
+            "stopReason": "tool_use"
+          }
+        },
+        {
+          "metadata": {
+            "metrics": {
+              "latencyMs": 812
+            },
+            "usage": {
+              "cacheReadInputTokens": 0,
+              "cacheWriteInputTokens": 0,
+              "inputTokens": 52,
+              "outputTokens": 31,
+              "totalTokens": 83
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "name": "uncached-profile-stream",
+  "provider": "bedrock"
+}
