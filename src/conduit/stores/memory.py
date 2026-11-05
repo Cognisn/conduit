@@ -27,12 +27,19 @@ class MemoryTranscriptStore:
         self, session_id: str, entries: Sequence[TranscriptEntry]
     ) -> tuple[TranscriptEntry, ...]:
         async with self._lock:
-            held = self._sessions.setdefault(session_id, [])
+            held = self._sessions.get(session_id, [])
+            texts: list[str] = []
             stored: list[TranscriptEntry] = []
             for entry in entries:
-                numbered = entry.model_copy(update={"seq": len(held) + 1})
-                held.append(_ENTRY.dump_json(numbered).decode("utf-8"))
-                stored.append(_ENTRY.validate_json(held[-1]))
+                numbered = entry.model_copy(update={"seq": len(held) + len(texts) + 1})
+                texts.append(_ENTRY.dump_json(numbered).decode("utf-8"))
+                stored.append(_ENTRY.validate_json(texts[-1]))
+            # The session must still load once the batch is in: refuse it whole otherwise
+            # (a compaction point that replaces later entries, for example). The held
+            # entries already load and the batch numbers on from them, so checking the
+            # batch is enough.
+            Transcript(session_id=session_id, entries=tuple(stored))
+            self._sessions[session_id] = [*held, *texts]
             return tuple(stored)
 
     async def load(self, session_id: str) -> Transcript:

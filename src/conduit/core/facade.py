@@ -1,15 +1,33 @@
 """The sync facade: conduit's async API, callable from synchronous code (C3).
 
 A ``LoopThread`` owns an event loop on a daemon thread. ``LoopThread.run`` submits a
-coroutine to it and waits, with a timeout; on timeout the call is cancelled. Calling
+coroutine to it and waits, with a timeout applied on the loop: on timeout the call is
+cancelled, and has unwound, before ``TimeoutError`` reaches the caller. Calling
 ``run`` from the loop's own thread would wait on itself forever, so it is refused with
-``FacadeError`` (the guard SPARK's database bridge uses).
+``FacadeError`` (the guard SPARK's database bridge uses), as is ``close``.
+``LoopThread.close`` cancels every pending call (a caller still waiting gets
+``FacadeError``) and finalises suspended async generators before the loop stops.
 
 ``sync(obj)`` wraps any object with an async API: each coroutine method becomes a
 blocking call and each async-generator method (``stream``, for example) becomes a
 plain iterator, both running on the loop thread. Everything else passes through. The
 facade is generated from the object at call time, so every async interface conduit
 has, now or later, gets a sync form without a hand-written twin.
+
+What a facade method returns comes back as it is, never wrapped: a ``TaskBinding``
+from ``Runtime.for_task`` is a plain object whose ``provider`` is async. A sync caller
+wraps each async object it is handed, on the same loop::
+
+    loop = default_loop()
+    runtime = sync(loop.run(start(settings, task_classes=..., factories=..., secrets=...)))
+    binding = runtime.for_task("triage")  # returned as is
+    provider = sync(binding.provider, loop=loop)
+    response = provider.complete(binding.request(messages=[Message.user("...")]))
+    runtime.aclose()
+
+``start`` must run on the loop the facade uses (``loop.run(start(...))``, never
+``asyncio.run``): providers make their SDK clients, connection pools and locks on the
+loop that builds them, and must be called on that loop.
 """
 
 from __future__ import annotations
@@ -19,12 +37,14 @@ import atexit
 import concurrent.futures
 import inspect
 import threading
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator
 from typing import Any
 
 from conduit.core.errors import FacadeError
 
 DEFAULT_TIMEOUT_S: float = 300.0
+#: How long a timed-out call may take to unwind before its caller is released anyway.
+UNWIND_GRACE_S: float = 10.0
 
 
 class LoopThread:
@@ -37,26 +57,33 @@ class LoopThread:
         self._thread: threading.Thread | None = None
         self._thread_id: int | None = None
         self._closed = False
+        # Every call submitted and not yet finished. Registered under the lock, with the
+        # closed check, so close() fails whatever its shutdown did not reach.
+        self._pending: set[concurrent.futures.Future[Any]] = set()
 
-    def _ensure(self) -> asyncio.AbstractEventLoop:
+    def _ensure_locked(self) -> asyncio.AbstractEventLoop:
+        """The loop, started on first use. The caller holds ``_lock``."""
+        if self._closed:
+            raise FacadeError("the conduit loop is closed")
+        if self._loop is None:
+            loop = asyncio.new_event_loop()
+            ready = threading.Event()
+
+            def serve() -> None:
+                self._thread_id = threading.get_ident()
+                asyncio.set_event_loop(loop)
+                ready.set()
+                loop.run_forever()
+
+            thread = threading.Thread(target=serve, name=self._name, daemon=True)
+            thread.start()
+            ready.wait()
+            self._loop, self._thread = loop, thread
+        return self._loop
+
+    def _forget(self, future: concurrent.futures.Future[Any]) -> None:
         with self._lock:
-            if self._closed:
-                raise FacadeError("the conduit loop is closed")
-            if self._loop is None:
-                loop = asyncio.new_event_loop()
-                ready = threading.Event()
-
-                def serve() -> None:
-                    self._thread_id = threading.get_ident()
-                    asyncio.set_event_loop(loop)
-                    ready.set()
-                    loop.run_forever()
-
-                thread = threading.Thread(target=serve, name=self._name, daemon=True)
-                thread.start()
-                ready.wait()
-                self._loop, self._thread = loop, thread
-            return self._loop
+            self._pending.discard(future)
 
     @property
     def thread_id(self) -> int | None:
@@ -66,51 +93,106 @@ class LoopThread:
         return self._thread_id is not None and threading.get_ident() == self._thread_id
 
     def run[T](self, awaitable: Awaitable[T], *, timeout: float | None = DEFAULT_TIMEOUT_S) -> T:
-        """Run ``awaitable`` on the loop and wait for it. Refused on the loop's own thread."""
+        """Run ``awaitable`` on the loop and wait for it. Refused on the loop's own thread.
+
+        The timeout is applied on the loop: on expiry the call is cancelled and has
+        finished unwinding (its ``finally`` blocks have run) before ``TimeoutError``
+        reaches the caller. Should the unwinding itself hang for longer than
+        ``UNWIND_GRACE_S``, the caller is released with ``TimeoutError`` regardless.
+        A call still waiting when the loop is closed raises ``FacadeError``.
+        """
         if self.on_loop_thread():
             _discard(awaitable)
             raise FacadeError(
                 "the sync facade was called on conduit's own loop thread, which would "
                 "deadlock; await the async API there instead"
             )
+        with self._lock:
+            try:
+                loop = self._ensure_locked()
+            except FacadeError:
+                _discard(awaitable)
+                raise
+            future = asyncio.run_coroutine_threadsafe(_within(awaitable, timeout), loop)
+            self._pending.add(future)
+        future.add_done_callback(self._forget)
+        # Wait with exception(), then read the result: it raises TimeoutError only when the
+        # wait expires, never for a TimeoutError the call raised itself, and it wakes when
+        # close() cancels the future (concurrent.futures.wait would not).
         try:
-            loop = self._ensure()
-        except FacadeError:
-            _discard(awaitable)
+            future.exception(None if timeout is None else timeout + UNWIND_GRACE_S)
+            return future.result()
+        except concurrent.futures.CancelledError:
+            if self._closed:
+                raise FacadeError("the conduit loop was closed while the call waited") from None
             raise
-        future = asyncio.run_coroutine_threadsafe(_as_coroutine(awaitable), loop)
-        try:
-            return future.result(timeout)
-        except concurrent.futures.TimeoutError:
-            future.cancel()
-            raise TimeoutError(f"conduit call did not finish within {timeout} s") from None
+        except TimeoutError:
+            if future.done():
+                raise  # the call's own TimeoutError, from result()
+            # Cancelled on the loop at its deadline, but still unwinding after the grace
+            # period. It is not cancelled again, which would cut its cleanup short.
+            raise _Stranded(f"conduit call did not finish within {timeout} s") from None
 
     def iterate[T](
         self, iterator: AsyncIterator[T], *, timeout: float | None = DEFAULT_TIMEOUT_S
-    ) -> Iterator[T]:
-        """A blocking iterator over ``iterator``; each step has the timeout."""
+    ) -> Generator[T, None, None]:
+        """A blocking iterator over ``iterator``; each step has the timeout.
+
+        A step that times out has been cancelled and unwound on the loop (closing the
+        generator) before ``TimeoutError`` is raised. An iterator abandoned part-way
+        closes its generator.
+        """
+        stranded = False
         try:
             while True:
                 try:
-                    yield self.run(iterator.__anext__(), timeout=timeout)
+                    yield self.run(_next(iterator), timeout=timeout)
                 except StopAsyncIteration:
                     return
+                except _Stranded:
+                    stranded = True
+                    raise
         finally:
             closer = getattr(iterator, "aclose", None)
-            if closer is not None and not self._closed:
+            # A stranded step is still running on the loop; closing it there now would
+            # fail, and its own cancellation closes the generator.
+            if closer is not None and not stranded and not self._closed:
                 self.run(closer(), timeout=timeout)
 
     def close(self, *, join_timeout: float | None = 5) -> None:
+        """Cancel every pending call, finalise suspended async generators, then stop.
+
+        A caller waiting on a cancelled call gets ``FacadeError``, as does one whose call
+        ignored cancellation past ``join_timeout``. Refused on the loop's own thread,
+        where it would wait on itself.
+        """
+        if self.on_loop_thread():
+            raise FacadeError(
+                "the conduit loop cannot be closed from its own thread; close it from "
+                "another thread"
+            )
         with self._lock:
             if self._closed:
                 return
             self._closed = True
             loop, thread = self._loop, self._thread
-        if loop is not None and thread is not None:
-            loop.call_soon_threadsafe(loop.stop)
-            thread.join(join_timeout)
-            if not thread.is_alive():
-                loop.close()
+        if loop is None or thread is None:
+            return
+        shutdown = asyncio.run_coroutine_threadsafe(_shutdown(loop), loop)
+        try:
+            shutdown.result(join_timeout)
+        except (concurrent.futures.TimeoutError, concurrent.futures.CancelledError):
+            shutdown.cancel()
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(join_timeout)
+        # Fail every call the shutdown did not finish (one that ignored cancellation, or
+        # one submitted as close began), so no caller is left waiting on a stopped loop.
+        with self._lock:
+            stranded = list(self._pending)
+        for future in stranded:
+            future.cancel()
+        if not thread.is_alive():
+            loop.close()
 
     def __enter__(self) -> LoopThread:
         return self
@@ -119,8 +201,34 @@ class LoopThread:
         self.close()
 
 
-async def _as_coroutine[T](awaitable: Awaitable[T]) -> T:
-    return await awaitable
+class _Stranded(TimeoutError):
+    """A timed-out call that had not finished unwinding when the caller was released."""
+
+
+async def _within[T](awaitable: Awaitable[T], timeout: float | None) -> T:
+    """``awaitable`` under ``timeout``, on the loop: on expiry it is cancelled and has
+    unwound before ``TimeoutError`` is raised."""
+    deadline = asyncio.timeout(timeout)
+    try:
+        async with deadline:
+            return await awaitable
+    except TimeoutError:
+        if deadline.expired():
+            raise TimeoutError(f"conduit call did not finish within {timeout} s") from None
+        raise
+
+
+async def _next[T](iterator: AsyncIterator[T]) -> T:
+    return await anext(iterator)
+
+
+async def _shutdown(loop: asyncio.AbstractEventLoop) -> None:
+    current = asyncio.current_task()
+    pending = [task for task in asyncio.all_tasks(loop) if task is not current]
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    await loop.shutdown_asyncgens()
 
 
 def _discard(awaitable: Awaitable[Any]) -> None:
