@@ -56,6 +56,21 @@ class ResidencyRefused(AssignmentRefused):
     """The assignment would breach the deployment's residency policy."""
 
 
+class ModelNotAssigned(ConduitError, LookupError):
+    """A call named a model, or a task class, outside the provider's resolved assignments.
+
+    Raised before any client call. The message names the provider, model and task
+    class, which are configuration, never content.
+    """
+
+    def __init__(self, provider: str, model: str, task_class: str | None) -> None:
+        where = f" to task class {task_class!r}" if task_class is not None else ""
+        super().__init__(f"model {model!r} is not assigned{where} on provider {provider!r}")
+        self.provider = provider
+        self.model = model
+        self.task_class = task_class
+
+
 class UnknownTaskClass(ConduitError, LookupError):
     """A task class was asked for that the product did not declare or assign."""
 

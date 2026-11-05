@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from typing import Literal
 
 import pytest
 from pydantic import ValidationError
@@ -13,12 +14,15 @@ from conduit.core.events import (
     CapturedContent,
     CapturePolicy,
     ContentKind,
+    Event,
     EventSink,
     FanOutSink,
     MemoryEventSink,
     ModelCallFinishedEvent,
     ModelCallStartedEvent,
     ToolCallEvent,
+    ToolContent,
+    enforce_capture,
 )
 from conduit.core.types import StopReason, Usage
 
@@ -188,3 +192,62 @@ class TestEnforcement:
     def test_captured_content_hash_must_be_hex(self) -> None:
         with pytest.raises(ValidationError):
             CapturedContent(kind=ContentKind.PROMPT, sha256="not hex", size=0)
+
+
+class TestToolFields:
+    """A tool field is tool content, whatever kind its emitter labelled it."""
+
+    async def test_tool_content_labelled_as_prompt_is_held_to_the_tool_policy(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        sink = MemoryEventSink()
+        bus = FanOutSink([sink], policy=CapturePolicy(prompts=True))
+        mislabelled = CapturePolicy(prompts=True).capture(ContentKind.PROMPT, "tool output")
+        event = ToolCallEvent(
+            call_id="toolu_1",
+            tool="lookup",
+            outcome="ok",
+            arguments=mislabelled,
+            result=mislabelled,
+            duration_ms=1.0,
+        )
+        with caplog.at_level(logging.WARNING, logger="conduit"):
+            await bus.emit(event)
+        delivered = sink.events[0]
+        assert isinstance(delivered, ToolCallEvent)
+        assert delivered.arguments.kind is ContentKind.TOOL
+        assert delivered.arguments.text is None
+        assert delivered.result is not None and delivered.result.kind is ContentKind.TOOL
+        assert delivered.result.text is None
+        assert delivered.arguments.sha256 == mislabelled.sha256
+        assert "tool output" not in delivered.model_dump_json()
+        assert "removed" in caplog.text
+
+    async def test_tool_content_is_kept_when_tool_content_is_captured(self) -> None:
+        sink = MemoryEventSink()
+        bus = FanOutSink([sink], policy=CapturePolicy(tool_content=True))
+        mislabelled = CapturePolicy(prompts=True).capture(ContentKind.PROMPT, "tool output")
+        await bus.emit(
+            ToolCallEvent(
+                call_id="toolu_1",
+                tool="lookup",
+                outcome="ok",
+                arguments=mislabelled,
+                duration_ms=1.0,
+            )
+        )
+        delivered = sink.events[0]
+        assert isinstance(delivered, ToolCallEvent)
+        assert delivered.arguments.kind is ContentKind.TOOL
+        assert delivered.arguments.text == "tool output"
+
+    def test_an_upper_layer_event_can_mark_its_own_tool_fields(self) -> None:
+        class SkillToolEvent(Event):
+            type: Literal["skill_tool_test"] = "skill_tool_test"
+            payload: ToolContent
+
+        prompts_only = CapturePolicy(prompts=True)
+        event = SkillToolEvent(payload=prompts_only.capture(ContentKind.PROMPT, "tool output"))
+        enforced = enforce_capture(event, prompts_only)
+        assert isinstance(enforced, SkillToolEvent)
+        assert enforced.payload.kind is ContentKind.TOOL and enforced.payload.text is None
