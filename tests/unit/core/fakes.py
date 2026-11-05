@@ -38,8 +38,10 @@ class FakeProvider(BaseProvider):
         self.settings = settings
         self.client = client
         self.closed = False
+        self.requests: list[ModelRequest] = []
 
     async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
+        self.requests.append(request)
         if self.settings.behaviour == "fail":
             raise ProviderError(ProviderFailure.UNAVAILABLE)
         yield UsageReported(usage=Usage.zero())

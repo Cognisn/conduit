@@ -12,6 +12,10 @@ The scan reads source, never imports it, and resolves the import forms adapters 
 ``importlib.import_module("x")`` (called directly or assigned to a name).
 Session-based Bedrock clients (``session.client("bedrock-runtime")``) are caught by
 their service name.
+
+The scan also records every construction of ``MeteredProvider``: only the registry may
+wrap a provider, since the registry is where a provider is bound to its resolved
+assignments or to the residency policy.
 """
 
 from __future__ import annotations
@@ -65,6 +69,8 @@ HTTP_CLIENTS: frozenset[str] = frozenset({"httpx.Client", "httpx.AsyncClient"})
 CLIENT_LAYERS: tuple[str, ...] = ("conduit.providers", "conduit.embeddings")
 FACTORY_METHOD = "create_client"
 REGISTRY = "conduit.core.registry"
+METERED = "MeteredProvider"
+METERED_QUALIFIED = f"{REGISTRY}.{METERED}"
 BEDROCK_SERVICE_PREFIX = "bedrock"
 
 
@@ -141,6 +147,7 @@ class _Visitor(ast.NodeVisitor):
         self.functions: list[str] = []
         self.constructions: list[Finding] = []
         self.factory_calls: list[Finding] = []
+        self.metered: list[Finding] = []
 
     def _function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         self.functions.append(node.name)
@@ -178,6 +185,11 @@ class _Visitor(ast.NodeVisitor):
             if isinstance(node.func, ast.Name)
             else None
         )
+        bare = isinstance(node.func, ast.Name) and node.func.id == METERED and target is None
+        if target == METERED_QUALIFIED or bare:
+            self.metered.append(
+                Finding(self.module, self.path, node.lineno, f"constructs {METERED}")
+            )
         if called == FACTORY_METHOD:
             self.factory_calls.append(
                 Finding(self.module, self.path, node.lineno, f"calls {FACTORY_METHOD}")
@@ -189,23 +201,26 @@ class _Visitor(ast.NodeVisitor):
 class Scan:
     constructions: list[Finding]  # constructions outside an allowed create_client
     factory_calls: list[Finding]  # every call of create_client
+    metered: list[Finding]  # every construction of MeteredProvider
 
 
 def scan_source(source: str, module: str, *, path: Path) -> Scan:
     tree = ast.parse(source, filename=str(path))
     visitor = _Visitor(module, path, _aliases(tree))
     visitor.visit(tree)
-    return Scan(visitor.constructions, visitor.factory_calls)
+    return Scan(visitor.constructions, visitor.factory_calls, visitor.metered)
 
 
 def scan_tree(src_root: Path = SRC_ROOT) -> Scan:
     constructions: list[Finding] = []
     factory_calls: list[Finding] = []
+    metered: list[Finding] = []
     for path in source_files(src_root):
         scan = scan_source(path.read_text(encoding="utf-8"), module_name(path, src_root), path=path)
         constructions += scan.constructions
         factory_calls += scan.factory_calls
-    return Scan(constructions, factory_calls)
+        metered += scan.metered
+    return Scan(constructions, factory_calls, metered)
 
 
 def construction_violations(scan: Scan) -> list[Finding]:
@@ -214,3 +229,7 @@ def construction_violations(scan: Scan) -> list[Finding]:
 
 def factory_call_violations(calls: Iterable[Finding]) -> list[Finding]:
     return [c for c in calls if not within(c.module, REGISTRY)]
+
+
+def metered_violations(constructions: Iterable[Finding]) -> list[Finding]:
+    return [c for c in constructions if not within(c.module, REGISTRY)]

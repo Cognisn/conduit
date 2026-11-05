@@ -11,6 +11,7 @@ from tests.tripwires.clientscan import (
     CLIENT_CONSTRUCTORS,
     construction_violations,
     factory_call_violations,
+    metered_violations,
     scan_source,
 )
 
@@ -20,6 +21,11 @@ PATH = Path("synthetic.py")
 def _constructions(source: str, module: str) -> list[str]:
     scan = scan_source(textwrap.dedent(source), module, path=PATH)
     return [str(f) for f in construction_violations(scan)]
+
+
+def _metered(source: str, module: str) -> list[str]:
+    scan = scan_source(textwrap.dedent(source), module, path=PATH)
+    return [str(f) for f in metered_violations(scan.metered)]
 
 
 def _factory_calls(source: str, module: str) -> list[str]:
@@ -153,3 +159,21 @@ def test_create_client_may_be_called_only_by_the_registry() -> None:
     assert _factory_calls(source, "conduit.core.registry") == []
     assert len(_factory_calls(source, "conduit.agent.runner")) == 1
     assert len(_factory_calls(source, "conduit.providers.bedrock")) == 1
+
+
+def test_a_metered_provider_may_be_made_only_by_the_registry() -> None:
+    source = """
+    from conduit.core.registry import MeteredProvider as Metered
+
+    def wrap(inner, settings, catalogue, events):
+        return Metered(inner, name="p", settings=settings, catalogue=catalogue, events=events)
+    """
+    assert _metered(source, "conduit.core.registry") == []
+    found = _metered(source, "conduit.agent.runner")
+    assert len(found) == 1 and "MeteredProvider" in found[0]
+    plain = """
+    import conduit.core.registry as registry
+    def wrap(inner):
+        return registry.MeteredProvider(inner)
+    """
+    assert len(_metered(plain, "conduit.core.runtime")) == 1

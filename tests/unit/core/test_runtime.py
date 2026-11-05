@@ -9,10 +9,11 @@ from pydantic import ValidationError
 
 from conduit.core.errors import CapabilityRefused, ConfigurationError, UndeclaredModel
 from conduit.core.events import MemoryEventSink, ModelCallFinishedEvent
+from conduit.core.registry import ModelNotAssigned
 from conduit.core.runtime import ConduitSettings, start
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.core.tasks import CapabilityFloor, TaskClass
-from conduit.core.types import Message
+from conduit.core.types import Message, ModelRequest
 from tests.unit.core.fakes import CATALOGUE, FakeFactory
 
 SECRETS = LiteralSecretResolver({"fake/key": "not-a-real-key"})
@@ -131,3 +132,64 @@ async def test_a_binding_builds_requests_for_its_task_class() -> None:
 def test_provider_names_are_identifiers() -> None:
     with pytest.raises(ValidationError):
         _settings(providers={"has space": {"kind": "fake", "api_key": "secret://fake/key"}})
+
+
+async def test_a_runtime_provider_calls_only_its_resolved_models() -> None:
+    sink = MemoryEventSink()
+    factory = FakeFactory()
+    settings = _settings(
+        assignments={"chat": {"provider": "primary", "model": "fake-large"}},
+        require_all_assignments=False,
+    )
+    runtime = await start(
+        settings,
+        task_classes=[CHAT, SUMMARY],
+        factories=[factory],
+        secrets=SECRETS,
+        events=sink,
+        catalogue=CATALOGUE,
+    )
+    assert runtime.providers["primary"].assigned_models == frozenset({"fake-large"})
+    stray = ModelRequest(
+        model="fake-small", messages=(Message.user("hello"),), max_output_tokens=100
+    )
+    with pytest.raises(ModelNotAssigned):
+        await runtime.providers["primary"].complete(stray)
+    with pytest.raises(ModelNotAssigned):
+        await runtime.for_task("chat").provider.complete(stray)
+    assert sink.events == []
+    assert factory.providers[0].requests == []
+    await runtime.aclose()
+
+
+async def test_a_binding_cannot_borrow_another_task_classes_model() -> None:
+    sink = MemoryEventSink()
+    runtime = await start(
+        _settings(),
+        task_classes=[CHAT, SUMMARY],
+        factories=[FakeFactory()],
+        secrets=SECRETS,
+        events=sink,
+        catalogue=CATALOGUE,
+    )
+    summary = runtime.for_task("summary")
+    borrowed = summary.request(messages=(Message.user("hello"),)).model_copy(
+        update={"task_class": "chat"}
+    )
+    with pytest.raises(ModelNotAssigned):
+        await summary.provider.complete(borrowed)
+    assert sink.events == []
+    await runtime.aclose()
+
+
+async def test_the_runtime_registry_holds_the_settings_residency_policy() -> None:
+    settings = _settings(residency={"scopes": ["local"]})
+    runtime = await start(
+        settings,
+        task_classes=[CHAT, SUMMARY],
+        factories=[FakeFactory()],
+        secrets=SECRETS,
+        catalogue=CATALOGUE,
+    )
+    assert runtime.registry.residency == settings.residency
+    await runtime.aclose()

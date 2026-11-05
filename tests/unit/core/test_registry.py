@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import pytest
 
+from conduit.core.catalogue import Catalogue, ModelEntry
 from conduit.core.errors import (
     ConfigurationError,
     ProviderError,
     ProviderFailure,
+    ResidencyRefused,
     SecretUnavailable,
     UndeclaredModel,
 )
@@ -17,7 +19,8 @@ from conduit.core.events import (
     ModelCallFinishedEvent,
     ModelCallStartedEvent,
 )
-from conduit.core.registry import ProviderRegistry
+from conduit.core.registry import ModelNotAssigned, ProviderRegistry
+from conduit.core.residency import ResidencyPolicy, ResidencyScope
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.core.streaming import StreamStopped
 from conduit.core.types import Message, ModelRequest
@@ -38,14 +41,17 @@ def _registry(
     return registry, factory
 
 
-def _request(model: str = "fake-large") -> ModelRequest:
+def _request(model: str = "fake-large", task_class: str | None = "chat") -> ModelRequest:
     return ModelRequest(
         model=model,
         messages=(Message.user(PROMPT),),
         max_output_tokens=100,
         run_id="run_1",
-        task_class="chat",
+        task_class=task_class,
     )
+
+
+FAKE = {"kind": "fake", "api_key": "secret://fake/key"}
 
 
 class TestRegistration:
@@ -177,3 +183,107 @@ class TestMetering:
         finished = sink.events[-1]
         assert isinstance(finished, ModelCallFinishedEvent)
         assert finished.failure is ProviderFailure.PROTOCOL
+
+
+class TestAssignmentScope:
+    """A provider built for resolved assignments calls only the models resolved for it."""
+
+    async def test_the_resolved_models_are_exposed(self) -> None:
+        registry, _ = _registry()
+        provider = await registry.build(
+            "primary", FAKE, assigned={"chat": "fake-large", "summary": "fake-small"}
+        )
+        assert provider.assigned_models == frozenset({"fake-large", "fake-small"})
+        unbound = await registry.build("spare", FAKE)
+        assert unbound.assigned_models is None
+
+    async def test_another_declared_model_is_refused_before_the_adapter_is_called(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build("primary", FAKE, assigned={"chat": "fake-large"})
+        for task_class in ("chat", None):
+            with pytest.raises(ModelNotAssigned):
+                await provider.complete(_request("fake-small", task_class))
+        assert sink.events == []
+        assert factory.providers[0].requests == []
+
+    async def test_a_task_class_is_held_to_its_own_model(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build(
+            "primary", FAKE, assigned={"chat": "fake-large", "summary": "fake-small"}
+        )
+        with pytest.raises(ModelNotAssigned):
+            await provider.complete(_request("fake-small", "chat"))
+        with pytest.raises(ModelNotAssigned):
+            await provider.complete(_request("fake-large", "elsewhere"))
+        assert sink.events == []
+        assert factory.providers[0].requests == []
+
+    async def test_calls_within_the_assignment_are_served(self) -> None:
+        sink = MemoryEventSink()
+        registry, _ = _registry(sink)
+        provider = await registry.build(
+            "primary", FAKE, assigned={"chat": "fake-large", "summary": "fake-small"}
+        )
+        await provider.complete(_request("fake-large", "chat"))
+        await provider.complete(_request("fake-small", "summary"))
+        await provider.complete(_request("fake-small", None))
+        assert [e.type for e in sink.events].count("model_call_finished") == 3
+
+    async def test_an_empty_assignment_is_refused_when_built(self) -> None:
+        registry, factory = _registry()
+        with pytest.raises(ConfigurationError):
+            await registry.build("primary", FAKE, assigned={})
+        assert factory.clients == []
+
+    async def test_an_undeclared_assigned_model_is_refused_when_built(self) -> None:
+        registry, factory = _registry()
+        with pytest.raises(UndeclaredModel):
+            await registry.build("primary", FAKE, assigned={"chat": "fake-unknown"})
+        assert factory.clients == []
+
+
+def _scoped_catalogue() -> Catalogue:
+    return Catalogue(
+        [
+            *CATALOGUE,
+            ModelEntry(
+                model_id="fake-global",
+                provider="fake",
+                residency_scope=ResidencyScope.GLOBAL,
+                context_window=100_000,
+                output_limit=8_000,
+            ),
+        ],
+        version="fake-scoped-1",
+    )
+
+
+class TestRegistryResidency:
+    """A provider built without assignments is held to the registry's residency policy."""
+
+    async def test_a_model_outside_the_policy_is_refused_on_every_call(self) -> None:
+        sink = MemoryEventSink()
+        registry = ProviderRegistry(
+            secrets=SECRETS,
+            catalogue=_scoped_catalogue(),
+            events=sink,
+            residency=ResidencyPolicy(scopes=frozenset({ResidencyScope.LOCAL})),
+            factories=[FakeFactory()],
+        )
+        provider = await registry.build("p", FAKE)
+        with pytest.raises(ResidencyRefused):
+            await provider.complete(_request("fake-global"))
+        assert sink.events == []
+        await provider.complete(_request("fake-large"))
+        assert len(sink.events) == 2
+
+    async def test_without_a_policy_every_declared_model_is_allowed(self) -> None:
+        registry = ProviderRegistry(
+            secrets=SECRETS, catalogue=_scoped_catalogue(), factories=[FakeFactory()]
+        )
+        assert registry.residency == ResidencyPolicy()
+        provider = await registry.build("p", FAKE)
+        response = await provider.complete(_request("fake-global"))
+        assert response.text == f"echo: {PROMPT}"

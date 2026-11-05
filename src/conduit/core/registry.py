@@ -6,10 +6,21 @@ secrets, and a ``create_provider`` that wraps the client. The registry validates
 settings, resolves every secret reference, calls ``create_client`` (nothing else in
 conduit may; a tripwire checks this) and wraps the result in a ``MeteredProvider``.
 
-``MeteredProvider`` is the single funnel every model call passes through: it refuses a
-model the catalogue does not declare for the provider, and emits a
-``ModelCallStartedEvent`` and a ``ModelCallFinishedEvent`` (with the final usage, all
-four counts) for every call, under the content-capture policy.
+``MeteredProvider`` is the single funnel every model call passes through. Before any
+client call it refuses a model the catalogue does not declare for the provider, and
+holds the call to what the provider was built for:
+
+- A provider built for resolved assignments (``start`` builds every runtime provider
+  this way) serves only those assignments: each task class its own model, and a call
+  without a task class one of the assigned models. Anything else raises
+  ``ModelNotAssigned``, so no call can skip the floor and residency checks made at
+  start-up by naming another declared model.
+- A provider built without assignments (``ProviderRegistry.build`` used directly) is
+  held to the registry's residency policy on every call. The default policy allows
+  every scope and region, as ``ConduitSettings`` does.
+
+It then emits a ``ModelCallStartedEvent`` and a ``ModelCallFinishedEvent`` (with the
+final usage, all four counts) for every call, under the content-capture policy.
 """
 
 from __future__ import annotations
@@ -25,7 +36,7 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel, SecretStr, ValidationError
 
 from conduit.core.catalogue import Catalogue, default_catalogue
-from conduit.core.errors import ConfigurationError, ProviderError, ProviderFailure
+from conduit.core.errors import ConduitError, ConfigurationError, ProviderError, ProviderFailure
 from conduit.core.events import (
     CapturedContent,
     CapturePolicy,
@@ -37,6 +48,7 @@ from conduit.core.events import (
 )
 from conduit.core.identifiers import new_id
 from conduit.core.provider import Provider
+from conduit.core.residency import ResidencyPolicy
 from conduit.core.secrets import SecretResolver, resolve_secret_fields
 from conduit.core.settings import KIND_PATTERN, ProviderSettings
 from conduit.core.streaming import StreamEvent, StreamStopped, TextDelta, ToolCallFinished, collect
@@ -45,6 +57,21 @@ from conduit.core.types import ModelRequest, ModelResponse, ToolResultBlock, Too
 logger = logging.getLogger("conduit.registry")
 
 _UNSET: Any = object()
+
+
+class ModelNotAssigned(ConduitError, LookupError):
+    """A call named a model, or a task class, outside the provider's resolved assignments.
+
+    Raised before any client call. The message names the provider, model and task
+    class, which are configuration, never content.
+    """
+
+    def __init__(self, provider: str, model: str, task_class: str | None) -> None:
+        where = f" to task class {task_class!r}" if task_class is not None else ""
+        super().__init__(f"model {model!r} is not assigned{where} on provider {provider!r}")
+        self.provider = provider
+        self.model = model
+        self.task_class = task_class
 
 
 @runtime_checkable
@@ -135,6 +162,8 @@ class MeteredProvider:
         settings: ProviderSettings,
         catalogue: Catalogue,
         events: FanOutSink,
+        assigned: Mapping[str, str] | None = None,
+        residency: ResidencyPolicy | None = None,
     ) -> None:
         self.inner = inner
         self.name = name
@@ -142,9 +171,30 @@ class MeteredProvider:
         self.settings = settings
         self._catalogue = catalogue
         self._events = events
+        self._assigned = dict(assigned) if assigned is not None else None
+        self._models = frozenset(self._assigned.values()) if self._assigned is not None else None
+        self._residency = residency if residency is not None else ResidencyPolicy()
+
+    @property
+    def assigned_models(self) -> frozenset[str] | None:
+        """The models resolved for this provider, or ``None`` when it was built without
+        assignments (and is held to the registry's residency policy instead)."""
+        return self._models
+
+    def _admit(self, request: ModelRequest) -> None:
+        """Refuse, before any client call, a call outside what this provider serves."""
+        entry = self._catalogue.require(self.settings.catalogue_provider, request.model)
+        if self._assigned is None or self._models is None:
+            self._residency.check(entry, self.settings.region, task=request.task_class or self.name)
+            return
+        if request.task_class is not None:
+            if self._assigned.get(request.task_class) != request.model:
+                raise ModelNotAssigned(self.name, request.model, request.task_class)
+        elif request.model not in self._models:
+            raise ModelNotAssigned(self.name, request.model, None)
 
     async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
-        self._catalogue.require(self.settings.catalogue_provider, request.model)
+        self._admit(request)
         policy = self._events.policy
         context = _CallContext(
             call_id=new_id("call"),
@@ -224,10 +274,13 @@ class ProviderRegistry:
         catalogue: Catalogue | None = None,
         events: EventSink | None = None,
         capture: CapturePolicy | None = None,
+        residency: ResidencyPolicy | None = None,
         factories: Iterable[ProviderFactory] = (),
     ) -> None:
         self._secrets = secrets
         self.catalogue = catalogue if catalogue is not None else default_catalogue()
+        #: Held on every call of a provider built without assignments.
+        self.residency = residency if residency is not None else ResidencyPolicy()
         self._events = FanOutSink([events] if events is not None else [], policy=capture)
         self._factories: dict[str, ProviderFactory] = {}
         self._built: list[MeteredProvider] = []
@@ -270,16 +323,33 @@ class ProviderRegistry:
         settings: ProviderSettings | Mapping[str, Any],
         *,
         client: Any = _UNSET,
+        assigned: Mapping[str, str] | None = None,
     ) -> MeteredProvider:
-        """The provider for one configured name. ``client`` replaces the SDK client in tests."""
+        """The provider for one configured name. ``client`` replaces the SDK client in tests.
+
+        ``assigned`` maps each task class this provider serves to its resolved model;
+        the provider then serves those assignments only. Without it, every call is
+        held to the registry's residency policy.
+        """
         validated = self.validate(name, settings)
         factory = self._factory(validated.kind)
+        if assigned is not None:
+            if not assigned:
+                raise ConfigurationError(f"provider {name!r} is built for no assignment")
+            for model in sorted(set(assigned.values())):
+                self.catalogue.require(validated.catalogue_provider, model)
         if client is _UNSET:
             secrets = await resolve_secret_fields(validated, self._secrets)
             client = factory.create_client(validated, secrets)
         inner = factory.create_provider(name, validated, client)
         provider = MeteredProvider(
-            inner, name=name, settings=validated, catalogue=self.catalogue, events=self._events
+            inner,
+            name=name,
+            settings=validated,
+            catalogue=self.catalogue,
+            events=self._events,
+            assigned=assigned,
+            residency=self.residency,
         )
         self._built.append(provider)
         logger.debug("built provider %s (%s)", name, validated.kind)

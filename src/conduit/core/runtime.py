@@ -5,6 +5,11 @@ provider against its adapter, resolves every task-class assignment (capability f
 residency, undeclared models) and only then builds the providers some task class is
 assigned to. A refusal therefore happens at start-up, before any client exists, and
 never part-way through a task.
+
+Each provider is built for the assignments resolved to it, and serves only those: a
+call through ``Runtime.providers`` or ``TaskBinding.provider`` that names another
+model, or another task class's model, is refused with ``ModelNotAssigned`` before any
+client call. ``TaskBinding.request`` builds requests that stay within the assignment.
 """
 
 from __future__ import annotations
@@ -116,6 +121,7 @@ async def start(
         catalogue=applied,
         events=events,
         capture=settings.capture,
+        residency=settings.residency,
         factories=factories,
     )
     validated = {
@@ -132,7 +138,12 @@ async def start(
     providers: dict[str, MeteredProvider] = {}
     try:
         for name in sorted(assignments.providers):
-            providers[name] = await registry.build(name, validated[name])
+            assigned = {
+                task: resolved.model
+                for task, resolved in assignments.items()
+                if resolved.provider == name
+            }
+            providers[name] = await registry.build(name, validated[name], assigned=assigned)
     except BaseException:
         await registry.aclose()
         raise
