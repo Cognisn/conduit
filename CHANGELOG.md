@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a13] - 2026-11-05
+
+Wave 4, fourth merge: the MCP client (`feat/0.1.0-mcp-client`).
+
+### Added
+
+- The `mcp` extra (`conduit.mcp`, MCP Python SDK 1.x), which holds:
+  - `McpConnection`, for stdio, streamable HTTP and SSE servers, with connection lifecycle, timeouts and clean shutdown;
+  - static bearer token and API key credentials as `secret://` references.
+- An OAuth 2.1 client for MCP servers (`OAuthClient`):
+  - protected-resource and authorisation-server metadata discovery, with audience and issuer checks, and an optional pinned issuer (required with a client secret);
+  - dynamic client registration;
+  - authorisation code with PKCE (S256), state and redirect URI checks, and the RFC 9207 issuer parameter;
+  - refresh token rotation, with one refresh shared by every client of a token store in the process.
+
+  Tokens and the client registration are held only in the product's token store, under `mcp:<server>` and `mcp:<server>:client`. They are bound to the issuer that granted them and are never sent to another one.
+- The `SignInHook` protocol for the interactive sign-in, and `LoopbackSignIn` for terminals: a browser and a loopback callback. It completes only on a callback carrying the request's state, and bounds every wait.
+- `McpToolBridge`: MCP tools join the tool catalogue as `<server>__<tool>`, restricted to the task classes the product grants. Results are framed as untrusted content with a fresh nonce, invisible characters made visible and a size cap.
+- `McpCallEvent` (`mcp_call`), one per MCP tool call, with server, tool, outcome, duration, and hashes and sizes of the arguments and result. Their text appears only under the capture policy's tool-content setting.
+
 ## [0.1.0a12] - 2026-11-05
 
 Wave 4, third merge: SKILL.md skills (`feat/0.1.0-skills`).
