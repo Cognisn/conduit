@@ -21,7 +21,7 @@ from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
 from typing import Any
 
-from conduit.core.errors import ProviderError
+from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.provider import BaseProvider
 from conduit.core.streaming import StreamEvent
 from conduit.core.types import ModelRequest
@@ -104,7 +104,14 @@ class GeminiProvider(BaseProvider):
                     break
                 except Exception as error:
                     raise ProviderError(classify(error)) from None
-                events = mapper.feed(chunk)
+                try:
+                    events = mapper.feed(chunk)
+                except ProviderError:
+                    raise
+                except Exception:
+                    # A chunk the mapper cannot read (a malformed shape): never the
+                    # raw error, which could carry the chunk's text.
+                    raise ProviderError(ProviderFailure.PROTOCOL) from None
                 self._remember(mapper.signatures)
                 for event in events:
                     yield event

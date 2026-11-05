@@ -13,7 +13,8 @@ bytes as base64) before ``StreamMapper`` reads them.
   is the prompt minus the cached part (plus ``tool_use_prompt_token_count``), and
   ``cache_read_tokens`` is the cached part. Output is ``candidates_token_count`` plus
   ``thoughts_token_count``: thinking is billed as output. Each chunk repeats the usage
-  so far; the last one is the call's usage, never a sum.
+  so far; the last chunk's is the call's usage, never a sum, and a stream whose last
+  chunk carries no usage is a protocol failure. A negative count is one too.
 - **Function calls** arrive whole in one chunk. A call id from the API is kept and
   sent back with the call and its response; where the API gives none, a conduit id
   marked ``GENERATED_PREFIX`` is made and never sent.
@@ -262,11 +263,12 @@ class StreamMapper:
         feedback = chunk.get("prompt_feedback") or {}
         if isinstance(feedback, Mapping) and feedback.get("block_reason"):
             self._blocked = True
+        # The call's usage is that of the last chunk fed, never an earlier one: a
+        # stream whose final chunk carries none is broken (finish() refuses it).
         usage = chunk.get("usage_metadata")
-        if usage is not None:
-            if not isinstance(usage, Mapping):
-                raise _protocol()
-            self._usage = usage
+        if usage is not None and not isinstance(usage, Mapping):
+            raise _protocol()
+        self._usage = usage
         return events
 
     def finish(self) -> list[StreamEvent]:

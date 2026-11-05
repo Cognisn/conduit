@@ -324,6 +324,35 @@ class TestStream:
         assert usage.input_tokens == 9
         assert usage.output_tokens == 2
 
+    def test_a_final_chunk_without_usage_is_a_protocol_failure(self) -> None:
+        # Review finding 1: an earlier chunk's partial usage must never stand in
+        # for the call's usage (C19); the last chunk fed must carry it.
+        with pytest.raises(ProviderError) as caught:
+            _run(
+                [
+                    _chunk({"text": "a"}, usage={"prompt_token_count": 100}),
+                    _chunk({"text": "b"}, finish="STOP"),
+                ]
+            )
+        assert caught.value.failure is ProviderFailure.PROTOCOL
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "prompt_token_count",
+            "cached_content_token_count",
+            "candidates_token_count",
+            "thoughts_token_count",
+            "tool_use_prompt_token_count",
+        ],
+    )
+    def test_a_negative_count_is_a_protocol_failure_without_the_value(self, key: str) -> None:
+        with pytest.raises(ProviderError) as caught:
+            _usage(_final(**{key: -7031}))
+        assert caught.value.failure is ProviderFailure.PROTOCOL
+        assert "-7031" not in str(caught.value)
+        assert caught.value.__cause__ is None
+
     def test_a_stream_without_usage_is_a_protocol_failure(self) -> None:
         with pytest.raises(ProviderError) as caught:
             _run([_chunk({"text": "a"}, finish="STOP")])

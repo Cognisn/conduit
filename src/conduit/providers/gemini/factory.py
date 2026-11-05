@@ -1,12 +1,20 @@
 """The Gemini provider factory: the only place google-genai is imported.
 
 ``create_client`` imports the SDK and builds a ``google.genai.Client`` for the Gemini
-API with the resolved API key. Every choice the SDK would otherwise take from the
-environment is passed explicitly: the backend (``vertexai=False``, so
-``GOOGLE_GENAI_USE_VERTEXAI`` and ``GOOGLE_GENAI_USE_ENTERPRISE`` are not read), the
-key (so ``GOOGLE_API_KEY`` and ``GEMINI_API_KEY`` are not read) and the endpoint (so
-``GOOGLE_GEMINI_BASE_URL`` cannot redirect prompts). The SDK's retries are bounded by
-``max_attempts``.
+API with the resolved API key. Three choices the SDK would otherwise take from the
+environment are pinned:
+
+- the key: passed explicitly, so ``GOOGLE_API_KEY`` and ``GEMINI_API_KEY`` are not read;
+- the backend: ``vertexai=False``, so ``GOOGLE_GENAI_USE_VERTEXAI`` and
+  ``GOOGLE_GENAI_USE_ENTERPRISE`` are not read;
+- the endpoint: ``base_url`` passed explicitly, so ``GOOGLE_GEMINI_BASE_URL`` cannot
+  redirect prompts.
+
+The rest of the SDK's transport still follows the environment, as any HTTPS client on
+the host would: proxy variables and ``.netrc`` (its HTTP clients use ``trust_env``),
+``SSL_CERT_FILE`` and ``SSL_CERT_DIR`` for certificate authorities, and
+``GOOGLE_GENAI_HTTP_CLIENT`` for the choice of HTTP library. The SDK's retries are
+bounded by ``max_attempts``.
 
 ``async_client_args`` are passed to the SDK's async HTTP client (a test gives a mock
 transport). ``signature_memory`` bounds the thought signatures each provider keeps.

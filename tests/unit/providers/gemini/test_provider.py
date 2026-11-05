@@ -215,7 +215,31 @@ class TestFailures:
             await provider.complete(_request())
         assert caught.value.failure is ProviderFailure.UNAVAILABLE
         assert "secret detail" not in str(caught.value)
+        assert caught.value.__cause__ is None
         assert caught.value.__suppress_context__
+
+    @pytest.mark.parametrize(
+        "chunk",
+        [
+            {"candidates": [{"content": ["secret detail"]}]},
+            {
+                "candidates": [{"content": {"parts": [{"text": "a"}]}, "finish_reason": "STOP"}],
+                "usage_metadata": ["secret detail"],
+            },
+            {"candidates": "secret detail"},
+            {"candidates": [{"content": {"parts": "secret detail"}}]},
+        ],
+    )
+    async def test_a_malformed_chunk_is_a_protocol_failure_without_its_text(
+        self, chunk: dict[str, Any]
+    ) -> None:
+        provider = await _build(FakeClient(lambda params: [chunk]))
+        with pytest.raises(ProviderError) as caught:
+            await provider.complete(_request())
+        assert caught.value.failure is ProviderFailure.PROTOCOL
+        assert "secret detail" not in str(caught.value)
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None or caught.value.__suppress_context__
 
     @pytest.mark.parametrize("at_start", [True, False])
     async def test_the_call_timeout_applies(self, at_start: bool) -> None:
