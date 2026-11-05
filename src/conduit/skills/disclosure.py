@@ -372,6 +372,9 @@ class SkillSession:
 
         Writes no marker for a skill restored; a skill that can no longer be loaded is
         left out and marked unloaded. Only a session that has not started may restore.
+        A skill that is no longer listed (for example one a later, larger listing has
+        pushed past ``max_listed`` or ``max_listing_bytes``) cannot be brought back: it is
+        marked unloaded, so the resumed prefix differs from the original (D0065).
         """
         async with self._lock:
             if self._started or self._loaded or self._markers:

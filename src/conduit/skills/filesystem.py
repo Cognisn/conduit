@@ -121,8 +121,16 @@ def _within(base_real: str, real: str) -> bool:
         return False
 
 
-#: Open flags: binary on Windows, and on POSIX never through a link in the last part.
-_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+#: Open flags: binary on Windows; on POSIX never through a link in the last part, and
+#: never blocking, so a FIFO swapped in after the regular-file check cannot hold the
+#: worker thread (the flag has no effect on regular files, and the handle's fstat then
+#: refuses anything that is not one).
+_OPEN_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_BINARY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_NONBLOCK", 0)
+)
 _NOFOLLOW = bool(getattr(os, "O_NOFOLLOW", 0))
 
 
