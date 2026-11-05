@@ -19,6 +19,7 @@ from conduit.core.errors import (
     ProviderError,
     ProviderFailure,
     ResidencyRefused,
+    SettingsRefused,
     UndeclaredModel,
 )
 from conduit.core.events import (
@@ -29,7 +30,14 @@ from conduit.core.events import (
     FanOutSink,
     ToolContent,
 )
-from conduit.core.facade import SyncFacade, sync
+from conduit.core.facade import (
+    SyncFacade,
+    SyncProvider,
+    SyncRuntime,
+    SyncTaskBinding,
+    start_sync,
+    sync,
+)
 from conduit.core.provider import BaseProvider, Provider
 from conduit.core.registry import MeteredProvider, ProviderFactory, ProviderRegistry
 from conduit.core.residency import ResidencyPolicy, ResidencyScope
@@ -42,6 +50,7 @@ from conduit.core.secrets import (
 )
 from conduit.core.settings import AssignmentSettings, ProviderSettings
 from conduit.core.streaming import (
+    ProviderStateReported,
     StreamStopped,
     TextDelta,
     ToolCallFinished,
@@ -58,6 +67,7 @@ from conduit.core.types import (
     Message,
     ModelRequest,
     ModelResponse,
+    ProviderStateBlock,
     StopReason,
     TextBlock,
     ToolResultBlock,
@@ -100,16 +110,22 @@ __all__ = [
     "ProviderFailure",
     "ProviderRegistry",
     "ProviderSettings",
+    "ProviderStateBlock",
+    "ProviderStateReported",
     "ResidencyPolicy",
     "ResidencyRefused",
     "ResidencyScope",
     "Runtime",
     "SecretRef",
     "SecretResolver",
+    "SettingsRefused",
     "SkillSource",
     "StopReason",
     "StreamStopped",
     "SyncFacade",
+    "SyncProvider",
+    "SyncRuntime",
+    "SyncTaskBinding",
     "TaskBinding",
     "TaskClass",
     "TextBlock",
@@ -133,6 +149,7 @@ __all__ = [
     "collect",
     "default_catalogue",
     "start",
+    "start_sync",
     "sync",
 ]
 

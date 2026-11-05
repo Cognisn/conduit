@@ -14,20 +14,29 @@ plain iterator, both running on the loop thread. Everything else passes through.
 facade is generated from the object at call time, so every async interface conduit
 has, now or later, gets a sync form without a hand-written twin.
 
-What a facade method returns comes back as it is, never wrapped: a ``TaskBinding``
-from ``Runtime.for_task`` is a plain object whose ``provider`` is async. A sync caller
-wraps each async object it is handed, on the same loop::
+Starting conduit from sync code: ``start_sync`` takes ``start``'s arguments, runs
+``start`` on a conduit loop and returns a ``SyncRuntime``. Nothing it hands out is
+async: ``for_task`` gives a ``SyncTaskBinding`` and ``providers`` maps each name to a
+``SyncProvider``, whose ``complete`` blocks and whose ``stream`` is a plain iterator,
+each running on the loop that built the provider::
 
-    loop = default_loop()
-    runtime = sync(loop.run(start(settings, task_classes=..., factories=..., secrets=...)))
-    binding = runtime.for_task("triage")  # returned as is
-    provider = sync(binding.provider, loop=loop)
-    response = provider.complete(binding.request(messages=[Message.user("...")]))
-    runtime.aclose()
+    with start_sync(settings, task_classes=..., factories=..., secrets=...) as runtime:
+        binding = runtime.for_task("triage")
+        response = binding.complete(binding.request(messages=[Message.user("...")]))
+        for event in binding.stream(binding.request(messages=[...])):
+            ...
 
-``start`` must run on the loop the facade uses (``loop.run(start(...))``, never
-``asyncio.run``): providers make their SDK clients, connection pools and locks on the
-loop that builds them, and must be called on that loop.
+``close`` (or leaving the ``with`` block) closes every provider. ``with_timeout`` gives
+the same runtime with another per-call timeout. ``start_sync`` is refused on the
+loop's own thread, like every facade call.
+
+``sync(obj)`` is the general form, for any other async object. What a ``sync`` facade
+method returns comes back as it is, never wrapped (a ``TaskBinding`` from
+``Runtime.for_task``, say, whose ``provider`` is async), so a caller using it directly
+wraps each async object it is handed, on the same loop. Whatever starts conduit must
+run on the loop the facade uses (``loop.run(start(...))``, never ``asyncio.run``):
+providers make their SDK clients, connection pools and locks on the loop that builds
+them, and must be called on that loop. ``start_sync`` does this for you.
 """
 
 from __future__ import annotations
@@ -37,10 +46,19 @@ import atexit
 import concurrent.futures
 import inspect
 import threading
-from collections.abc import AsyncIterator, Awaitable, Callable, Generator
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Iterator
+from types import MappingProxyType, TracebackType
 from typing import Any
 
+from conduit.core.catalogue import Catalogue
 from conduit.core.errors import FacadeError
+from conduit.core.events import EventSink
+from conduit.core.registry import MeteredProvider, ProviderFactory
+from conduit.core.runtime import ConduitSettings, Runtime, start, task_request
+from conduit.core.secrets import SecretResolver
+from conduit.core.streaming import StreamEvent
+from conduit.core.tasks import Assignments, ResolvedAssignment, TaskClass
+from conduit.core.types import Message, ModelRequest, ModelResponse, SystemBlock, ToolSpec
 
 DEFAULT_TIMEOUT_S: float = 300.0
 #: How long a timed-out call may take to unwind before its caller is released anyway.
@@ -305,10 +323,163 @@ def sync(
     return SyncFacade(target, loop=loop, timeout=timeout)
 
 
+class SyncProvider:
+    """A built provider as sync code uses it: blocking calls on the loop that built it."""
+
+    def __init__(self, provider: MeteredProvider, loop: LoopThread, timeout: float | None) -> None:
+        self._provider = provider
+        self._loop = loop
+        self.timeout = timeout
+
+    @property
+    def name(self) -> str:
+        return self._provider.name
+
+    @property
+    def kind(self) -> str:
+        return self._provider.kind
+
+    @property
+    def assigned_models(self) -> frozenset[str] | None:
+        return self._provider.assigned_models
+
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        """The collected response. Blocks; raises ``TimeoutError`` past the timeout."""
+        return self._loop.run(self._provider.complete(request), timeout=self.timeout)
+
+    def stream(self, request: ModelRequest) -> Iterator[StreamEvent]:
+        """The call's events as a plain iterator; each step has the timeout."""
+        return self._loop.iterate(self._provider.stream(request), timeout=self.timeout)
+
+    def __repr__(self) -> str:
+        return f"SyncProvider(name={self.name!r}, kind={self.kind!r})"
+
+
+class SyncTaskBinding:
+    """A task class's provider and resolved assignment, for sync code."""
+
+    def __init__(self, provider: SyncProvider, assignment: ResolvedAssignment) -> None:
+        self.provider = provider
+        self.assignment = assignment
+
+    def request(
+        self,
+        *,
+        messages: Iterable[Message],
+        system: Iterable[SystemBlock] = (),
+        tools: Iterable[ToolSpec] = (),
+        **fields: Any,
+    ) -> ModelRequest:
+        """A request on this task's model, within its output budget (as
+        ``TaskBinding.request``)."""
+        return task_request(
+            self.assignment, messages=messages, system=system, tools=tools, **fields
+        )
+
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        return self.provider.complete(request)
+
+    def stream(self, request: ModelRequest) -> Iterator[StreamEvent]:
+        return self.provider.stream(request)
+
+    def __repr__(self) -> str:
+        return f"SyncTaskBinding(task_class={self.assignment.task_class.name!r})"
+
+
+class SyncRuntime:
+    """A started ``Runtime`` for sync code. Nothing it hands out is async."""
+
+    def __init__(
+        self, runtime: Runtime, loop: LoopThread, timeout: float | None = DEFAULT_TIMEOUT_S
+    ) -> None:
+        self._runtime = runtime
+        self._loop = loop
+        self.timeout = timeout
+
+    @property
+    def catalogue(self) -> Catalogue:
+        return self._runtime.catalogue
+
+    @property
+    def assignments(self) -> Assignments:
+        return self._runtime.assignments
+
+    @property
+    def providers(self) -> MappingProxyType[str, SyncProvider]:
+        """Every built provider, by configured name, as a sync view."""
+        return MappingProxyType(
+            {
+                name: SyncProvider(provider, self._loop, self.timeout)
+                for name, provider in self._runtime.providers.items()
+            }
+        )
+
+    def for_task(self, task_class: str) -> SyncTaskBinding:
+        """The task class's binding. Raises ``UnknownTaskClass`` for one not assigned."""
+        binding = self._runtime.for_task(task_class)
+        return SyncTaskBinding(
+            SyncProvider(binding.provider, self._loop, self.timeout), binding.assignment
+        )
+
+    def with_timeout(self, timeout: float | None) -> SyncRuntime:
+        """The same runtime, with another per-call timeout."""
+        return SyncRuntime(self._runtime, self._loop, timeout)
+
+    def close(self) -> None:
+        """Close every provider. A second close does nothing."""
+        self._loop.run(self._runtime.aclose(), timeout=self.timeout)
+
+    def __enter__(self) -> SyncRuntime:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    def __repr__(self) -> str:
+        return f"SyncRuntime(providers={sorted(self._runtime.providers)})"
+
+
+def start_sync(
+    settings: ConduitSettings,
+    *,
+    task_classes: Iterable[TaskClass],
+    factories: Iterable[ProviderFactory],
+    secrets: SecretResolver,
+    events: EventSink | None = None,
+    catalogue: Catalogue | None = None,
+    loop: LoopThread | None = None,
+    timeout: float | None = DEFAULT_TIMEOUT_S,
+) -> SyncRuntime:
+    """``start`` for sync code: run on ``loop`` (the default loop unless given), with
+    ``timeout`` for start-up and for every later call. Raises what ``start`` raises."""
+    owner = loop or default_loop()
+    runtime = owner.run(
+        start(
+            settings,
+            task_classes=task_classes,
+            factories=factories,
+            secrets=secrets,
+            events=events,
+            catalogue=catalogue,
+        ),
+        timeout=timeout,
+    )
+    return SyncRuntime(runtime, owner, timeout)
+
+
 __all__ = [
     "DEFAULT_TIMEOUT_S",
     "LoopThread",
     "SyncFacade",
+    "SyncProvider",
+    "SyncRuntime",
+    "SyncTaskBinding",
     "default_loop",
+    "start_sync",
     "sync",
 ]
