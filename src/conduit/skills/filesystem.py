@@ -131,6 +131,11 @@ def _open_fd(path: str) -> int:
     return os.open(path, _OPEN_FLAGS)
 
 
+def _fstat(fd: int) -> os.stat_result:
+    """What the open handle ``fd`` is (a seam for the tests)."""
+    return os.fstat(fd)
+
+
 def _identity(path: str) -> tuple[int, int]:
     """The device and file number of what ``path`` names, links followed."""
     found = os.stat(path)
@@ -178,7 +183,7 @@ def _read_confined(path: Path, base_real: str, limit: int, skill: str) -> bytes 
     if looped:
         raise SkillResourceRefused("path_link", skill=skill)
     try:
-        opened = os.fstat(fd)
+        opened = _fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
             return None
         again = os.path.realpath(path)

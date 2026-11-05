@@ -518,6 +518,25 @@ class TestOpenAfterCheck:
                 await source.load_document("s")
         assert caught.value.reason == "path_link"
 
+    async def test_something_other_than_a_regular_file_behind_the_handle_is_not_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import stat as stat_module
+
+        folder = _skill(tmp_path, "s")
+        _write(folder / "note.md", MARKER)
+        original = filesystem._fstat
+
+        def as_directory(fd: int) -> os.stat_result:
+            fields = list(original(fd))
+            fields[0] = stat_module.S_IFDIR | 0o755
+            return os.stat_result(fields)
+
+        monkeypatch.setattr(filesystem, "_fstat", as_directory)
+        with pytest.raises(SkillResourceRefused) as caught:
+            await FilesystemSkillSource(tmp_path).read_resource("s", "note.md")
+        assert caught.value.reason == "resource_missing"
+
     async def test_the_skill_file_is_read_no_further_than_its_limit(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
