@@ -19,6 +19,7 @@ from conduit.core.types import (
     CacheBreakpoint,
     ImageBlock,
     Message,
+    ProviderStateBlock,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
@@ -125,6 +126,25 @@ class TranscriptStoreSuite(ConformanceSuite):
             assert loaded.entries == stored
             for original, kept in zip(entries, loaded.entries, strict=True):
                 assert kept.model_copy(update={"seq": None}) == original
+
+        self._scenario(body)
+
+    def test_provider_state_round_trips_unchanged(self) -> None:
+        """Opaque provider state is stored and loaded byte for byte, whatever its bytes,
+        in its place among the message's blocks."""
+        payload = bytes(range(256)) + b"synthetic signed state"
+        state = ProviderStateBlock(provider_kind="stub", state_type="thinking", payload=payload)
+        other = ProviderStateBlock(provider_kind="gemini", state_type="sig", payload=b"\xff")
+        content = (state, TextBlock(text="Checked host-01.example.com."), other)
+        entry = MessageEntry(message=Message(role="assistant", content=content), model="stub-echo")
+
+        async def body(store: TranscriptStore) -> None:
+            await store.append("sess_state", [_message("check the host"), entry])
+            loaded = await (await self.reopen_store(store)).load("sess_state")
+            kept = loaded.entries[1]
+            assert isinstance(kept, MessageEntry)
+            assert kept.message.content == content
+            assert kept.message.provider_state("stub")[0].payload == payload
 
         self._scenario(body)
 
