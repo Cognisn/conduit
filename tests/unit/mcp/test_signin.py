@@ -197,6 +197,76 @@ class TestLoopbackSignIn:
                 held.close()
         assert "code=c" in result.callback_url
 
+    async def test_another_path_with_the_right_state_does_not_complete_it(self) -> None:
+        answers: list[int] = []
+
+        def opener(url: str) -> bool:
+            with httpx.Client(timeout=10, trust_env=False) as client:
+                base = f"http://127.0.0.1:{port('callback')}"
+                answers.append(client.get(f"{base}/elsewhere?code=c&state=s1").status_code)
+                answers.append(client.get(f"{base}/callback?code=c&state=s1").status_code)
+            return True
+
+        result = await LoopbackSignIn(port("callback"), open_url=opener, timeout=10).sign_in(
+            request()
+        )
+        assert answers == [404, 200]
+        assert urlsplit(result.callback_url).path == "/callback"
+
+    async def test_an_idle_connection_is_closed_after_its_read_timeout(self) -> None:
+        closed: list[bool] = []
+
+        def idle_then_visit(url: str) -> bool:
+            with socket.create_connection(("127.0.0.1", port("callback"))) as idle:
+                idle.settimeout(3)
+                try:
+                    closed.append(idle.recv(1) == b"")  # the server hangs up on it
+                except TimeoutError:
+                    closed.append(False)
+            return bool(visit("/callback?code=c&state=s1")(url))
+
+        hook = LoopbackSignIn(
+            port("callback"), open_url=idle_then_visit, timeout=10, read_timeout=0.3
+        )
+        await hook.sign_in(request())
+        assert closed == [True]
+
+    async def test_idle_connections_are_closed_when_the_sign_in_ends(self) -> None:
+        sockets: list[socket.socket] = []
+
+        def idle_then_visit(url: str) -> bool:
+            sockets.append(socket.create_connection(("127.0.0.1", port("callback"))))
+            return bool(visit("/callback?code=c&state=s1")(url))
+
+        hook = LoopbackSignIn(
+            port("callback"), open_url=idle_then_visit, timeout=10, read_timeout=60
+        )
+        try:
+            await hook.sign_in(request())
+            (idle,) = sockets
+            idle.settimeout(2)
+            assert await asyncio.to_thread(idle.recv, 1) == b""
+        finally:
+            for held in sockets:
+                held.close()
+
+    async def test_a_listener_that_will_not_close_does_not_hold_the_sign_in(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def never(self: asyncio.Server) -> None:
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(asyncio.base_events.Server, "wait_closed", never)
+        hook = LoopbackSignIn(
+            port("callback"), open_url=visit("/callback?code=c&state=s1"), timeout=10
+        )
+        result = await asyncio.wait_for(hook.sign_in(request()), timeout=10)
+        assert "code=c" in result.callback_url
+
+    def test_a_read_timeout_must_be_positive(self) -> None:
+        with pytest.raises(ConfigurationError):
+            LoopbackSignIn(port("callback"), read_timeout=0)
+
     async def test_cancellation_closes_the_listener(self) -> None:
         hook = LoopbackSignIn(port("callback"), open_url=lambda url: True, timeout=30)
         task = asyncio.create_task(hook.sign_in(request()))

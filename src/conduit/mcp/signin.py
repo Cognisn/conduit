@@ -103,7 +103,8 @@ class LoopbackSignIn:
     ``state`` of the authorisation request completes the sign-in; anything else is
     answered 404 and the listener carries on waiting. A callback reporting an error
     completes it too (the OAuth client refuses it), but its page does not claim
-    success. A connection has a few seconds to send its request. The listener and every
+    success. A connection has ``read_timeout`` seconds to send its request. The
+    listener and every
     connection to it are closed when the sign-in ends, however it ends, and an idle
     connection cannot hold it open. A sign-in not completed within ``timeout`` seconds
     raises ``TimeoutError``.
@@ -116,6 +117,7 @@ class LoopbackSignIn:
         host: str = "127.0.0.1",
         path: str = "/callback",
         timeout: float = 300.0,
+        read_timeout: float = _READ_TIMEOUT,
         open_url: Callable[[str], Any] | None = None,
     ) -> None:
         if not is_loopback_host(host):
@@ -124,12 +126,13 @@ class LoopbackSignIn:
             raise ConfigurationError("a loopback sign-in needs a port from 1 to 65535")
         if not path.startswith("/") or "?" in path or "#" in path:
             raise ConfigurationError("a loopback sign-in path starts with / and has no query")
-        if timeout <= 0:
-            raise ConfigurationError("a loopback sign-in needs a positive timeout")
+        if timeout <= 0 or read_timeout <= 0:
+            raise ConfigurationError("a loopback sign-in needs positive timeouts")
         self._host = host
         self._port = port
         self._path = path
         self._timeout = timeout
+        self._read_timeout = read_timeout
         self._open_url = open_url or webbrowser.open
         shown = f"[{host}]" if ":" in host else host
         self.redirect_uri = f"http://{shown}:{port}{path}"
@@ -146,7 +149,7 @@ class LoopbackSignIn:
         async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             writers.add(writer)
             try:
-                target = await asyncio.wait_for(self._read_target(reader), _READ_TIMEOUT)
+                target = await asyncio.wait_for(self._read_target(reader), self._read_timeout)
                 matched = (
                     target is not None
                     and urlsplit(target).path == self._path
