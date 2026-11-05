@@ -75,7 +75,10 @@ def test_the_plugin_marks_suites_and_catches_a_broken_store(tmp_path: Path) -> N
         check=False,
     )
     summary = result.stdout.strip().splitlines()[-1]
-    # Seven scenarios per suite. The broken store returns wrong sequence numbers, which
-    # the ordering scenario catches; the plain test is deselected by the marker.
-    assert summary.startswith("1 failed, 13 passed, 1 deselected"), result.stdout
+    # Eight scenarios per suite. The broken store returns wrong sequence numbers, which
+    # the ordering scenario and the refused-append scenario (checking the numbers of
+    # the batch it then accepts) both catch; the plain test is deselected by the marker.
+    assert summary.startswith("2 failed, 14 passed, 1 deselected"), result.stdout
     assert "TestBroken::test_sequence_numbers_are_assigned_in_append_order" in result.stdout
+    assert "TestBroken::test_an_append_that_would_not_load_is_refused_whole" in result.stdout
+    assert "FAILED test_product.py::TestGood" not in result.stdout
