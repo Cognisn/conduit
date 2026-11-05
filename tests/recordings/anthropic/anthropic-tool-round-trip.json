@@ -1,0 +1,298 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "max_tokens": 1024,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "Which network is host-a.example.com on?",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "claude-sonnet-5-5",
+        "stream": true,
+        "system": [
+          {
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "text": "You are a synthetic assistant for conduit's tests. Answer briefly.",
+            "type": "text"
+          }
+        ],
+        "timeout": 120.0,
+        "tools": [
+          {
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "description": "Look up a host in the synthetic inventory.",
+            "input_schema": {
+              "properties": {
+                "host": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "host"
+              ],
+              "type": "object"
+            },
+            "name": "lookup_host"
+          }
+        ]
+      },
+      "response": [
+        {
+          "message": {
+            "content": [],
+            "id": "msg_synthetic_01",
+            "model": "claude-sonnet-5-5",
+            "role": "assistant",
+            "stop_reason": null,
+            "stop_sequence": null,
+            "type": "message",
+            "usage": {
+              "cache_creation_input_tokens": 1100,
+              "cache_read_input_tokens": 0,
+              "input_tokens": 40,
+              "output_tokens": 1
+            }
+          },
+          "type": "message_start"
+        },
+        {
+          "content_block": {
+            "signature": "",
+            "thinking": "",
+            "type": "thinking"
+          },
+          "index": 0,
+          "type": "content_block_start"
+        },
+        {
+          "delta": {
+            "signature": "c2lnbmF0dXJl",
+            "type": "signature_delta"
+          },
+          "index": 0,
+          "type": "content_block_delta"
+        },
+        {
+          "index": 0,
+          "type": "content_block_stop"
+        },
+        {
+          "content_block": {
+            "text": "",
+            "type": "text"
+          },
+          "index": 1,
+          "type": "content_block_start"
+        },
+        {
+          "delta": {
+            "text": "Checking.",
+            "type": "text_delta"
+          },
+          "index": 1,
+          "type": "content_block_delta"
+        },
+        {
+          "index": 1,
+          "type": "content_block_stop"
+        },
+        {
+          "content_block": {
+            "id": "toolu_synthetic_01",
+            "input": {},
+            "name": "lookup_host",
+            "type": "tool_use"
+          },
+          "index": 2,
+          "type": "content_block_start"
+        },
+        {
+          "delta": {
+            "partial_json": "{\"host\": ",
+            "type": "input_json_delta"
+          },
+          "index": 2,
+          "type": "content_block_delta"
+        },
+        {
+          "delta": {
+            "partial_json": "\"host-a.example.com\"}",
+            "type": "input_json_delta"
+          },
+          "index": 2,
+          "type": "content_block_delta"
+        },
+        {
+          "index": 2,
+          "type": "content_block_stop"
+        },
+        {
+          "delta": {
+            "stop_reason": "tool_use",
+            "stop_sequence": null
+          },
+          "type": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 1100,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 40,
+            "output_tokens": 31
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ]
+    },
+    {
+      "request": {
+        "max_tokens": 1024,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "Which network is host-a.example.com on?",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          },
+          {
+            "content": [
+              {
+                "text": "Checking.",
+                "type": "text"
+              },
+              {
+                "id": "toolu_synthetic_01",
+                "input": {
+                  "host": "host-a.example.com"
+                },
+                "name": "lookup_host",
+                "type": "tool_use"
+              }
+            ],
+            "role": "assistant"
+          },
+          {
+            "content": [
+              {
+                "content": [
+                  {
+                    "text": "host-a.example.com is 192.0.2.10",
+                    "type": "text"
+                  }
+                ],
+                "is_error": false,
+                "tool_use_id": "toolu_synthetic_01",
+                "type": "tool_result"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "claude-sonnet-5-5",
+        "stream": true,
+        "system": [
+          {
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "text": "You are a synthetic assistant for conduit's tests. Answer briefly.",
+            "type": "text"
+          }
+        ],
+        "timeout": 120.0,
+        "tools": [
+          {
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "description": "Look up a host in the synthetic inventory.",
+            "input_schema": {
+              "properties": {
+                "host": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "host"
+              ],
+              "type": "object"
+            },
+            "name": "lookup_host"
+          }
+        ]
+      },
+      "response": [
+        {
+          "message": {
+            "content": [],
+            "id": "msg_synthetic_01",
+            "model": "claude-sonnet-5-5",
+            "role": "assistant",
+            "stop_reason": null,
+            "stop_sequence": null,
+            "type": "message",
+            "usage": {
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 1100,
+              "input_tokens": 75,
+              "output_tokens": 1
+            }
+          },
+          "type": "message_start"
+        },
+        {
+          "content_block": {
+            "text": "",
+            "type": "text"
+          },
+          "index": 0,
+          "type": "content_block_start"
+        },
+        {
+          "delta": {
+            "text": "It is on 192.0.2.0/24.",
+            "type": "text_delta"
+          },
+          "index": 0,
+          "type": "content_block_delta"
+        },
+        {
+          "index": 0,
+          "type": "content_block_stop"
+        },
+        {
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          },
+          "type": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 1100,
+            "input_tokens": 75,
+            "output_tokens": 12
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ]
+    }
+  ],
+  "name": "anthropic-tool-round-trip",
+  "provider": "anthropic"
+}
