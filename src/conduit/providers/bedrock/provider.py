@@ -8,8 +8,8 @@ a slow or stalled stream never blocks the loop. ``request.timeout_s`` bounds the
 each next event (and, for Converse, the whole call). If the consumer stops early, the
 thread is told to stop and the underlying stream is closed.
 
-Every error becomes ``ProviderError(failure)`` raised ``from None``, so provider text
-reaches no log, exception or event.
+Every error becomes ``ProviderError(failure)``, raised after its handler so that it has
+no cause and no context: provider text reaches no log, exception or event.
 """
 
 from __future__ import annotations
@@ -78,12 +78,16 @@ class BedrockProvider(BaseProvider):
             yield event
 
     async def _converse(self, params: dict[str, Any], timeout: float) -> Mapping[str, Any]:
+        failure: ProviderFailure | None = None
         try:
             response: Mapping[str, Any] = await asyncio.wait_for(
                 asyncio.to_thread(lambda: self._client.converse(**params)), timeout
             )
         except Exception as error:
-            raise ProviderError(classify(error)) from None
+            failure = classify(error)
+        if failure is not None:
+            # Raised after the handler, so the SDK's error is neither cause nor context.
+            raise ProviderError(failure)
         return response
 
     async def _converse_stream(
@@ -133,12 +137,15 @@ class BedrockProvider(BaseProvider):
         mapper = StreamMapper()
         try:
             while True:
+                waited = True
                 try:
                     kind, item = await asyncio.wait_for(queue.get(), timeout)
                 except TimeoutError:
-                    raise ProviderError(ProviderFailure.TIMEOUT) from None
+                    waited = False
+                if not waited:
+                    raise ProviderError(ProviderFailure.TIMEOUT)
                 if kind == _ERROR:
-                    raise ProviderError(classify(item)) from None
+                    raise ProviderError(classify(item))
                 if kind == _END:
                     for event in mapper.finish():
                         yield event

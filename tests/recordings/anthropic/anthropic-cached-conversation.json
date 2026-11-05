@@ -1,0 +1,208 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "max_tokens": 1024,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "Say hello.",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "claude-sonnet-5-5",
+        "stream": true,
+        "system": [
+          {
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "text": "You are a synthetic assistant for conduit's tests. Answer briefly.",
+            "type": "text"
+          }
+        ],
+        "timeout": 120.0
+      },
+      "response": [
+        {
+          "message": {
+            "content": [],
+            "id": "msg_synthetic_01",
+            "model": "claude-sonnet-5-5",
+            "role": "assistant",
+            "stop_reason": null,
+            "stop_sequence": null,
+            "type": "message",
+            "usage": {
+              "cache_creation_input_tokens": 2048,
+              "cache_read_input_tokens": 0,
+              "input_tokens": 9,
+              "output_tokens": 1
+            }
+          },
+          "type": "message_start"
+        },
+        {
+          "content_block": {
+            "text": "",
+            "type": "text"
+          },
+          "index": 0,
+          "type": "content_block_start"
+        },
+        {
+          "delta": {
+            "text": "Hel",
+            "type": "text_delta"
+          },
+          "index": 0,
+          "type": "content_block_delta"
+        },
+        {
+          "delta": {
+            "text": "lo.",
+            "type": "text_delta"
+          },
+          "index": 0,
+          "type": "content_block_delta"
+        },
+        {
+          "index": 0,
+          "type": "content_block_stop"
+        },
+        {
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          },
+          "type": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 2048,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 9,
+            "output_tokens": 4
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ]
+    },
+    {
+      "request": {
+        "max_tokens": 1024,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "Say hello.",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          },
+          {
+            "content": [
+              {
+                "text": "Hello.",
+                "type": "text"
+              }
+            ],
+            "role": "assistant"
+          },
+          {
+            "content": [
+              {
+                "text": "And goodbye.",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "claude-sonnet-5-5",
+        "stream": true,
+        "system": [
+          {
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "text": "You are a synthetic assistant for conduit's tests. Answer briefly.",
+            "type": "text"
+          }
+        ],
+        "timeout": 120.0
+      },
+      "response": [
+        {
+          "message": {
+            "content": [],
+            "id": "msg_synthetic_01",
+            "model": "claude-sonnet-5-5",
+            "role": "assistant",
+            "stop_reason": null,
+            "stop_sequence": null,
+            "type": "message",
+            "usage": {
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 2048,
+              "input_tokens": 21,
+              "output_tokens": 1
+            }
+          },
+          "type": "message_start"
+        },
+        {
+          "content_block": {
+            "text": "",
+            "type": "text"
+          },
+          "index": 0,
+          "type": "content_block_start"
+        },
+        {
+          "delta": {
+            "text": "Good",
+            "type": "text_delta"
+          },
+          "index": 0,
+          "type": "content_block_delta"
+        },
+        {
+          "delta": {
+            "text": "bye.",
+            "type": "text_delta"
+          },
+          "index": 0,
+          "type": "content_block_delta"
+        },
+        {
+          "index": 0,
+          "type": "content_block_stop"
+        },
+        {
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          },
+          "type": "message_delta",
+          "usage": {
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 2048,
+            "input_tokens": 21,
+            "output_tokens": 5
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ]
+    }
+  ],
+  "name": "anthropic-cached-conversation",
+  "provider": "anthropic"
+}
