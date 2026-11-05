@@ -135,6 +135,11 @@ class FilesystemSkillSource:
         self._strict = strict
 
     @property
+    def directory(self) -> Path:
+        """The directory the skills are read from."""
+        return self._root
+
+    @property
     def limits(self) -> SourceLimits:
         return self._limits
 
