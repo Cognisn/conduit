@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a14] - 2026-11-05
+
+Wave 4, fifth merge: embeddings (`feat/0.1.0-embeddings`).
+
+### Added
+
+- Embeddings:
+  - an embedding interface in the core, and a registry funnel that checks the model, the dimensions and every vector. The funnel refuses non-numeric, boolean, out-of-range and non-finite vector values as a protocol failure;
+  - embedding call events carrying input-token usage under the capture policy;
+  - `start_embeddings`, which resolves embedding task classes at start-up, so a chat model cannot serve an embedding task class or the reverse, and refuses dimensions below one;
+  - remote embedding providers for Bedrock Titan, OpenAI-compatible services, Gemini and Ollama, sharing the chat adapters' settings and authentication;
+  - the `local-embeddings` extra, which runs sentence-transformers on CPU-only torch;
+  - a stub embedder for tests.
+
+### Changed
+
+- CI installs torch (`>=2.15,<3`) from the PyTorch CPU index wherever it installs every extra, and refuses any NVIDIA package. tqdm is a named licence exception.
+
 ## [0.1.0a13] - 2026-11-05
 
 Wave 4, fourth merge: the MCP client (`feat/0.1.0-mcp-client`).
