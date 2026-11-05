@@ -1,0 +1,38 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "body": {
+          "messages": [
+            {
+              "content": "You answer questions about the example.com inventory.",
+              "role": "system"
+            },
+            {
+              "content": "Describe the example.com network.",
+              "role": "user"
+            }
+          ],
+          "model": "llama3.1:8b",
+          "options": {
+            "num_ctx": 131072,
+            "num_predict": 8
+          },
+          "stream": true
+        },
+        "method": "POST",
+        "path": "/api/chat"
+      },
+      "response": {
+        "lines": [
+          "{\"created_at\": \"2026-11-04T00:00:00.000000Z\", \"done\": false, \"message\": {\"content\": \"The example.com network \", \"role\": \"assistant\"}, \"model\": \"llama3.1:8b\"}",
+          "{\"created_at\": \"2026-11-04T00:00:00.000000Z\", \"done\": false, \"message\": {\"content\": \"has two\", \"role\": \"assistant\"}, \"model\": \"llama3.1:8b\"}",
+          "{\"created_at\": \"2026-11-04T00:00:00.000000Z\", \"done\": true, \"done_reason\": \"length\", \"eval_count\": 8, \"eval_duration\": 540000000, \"load_duration\": 21000000, \"message\": {\"content\": \"\", \"role\": \"assistant\"}, \"model\": \"llama3.1:8b\", \"prompt_eval_count\": 30, \"prompt_eval_duration\": 310000000, \"total_duration\": 912000000}"
+        ],
+        "status": 200
+      }
+    }
+  ],
+  "name": "ollama-cut-short",
+  "provider": "ollama"
+}
