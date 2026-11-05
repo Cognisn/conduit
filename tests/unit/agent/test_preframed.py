@@ -3,7 +3,7 @@
 The declaration comes from the trusted side (the tool object, or the product's predicate),
 never from the content: text that merely looks framed is framed again like any other.
 The MCP tool bridge frames its results itself, so a product running MCP tools passes
-``prefamed=lambda tool: isinstance(tool, McpTool)``.
+``preframed=lambda tool: isinstance(tool, McpTool)``.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from conduit.agent import AgentRunner, AgentTask, tool_results_prefamed
+from conduit.agent import AgentRunner, AgentTask, tool_results_preframed
 from conduit.core.types import Message, ToolResultBlock
 from conduit.providers.stub import StubToolCall, StubTurn, answer_tool_results
 from tests.unit.agent.helpers import (
@@ -67,11 +67,17 @@ async def test_only_a_literal_true_declares_results_framed(mark: object) -> None
 
 
 async def test_a_product_predicate_can_declare_results_framed() -> None:
-    sent = await _sent(SampleTool("search"), prefamed=lambda tool: tool.name == "search")
+    sent = await _sent(SampleTool("search"), preframed=lambda tool: tool.name == "search")
     assert sent == FRAMED
 
 
 def test_the_default_predicate_reads_the_tools_declaration() -> None:
-    assert tool_results_prefamed(FramingTool("search"))
-    assert not tool_results_prefamed(SampleTool("search"))
-    assert not tool_results_prefamed(FramingTool("search", untrusted_framed="true"))
+    assert tool_results_preframed(FramingTool("search"))
+    assert not tool_results_preframed(SampleTool("search"))
+    assert not tool_results_preframed(FramingTool("search", untrusted_framed="true"))
+
+
+@pytest.mark.parametrize("answer", [1, "yes", object()])
+async def test_a_predicate_answering_other_than_true_leaves_results_framed(answer: object) -> None:
+    sent = await _sent(SampleTool("search"), preframed=lambda tool: answer)
+    assert sent.startswith('<<UNTRUSTED source="search"')

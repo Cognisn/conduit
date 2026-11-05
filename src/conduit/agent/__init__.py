@@ -15,7 +15,7 @@ from conduit.agent.hooks import (
     SystemHook,
     ToolWrapper,
     tool_requires_approval,
-    tool_results_prefamed,
+    tool_results_preframed,
 )
 from conduit.agent.results import (
     AgentError,
@@ -86,6 +86,6 @@ __all__ = [
     "parse_output",
     "sanitise_untrusted",
     "tool_requires_approval",
-    "tool_results_prefamed",
+    "tool_results_preframed",
     "untrusted_text_block",
 ]

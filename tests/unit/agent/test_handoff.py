@@ -6,10 +6,18 @@ from typing import Any
 
 import pytest
 
-from conduit.agent import HAND_OFF_TOOL, AgentRunner, AgentTask, RunRefused, RunStatus
-from conduit.agent.events import HandOffEvent
+from conduit.agent import (
+    HAND_OFF_TOOL,
+    AgentRunner,
+    AgentTask,
+    BudgetKind,
+    RunBudget,
+    RunRefused,
+    RunStatus,
+)
+from conduit.agent.events import HandOffEvent, RunFinishedEvent
 from conduit.core.events import ToolCallEvent
-from conduit.core.types import Message, ToolResultBlock
+from conduit.core.types import Message, ToolResultBlock, Usage
 from conduit.providers.stub import StubToolCall, StubTurn, answer_tool_results
 from tests.unit.agent.helpers import (
     Executor,
@@ -193,3 +201,66 @@ async def test_only_the_first_hand_off_in_a_turn_is_taken() -> None:
     assert result.hand_offs == ("review",)
     results = [b for b in result.messages[2].content if isinstance(b, ToolResultBlock)]
     assert [r.is_error for r in results] == [False, True]
+
+
+def _hands_off_then_loops() -> tuple[ScriptLog, ScriptLog]:
+    """The primary hands off at once; the specialist asks for a tool on every turn."""
+    primary = ScriptLog(
+        lambda request, index: StubTurn(
+            tool_calls=(StubToolCall(name=HAND_OFF_TOOL, input={"task_class": "review"}),),
+            usage=_USAGE,
+        )
+    )
+    specialist = ScriptLog(
+        lambda request, index: StubTurn(tool_calls=(StubToolCall(name="inspect"),), usage=_USAGE)
+    )
+    return primary, specialist
+
+
+_USAGE = Usage(input_tokens=30, output_tokens=10, cache_read_tokens=0, cache_write_tokens=0)
+
+
+async def _budgeted(budget: RunBudget) -> tuple[Any, list[Any], ScriptLog, Executor]:
+    primary, specialist = _hands_off_then_loops()
+    rt = await runtime(primary, specialist)
+    executor = Executor()
+    review_tools = task_tools(
+        [SampleTool("inspect", task_classes=frozenset({"review"}))], executor, "review"
+    )
+    run = AgentRunner(rt, tools={"review": review_tools}).start(
+        AgentTask(
+            task_class="chat",
+            messages=(Message.user("look"),),
+            hand_offs=frozenset({"review"}),
+            budget=budget,
+        )
+    )
+    events = [e async for e in run]
+    return run.result, events, specialist, executor
+
+
+async def test_a_hand_off_keeps_the_runs_model_call_budget() -> None:
+    result, events, specialist, _ = await _budgeted(RunBudget(max_model_calls=2))
+    assert result.hand_offs == ("review",)
+    assert result.budget is BudgetKind.MODEL_CALLS
+    assert len(specialist.requests) == 1  # call 2; call 3 is refused
+    assert (result.model_calls, result.tool_calls) == (2, 2)
+    finished = events[-1]
+    assert isinstance(finished, RunFinishedEvent)
+    assert (finished.model_calls, finished.tool_calls, finished.hand_offs) == (2, 2, 1)
+    assert finished.budget is BudgetKind.MODEL_CALLS
+
+
+async def test_a_hand_off_keeps_the_runs_tool_call_budget() -> None:
+    result, _, specialist, executor = await _budgeted(RunBudget(max_tool_calls=2))
+    assert result.budget is BudgetKind.TOOL_CALLS
+    assert len(executor.calls) == 1  # the hand-off was the first tool call
+    assert result.tool_calls == 2
+    assert len(specialist.requests) == 2
+
+
+async def test_a_hand_off_keeps_the_runs_token_budget() -> None:
+    result, _, specialist, _ = await _budgeted(RunBudget(max_tokens=100))
+    assert result.budget is BudgetKind.TOKENS
+    assert len(specialist.requests) == 2  # 40, 80, then 120 passes 100
+    assert result.usage.input_tokens == 90

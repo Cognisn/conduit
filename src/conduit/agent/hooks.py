@@ -57,7 +57,7 @@ def tool_requires_approval(tool: Any) -> bool:
     return getattr(tool, "requires_approval", False) is not False
 
 
-def tool_results_prefamed(tool: Any) -> bool:
+def tool_results_preframed(tool: Any) -> bool:
     """The default pre-framed mark: a tool's ``untrusted_framed`` is exactly ``True``.
 
     Such a tool's executor frames its results as untrusted itself (the MCP tool bridge

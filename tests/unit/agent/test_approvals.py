@@ -149,3 +149,23 @@ async def test_a_product_predicate_can_mark_tools() -> None:
     await runner.run(_task())
     assert executor.calls == []
     assert len(approvals.requests) == 1
+
+
+async def test_a_decision_with_a_truthy_non_boolean_approval_is_a_refusal() -> None:
+    from conduit.core.backends import ApprovalDecision
+
+    class Truthy:
+        def __init__(self) -> None:
+            self.requests: list[object] = []
+
+        async def decide(self, request: object) -> ApprovalDecision:
+            self.requests.append(request)
+            return ApprovalDecision.model_construct(approved=1, reason="", decided_by=None)
+
+    log = _script()
+    executor = Executor()
+    rt = await runtime(log)
+    tools = {"chat": task_tools([SampleTool("delete_host", requires_approval=True)], executor)}
+    result = await AgentRunner(rt, tools=tools, approvals=Truthy()).run(_task())
+    assert executor.calls == []
+    assert result.text == "error"

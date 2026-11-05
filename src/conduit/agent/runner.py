@@ -18,7 +18,7 @@ What the runner enforces, whatever the model says:
 - **Output contracts**: an answer failing its contract is retried once with the errors,
   then the run fails with ``OUTPUT_INVALID``.
 - **Untrusted framing**: every tool result reaches the model framed as untrusted, by
-  the runner or, for a tool declared to (``prefamed``), by its own executor.
+  the runner or, for a tool declared to (``preframed``), by its own executor.
 - **Approvals**: a tool the product marks goes to its ``ApprovalHandler`` first; a
   refusal (or no handler, or a failing one) is a tool result the model sees.
 - **Output filter**: the product's filter masks the text of every assistant message.
@@ -55,7 +55,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel
 
-from conduit.agent.budgets import BudgetMeter, Exhausted, RunBudget
+from conduit.agent.budgets import BudgetMeter, Exhausted, RunBudget, TokenCount
 from conduit.agent.contracts import CUT_OFF, ContractCheck, OutputContract, parse_output
 from conduit.agent.events import (
     ApprovalDecidedEvent,
@@ -78,7 +78,7 @@ from conduit.agent.hooks import (
     SystemHook,
     ToolWrapper,
     tool_requires_approval,
-    tool_results_prefamed,
+    tool_results_preframed,
 )
 from conduit.agent.results import (
     CompactionRefused,
@@ -211,6 +211,9 @@ class _Run:
     hand_offs: list[str] = field(default_factory=list)
     last_usage: Usage | None = None
     result: RunResult | None = None
+    # Tool uses the conversation holds without results yet, and the turn answering them.
+    open_uses: tuple[ToolUseBlock, ...] = ()
+    open_turn: _Turn | None = None
 
     @property
     def task_class(self) -> str:
@@ -304,8 +307,8 @@ class AgentRunner:
     tools. ``events`` receives every run event but the text deltas, and ``capture`` is
     the content-capture policy for the stream and the sink (nothing by default: pass the
     deployment's ``ConduitSettings.capture`` to match the providers' events).
-    ``requires_approval`` marks the tools that need ``approvals``, and ``prefamed`` the
-    tools whose executor frames its results as untrusted itself (``tool_results_prefamed``).
+    ``requires_approval`` marks the tools that need ``approvals``, and ``preframed`` the
+    tools whose executor frames its results as untrusted itself (``tool_results_preframed``).
     ``clock`` measures the wall-time budget.
     """
 
@@ -316,7 +319,7 @@ class AgentRunner:
         tools: Mapping[str, TaskTools] | None = None,
         approvals: ApprovalHandler | None = None,
         requires_approval: Callable[[Any], bool] = tool_requires_approval,
-        prefamed: Callable[[Any], bool] = tool_results_prefamed,
+        preframed: Callable[[Any], bool] = tool_results_preframed,
         output_filter: OutputFilter | None = None,
         transcripts: TranscriptStore | None = None,
         events: EventSink | None = None,
@@ -338,7 +341,7 @@ class AgentRunner:
         self._tools = dict(tools or {})
         self._approvals = approvals
         self._requires_approval = requires_approval
-        self._prefamed = prefamed
+        self._preframed = preframed
         self._filter = output_filter
         self._transcripts = transcripts
         self._capture = capture if capture is not None else CapturePolicy()
@@ -417,16 +420,40 @@ class AgentRunner:
                     yield event
         except GeneratorExit:
             if run.result is None:
+                await self._close_open_uses(run)
                 await self._record_end(run, ABANDONED)
             raise
         except asyncio.CancelledError:
             if run.result is None:
+                await self._close_open_uses(run)
                 await self._record_end(run, CANCELLED)
             raise
         except Exception as error:
             if run.result is None:
+                await self._close_open_uses(run)
                 await self._record_end(run, type(error).__name__)
             raise
+
+    async def _close_open_uses(self, run: _Run) -> None:
+        """Answer every tool use still open when a run ends part-way, so the conversation
+        and the stored transcript stay well formed. Results already in are kept; the rest
+        are stopped. A failure here is logged by class name and never replaces the end
+        the run is already on (cancellation included), nor chains to it."""
+        if not run.open_uses:
+            return
+        done = {r.tool_use_id: r for r in (run.open_turn.results if run.open_turn else [])}
+        results = tuple(
+            done.get(use.id) or self._error_result(use, _STOPPED_TEXT) for use in run.open_uses
+        )
+        run.open_uses = ()
+        run.open_turn = None
+        failed: str | None = None
+        try:
+            await self._add(run, Message(role="user", content=results))
+        except Exception as error:
+            failed = type(error).__name__
+        if failed is not None:
+            logger.warning("closing the open tool uses of run %s failed: %s", run.run_id, failed)
 
     async def _steps(self, run: _Run) -> AsyncGenerator[RunEvent, None]:
         task = run.task
@@ -451,10 +478,30 @@ class AgentRunner:
                 async for event in self._exhaust(run, exhausted):
                     yield event
                 return
-            system = await self._system(run)
-            compacted = await self._compact(run, system)
+            # The hooks run within the wall-time budget, and the deadline is checked again
+            # once they are done, so a slow hook cannot carry a call past it.
+            system: tuple[SystemBlock, ...] | None = None
+            compacted: ConversationCompactedEvent | None = None
+            expired = False
+            try:
+                async with asyncio.timeout(self._left(run)) as scope:
+                    system = await self._system(run)
+                    compacted = await self._compact(run, system)
+            except TimeoutError:
+                if not scope.expired():
+                    raise
+                expired = True
+            if expired or system is None:
+                async for event in self._exhaust(run, run.meter.timed_out()):
+                    yield event
+                return
             if compacted is not None:
                 yield await self._emit(compacted)
+            late = run.meter.wall_time_exhausted()
+            if late is not None:
+                async for event in self._exhaust(run, late):
+                    yield event
+                return
             call = _Call()
             request = self._request(run, system)
             async with aclosing(self._call_model(run, request, call)) as deltas:
@@ -472,14 +519,16 @@ class AgentRunner:
             response = call.response
             message, text, filtered = await self._assistant(response)
             run.last_usage = response.usage
+            uses = response.tool_uses
             await self._add(
                 run, message, model=run.binding.assignment.model_id, usage=response.usage
             )
+            run.open_uses = uses
             over = run.meter.record_usage(response.usage)
-            uses = response.tool_uses
             if over is not None or response.stop_reason is StopReason.REFUSAL:
                 if uses:
                     await self._add(run, self._unrun(uses, _BUDGET_TEXT if over else _STOPPED_TEXT))
+                    run.open_uses = ()
                 if over is not None:
                     async for event in self._exhaust(run, over):
                         yield event
@@ -488,10 +537,13 @@ class AgentRunner:
                 return
             if uses:
                 turn = _Turn()
+                run.open_turn = turn
                 async with aclosing(self._tool_turn(run, uses, turn)) as tool_events:
                     async for event in tool_events:
                         yield event
                 await self._add(run, Message(role="user", content=tuple(turn.results)))
+                run.open_uses = ()
+                run.open_turn = None
                 if turn.exhausted is not None:
                     async for event in self._exhaust(run, turn.exhausted):
                         yield event
@@ -585,6 +637,13 @@ class AgentRunner:
         remaining = run.meter.remaining_s()
         if remaining is not None:
             fields["timeout_s"] = min(max(remaining, 0.001), 3_600)
+        budget = task.budget
+        if budget.max_tokens is not None and TokenCount.OUTPUT in budget.counted_tokens:
+            # A call may not produce more output than the token budget has left.
+            left = budget.max_tokens - run.meter.tokens_used
+            fields["max_output_tokens"] = max(
+                1, min(run.binding.assignment.max_output_tokens, left)
+            )
         contract = task.contract
         if (
             contract is not None
@@ -843,7 +902,7 @@ class AgentRunner:
         # by the tool or the product, never by its content; everything else is framed.
         sent = (
             result.content
-            if self._prefamed(tool) is True
+            if self._preframed(tool) is True
             else frame_untrusted(
                 result.content,
                 source=tool.name,

@@ -239,3 +239,84 @@ async def test_a_run_within_every_budget_completes() -> None:
     )
     assert result.status is RunStatus.COMPLETED
     assert not [e for e in streamed if isinstance(e, BudgetExhaustedEvent)]
+
+
+async def test_a_slow_system_hook_is_cut_off_at_the_wall_time_deadline() -> None:
+    async def slow(base: tuple[Any, ...]) -> tuple[Any, ...]:
+        await asyncio.sleep(5)
+        return base
+
+    log = ScriptLog(scripted([StubTurn(text="ok")]))
+    rt = await runtime(log)
+    task = AgentTask(
+        task_class="chat",
+        messages=(Message.user("go"),),
+        budget=RunBudget(max_wall_time_s=0.1),
+        system_hook=slow,
+    )
+    began = time.monotonic()
+    result = await AgentRunner(rt).run(task)
+    assert time.monotonic() - began < 2  # cut off at the deadline, not after the hook
+    assert result.budget is BudgetKind.WALL_TIME
+    assert log.requests == []
+
+
+async def test_a_slow_compaction_hook_is_cut_off_at_the_wall_time_deadline() -> None:
+    class Slow:
+        async def before_model_call(self, request: Any) -> None:
+            await asyncio.sleep(5)
+
+    log = ScriptLog(scripted([StubTurn(text="ok")]))
+    rt = await runtime(log)
+    began = time.monotonic()
+    result = await AgentRunner(rt, compaction=Slow()).run(_task(RunBudget(max_wall_time_s=0.1)))
+    assert time.monotonic() - began < 2  # cut off at the deadline, not after the hook
+    assert result.budget is BudgetKind.WALL_TIME
+    assert log.requests == []
+
+
+async def test_the_deadline_is_checked_again_after_the_hooks() -> None:
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    async def hook(base: tuple[Any, ...]) -> tuple[Any, ...]:
+        clock.now = 100.0  # the hook returns at once, but past the deadline
+        return base
+
+    log = ScriptLog(scripted([StubTurn(text="ok")]))
+    rt = await runtime(log)
+    task = AgentTask(
+        task_class="chat",
+        messages=(Message.user("go"),),
+        budget=RunBudget(max_wall_time_s=10),
+        system_hook=hook,
+    )
+    result = await AgentRunner(rt, clock=clock).run(task)
+    assert result.budget is BudgetKind.WALL_TIME
+    assert log.requests == []
+
+
+async def test_charged_output_caps_each_requests_output_limit_at_the_tokens_left() -> None:
+    usage = Usage(input_tokens=0, output_tokens=30, cache_read_tokens=0, cache_write_tokens=0)
+    log = ScriptLog(
+        lambda request, index: StubTurn(tool_calls=(StubToolCall(name="lookup"),), usage=usage)
+    )
+    await _run(log, RunBudget(max_tokens=100, max_model_calls=50))
+    assert [r.max_output_tokens for r in log.requests] == [100, 70, 40, 10]
+
+
+async def test_output_not_charged_leaves_the_assignments_output_limit() -> None:
+    usage = Usage(input_tokens=30, output_tokens=0, cache_read_tokens=0, cache_write_tokens=0)
+    log = ScriptLog(
+        lambda request, index: StubTurn(tool_calls=(StubToolCall(name="lookup"),), usage=usage)
+    )
+    budget = RunBudget(
+        max_tokens=100, max_model_calls=50, counted_tokens=frozenset({TokenCount.INPUT})
+    )
+    await _run(log, budget)
+    assert {r.max_output_tokens for r in log.requests} == {1024}
