@@ -53,12 +53,16 @@ def request(url: str = "https://auth.example.com/authorize?x=1") -> SignInReques
 
 
 def port_is_free(number: int) -> bool:
-    with socket.socket() as probe:
-        try:
-            probe.bind(("127.0.0.1", number))
-        except OSError:
+    """Nothing listens on ``number`` any more (a refused connection).
+
+    Binding would be the wrong probe: on POSIX a just-closed port stays unbindable
+    while its connections sit in TIME_WAIT.
+    """
+    try:
+        with socket.create_connection(("127.0.0.1", number), timeout=1):
             return False
-    return True
+    except OSError:
+        return True
 
 
 class TestLoopbackSignIn:
