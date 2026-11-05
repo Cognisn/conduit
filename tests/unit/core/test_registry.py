@@ -360,3 +360,85 @@ class TestEndedEarly:
         assert finished.failure is ProviderFailure.PROTOCOL
         assert finished.usage == PARTIAL
         assert factory.providers[0].streams_closed == 1
+
+
+class _BlockingSink:
+    """Holds the started event until cancelled, to cancel a call during that emit."""
+
+    def __init__(self) -> None:
+        self.events: list[object] = []
+        self.blocked = asyncio.Event()
+
+    async def emit(self, event: object) -> None:
+        if isinstance(event, ModelCallStartedEvent):
+            self.blocked.set()
+            await asyncio.sleep(30)
+        self.events.append(event)
+
+
+class TestReviewFollowUps:
+    async def test_an_assigned_build_is_held_to_the_residency_policy(self) -> None:
+        registry = ProviderRegistry(
+            secrets=SECRETS,
+            catalogue=_scoped_catalogue(),
+            residency=ResidencyPolicy(scopes=frozenset({ResidencyScope.LOCAL})),
+            factories=[FakeFactory()],
+        )
+        with pytest.raises(ResidencyRefused):
+            await registry.build("p", FAKE, assigned={"anything": "fake-global"})
+        provider = await registry.build("q", FAKE, assigned={"anything": "fake-large"})
+        assert provider.assigned_models == frozenset({"fake-large"})
+
+    async def test_the_adapter_is_not_reachable_around_the_metering(self) -> None:
+        registry, _ = _registry()
+        provider = await registry.build("p", FAKE, assigned={"chat": "fake-small"})
+        assert not hasattr(provider, "inner")
+
+    async def test_a_stream_that_raises_when_called_is_metered_once(self) -> None:
+        sink = MemoryEventSink()
+        registry, _ = _registry(sink)
+        provider = await registry.build("p", {**FAKE, "behaviour": "sync_fail"})
+        with pytest.raises(RuntimeError):
+            await provider.complete(_request())
+        assert [e.type for e in sink.events] == ["model_call_started", "model_call_finished"]
+        (finished,) = _finished(sink)
+        assert finished.outcome == "failed" and finished.error_type == "RuntimeError"
+
+    async def test_a_call_cancelled_while_its_start_is_emitted_is_metered_once(self) -> None:
+        sink = _BlockingSink()
+        registry = ProviderRegistry(
+            secrets=SECRETS, catalogue=CATALOGUE, events=sink, factories=[FakeFactory()]
+        )
+        provider = await registry.build("p", FAKE)
+        call = asyncio.create_task(provider.complete(_request()))
+        await asyncio.wait_for(sink.blocked.wait(), 5)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        finished = [e for e in sink.events if isinstance(e, ModelCallFinishedEvent)]
+        assert len(finished) == 1 and finished[0].error_type == "cancelled"
+
+    async def test_a_consumer_that_stops_after_a_complete_stop_is_metered_ok(self) -> None:
+        sink = MemoryEventSink()
+        registry, _ = _registry(sink)
+        provider = await registry.build("p", FAKE)
+        async with aclosing(provider.stream(_request())) as events:
+            async for event in events:
+                if isinstance(event, StreamStopped):
+                    break
+        (finished,) = _finished(sink)
+        assert finished.outcome == "ok"
+        assert finished.usage == USAGE
+        assert finished.stop_reason is not None
+
+    async def test_a_request_over_the_model_output_limit_is_refused(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build("p", FAKE)
+        over = _request("fake-small").model_copy(update={"max_output_tokens": 1_001})
+        with pytest.raises(ConfigurationError, match="output limit"):
+            await provider.complete(over)
+        assert sink.events == []
+        assert factory.providers[0].requests == []
+        at_limit = _request("fake-small").model_copy(update={"max_output_tokens": 1_000})
+        await provider.complete(at_limit)

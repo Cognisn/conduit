@@ -23,7 +23,7 @@ PARTIAL = Usage(input_tokens=11, output_tokens=2, cache_read_tokens=5, cache_wri
 class FakeSettings(ProviderSettings):
     kind: Literal["fake"] = "fake"
     api_key: SecretRef
-    behaviour: Literal["ok", "fail", "no_stop", "slow", "after_stop"] = "ok"
+    behaviour: Literal["ok", "fail", "no_stop", "slow", "after_stop", "sync_fail"] = "ok"
 
 
 class FakeClient:
@@ -44,8 +44,13 @@ class FakeProvider(BaseProvider):
         self.streams_closed = 0
         self.waiting = asyncio.Event()
 
-    async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
+    def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
         self.requests.append(request)
+        if self.settings.behaviour == "sync_fail":
+            raise RuntimeError("refused before streaming")  # raised when stream() is called
+        return self._events(request)
+
+    async def _events(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
         behaviour = self.settings.behaviour
         try:
             if behaviour == "fail":

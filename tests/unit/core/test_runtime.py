@@ -208,3 +208,18 @@ async def test_a_binding_refuses_an_explicit_budget_above_the_model_limit() -> N
     with pytest.raises(ConfigurationError, match="output limit"):
         binding.request(messages=(Message.user("hi"),), max_output_tokens=1_001)
     await runtime.aclose()
+
+
+async def test_a_binding_validates_the_budget_before_checking_it() -> None:
+    runtime = await start(
+        _settings(),
+        task_classes=[CHAT, SUMMARY],
+        factories=[FakeFactory()],
+        secrets=SECRETS,
+        catalogue=CATALOGUE,
+    )
+    with pytest.raises(ValidationError):
+        runtime.for_task("summary").request(
+            messages=(Message.user("hi"),), max_output_tokens="lots"
+        )
+    await runtime.aclose()

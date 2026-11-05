@@ -8,19 +8,22 @@ conduit may; a tripwire checks this) and wraps the result in a ``MeteredProvider
 
 ``MeteredProvider`` is the single funnel every model call passes through. Before any
 client call it refuses a model the catalogue does not declare for the provider, and
+refuses a request whose ``max_output_tokens`` is above the model's output limit, and
 holds the call to what the provider was built for:
 
 - A provider built for resolved assignments (``start`` builds every runtime provider
   this way) serves only those assignments: each task class its own model, and a call
   without a task class one of the assigned models. Anything else raises
   ``ModelNotAssigned``, so no call can skip the floor and residency checks made at
-  start-up by naming another declared model.
+  start-up by naming another declared model. Every assigned model is also checked
+  against the registry's residency policy when the provider is built.
 - A provider built without assignments (``ProviderRegistry.build`` used directly) is
   held to the registry's residency policy on every call. The default policy allows
   every scope and region, as ``ConduitSettings`` does.
 
 It then emits a ``ModelCallStartedEvent`` and a ``ModelCallFinishedEvent`` (with the
-final usage, all four counts) for every call, under the content-capture policy.
+final usage, all four counts) for every call, under the content-capture policy. The
+adapter it wraps is private: there is no way to call it around these checks.
 """
 
 from __future__ import annotations
@@ -185,7 +188,7 @@ class MeteredProvider:
         assigned: Mapping[str, str] | None = None,
         residency: ResidencyPolicy | None = None,
     ) -> None:
-        self.inner = inner
+        self._inner = inner
         self.name = name
         self.kind = inner.kind
         self.settings = settings
@@ -204,6 +207,11 @@ class MeteredProvider:
     def _admit(self, request: ModelRequest) -> None:
         """Refuse, before any client call, a call outside what this provider serves."""
         entry = self._catalogue.require(self.settings.catalogue_provider, request.model)
+        if entry.output_limit is not None and request.max_output_tokens > entry.output_limit:
+            raise ConfigurationError(
+                f"max_output_tokens {request.max_output_tokens} exceeds model "
+                f"{request.model!r}'s output limit of {entry.output_limit}"
+            )
         if self._assigned is None or self._models is None:
             self._residency.check(entry, self.settings.region, task=request.task_class or self.name)
             return
@@ -225,19 +233,13 @@ class MeteredProvider:
             correlation_id=request.correlation_id,
             task_class=request.task_class,
         )
-        await self._events.emit(
-            ModelCallStartedEvent(
-                **context.common(),
-                request=capture_request(request, policy),
-                message_count=len(request.messages),
-                tool_count=len(request.tools),
-                max_output_tokens=request.max_output_tokens,
-            )
-        )
         began = time.perf_counter()
         text: list[str] = []
         tool_calls = 0
         stopped: StreamStopped | None = None
+        beyond_stop = False  # an event arrived after the stop: the stream broke its contract
+        usage: Usage | None = None
+        inner: AsyncIterator[StreamEvent] | None = None
 
         async def finished(**fields: Any) -> None:
             await self._events.emit(
@@ -249,13 +251,31 @@ class MeteredProvider:
                 )
             )
 
-        # Every path out of the call is metered exactly once, with the last usage seen,
-        # and only after the inner stream has been closed.
-        usage: Usage | None = None
-        inner = self.inner.stream(request)
+        def completed(stop: StreamStopped) -> dict[str, Any]:
+            return {
+                "outcome": "ok",
+                "stop_reason": stop.stop_reason,
+                "usage": stop.usage,
+                "response": policy.capture(ContentKind.PROMPT, "".join(text)),
+            }
+
+        # Every path out of the call, from the started event on, is metered exactly once,
+        # with the last usage seen, and only after the inner stream has been closed.
         try:
             try:
+                await self._events.emit(
+                    ModelCallStartedEvent(
+                        **context.common(),
+                        request=capture_request(request, policy),
+                        message_count=len(request.messages),
+                        tool_count=len(request.tools),
+                        max_output_tokens=request.max_output_tokens,
+                    )
+                )
+                inner = self._inner.stream(request)
                 async for event in inner:
+                    if stopped is not None:
+                        beyond_stop = True
                     if isinstance(event, TextDelta):
                         text.append(event.text)
                     elif isinstance(event, ToolCallFinished):
@@ -267,7 +287,8 @@ class MeteredProvider:
                         usage = event.usage
                     yield event
             finally:
-                await _aclose(inner)
+                if inner is not None:
+                    await _aclose(inner)
         except ProviderError as error:
             await finished(outcome="failed", failure=error.failure, usage=usage)
             raise
@@ -278,7 +299,11 @@ class MeteredProvider:
             await finished(outcome="failed", error_type=CANCELLED, usage=usage)
             raise
         except GeneratorExit:
-            await finished(outcome="failed", error_type=ABANDONED, usage=usage)
+            # Closed by its consumer: complete if the stop had arrived (and nothing after it).
+            if stopped is not None and not beyond_stop:
+                await finished(**completed(stopped))
+            else:
+                await finished(outcome="failed", error_type=ABANDONED, usage=usage)
             raise
         except BaseException as error:
             await finished(outcome="failed", error_type=type(error).__name__, usage=usage)
@@ -286,12 +311,7 @@ class MeteredProvider:
         if stopped is None:
             await finished(outcome="failed", failure=ProviderFailure.PROTOCOL, usage=usage)
             raise ProviderError(ProviderFailure.PROTOCOL)
-        await finished(
-            outcome="ok",
-            stop_reason=stopped.stop_reason,
-            usage=stopped.usage,
-            response=policy.capture(ContentKind.PROMPT, "".join(text)),
-        )
+        await finished(**completed(stopped))
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         # Closed deterministically, so a call collect gives up on is metered at once.
@@ -299,7 +319,7 @@ class MeteredProvider:
             return await collect(events, model=request.model)
 
     async def aclose(self) -> None:
-        await self.inner.aclose()
+        await self._inner.aclose()
 
     def __repr__(self) -> str:
         return f"MeteredProvider(name={self.name!r}, kind={self.kind!r})"
@@ -369,16 +389,18 @@ class ProviderRegistry:
         """The provider for one configured name. ``client`` replaces the SDK client in tests.
 
         ``assigned`` maps each task class this provider serves to its resolved model;
-        the provider then serves those assignments only. Without it, every call is
-        held to the registry's residency policy.
+        the provider then serves those assignments only. Each assigned model must be
+        declared and within the registry's residency policy, checked here before the
+        client is made. Without ``assigned``, every call is held to the policy.
         """
         validated = self.validate(name, settings)
         factory = self._factory(validated.kind)
         if assigned is not None:
             if not assigned:
                 raise ConfigurationError(f"provider {name!r} is built for no assignment")
-            for model in sorted(set(assigned.values())):
-                self.catalogue.require(validated.catalogue_provider, model)
+            for task in sorted(assigned):
+                entry = self.catalogue.require(validated.catalogue_provider, assigned[task])
+                self.residency.check(entry, validated.region, task=task)
         if client is _UNSET:
             secrets = await resolve_secret_fields(validated, self._secrets)
             client = factory.create_client(validated, secrets)

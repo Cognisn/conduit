@@ -76,14 +76,7 @@ class TaskBinding:
         start-up, and a ``ConfigurationError`` is raised above it.
         """
         fields.setdefault("max_output_tokens", self.assignment.max_output_tokens)
-        limit = self.assignment.entry.output_limit
-        if limit is not None and fields["max_output_tokens"] > limit:
-            raise ConfigurationError(
-                f"{self.assignment.task_class.name}: max_output_tokens "
-                f"{fields['max_output_tokens']} exceeds model {self.assignment.model!r}'s "
-                f"output limit of {limit}"
-            )
-        return ModelRequest(
+        request = ModelRequest(
             model=self.assignment.model,
             system=tuple(system),
             messages=tuple(messages),
@@ -91,6 +84,14 @@ class TaskBinding:
             task_class=self.assignment.task_class.name,
             **fields,
         )
+        limit = self.assignment.entry.output_limit
+        if limit is not None and request.max_output_tokens > limit:
+            raise ConfigurationError(
+                f"{self.assignment.task_class.name}: max_output_tokens "
+                f"{request.max_output_tokens} exceeds model {self.assignment.model!r}'s "
+                f"output limit of {limit}"
+            )
+        return request
 
 
 class Runtime:
