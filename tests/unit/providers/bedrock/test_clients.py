@@ -9,7 +9,7 @@ from __future__ import annotations
 import base64
 import importlib
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
@@ -20,6 +20,7 @@ from pydantic import SecretStr
 from conduit.core.errors import ConfigurationError, ProviderError, ProviderFailure
 from conduit.core.registry import ProviderRegistry
 from conduit.core.secrets import LiteralSecretResolver
+from conduit.core.settings import ProviderSettings
 from conduit.core.types import Message, ModelRequest
 from conduit.providers.bedrock import BedrockFactory, BedrockSettings
 from conduit.providers.bedrock.auth import SHORT_TERM_PREFIX
@@ -195,10 +196,24 @@ class TestApiKeys:
             client_for({"mode": "short_term_api_key"})
 
 
+class AnsweringFactory(BedrockFactory):
+    """The real factory, with a local answer hooked onto each client it builds."""
+
+    def __init__(self, sent: Sent) -> None:
+        super().__init__()
+        self.sent = sent
+
+    def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
+        client = super().create_client(settings, secrets)
+        client.meta.events.register("before-send.bedrock-runtime", self.sent)
+        return client
+
+
 class TestThroughTheRegistry:
     async def test_a_converse_call_end_to_end_without_a_network(self) -> None:
+        sent = Sent()
         registry = ProviderRegistry(
-            secrets=LiteralSecretResolver(SECRETS), factories=[BedrockFactory()]
+            secrets=LiteralSecretResolver(SECRETS), factories=[AnsweringFactory(sent)]
         )
         provider = await registry.build(
             "bedrock_london",
@@ -209,17 +224,15 @@ class TestThroughTheRegistry:
                 "use_converse_stream": False,
             },
         )
-        sent = Sent()
-        client = provider.inner._client  # type: ignore[attr-defined]
-        client.meta.events.register("before-send.bedrock-runtime", sent)
         response = await provider.complete(REQUEST)
         assert response.text == "Hello."
         assert json.loads(sent.requests[0].body)["inferenceConfig"] == {"maxTokens": 16}
         await registry.aclose()
 
     async def test_a_service_error_becomes_a_provider_failure_without_its_text(self) -> None:
+        failing = Sent(status=400, body={"message": "echoed prompt text Hi"})
         registry = ProviderRegistry(
-            secrets=LiteralSecretResolver(SECRETS), factories=[BedrockFactory()]
+            secrets=LiteralSecretResolver(SECRETS), factories=[AnsweringFactory(failing)]
         )
         provider = await registry.build(
             "bedrock_london",
@@ -230,10 +243,6 @@ class TestThroughTheRegistry:
                 "use_converse_stream": False,
                 "max_attempts": 1,
             },
-        )
-        failing = Sent(status=400, body={"message": "echoed prompt text Hi"})
-        provider.inner._client.meta.events.register(  # type: ignore[attr-defined]
-            "before-send.bedrock-runtime", failing
         )
         with pytest.raises(ProviderError) as raised:
             await provider.complete(REQUEST)
