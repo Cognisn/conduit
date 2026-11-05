@@ -190,6 +190,20 @@ class TestToolUse:
             _ = [event async for event in translate(source())]
         assert caught.value.failure is ProviderFailure.PROTOCOL
 
+    async def test_the_translator_refuses_invalid_json_with_nothing_chained(self) -> None:
+        events = _simple(
+            *tool_block(0, "toolu_01", "x", '{"SECRET-MARKER": '), stop_reason="tool_use"
+        )
+
+        async def source() -> AsyncIterator[Any]:
+            for event in events:
+                yield event
+
+        with pytest.raises(ProviderError) as caught:
+            _ = [event async for event in translate(source())]
+        assert caught.value.failure is ProviderFailure.PROTOCOL
+        fakes.assert_clean(caught.value, "SECRET-MARKER")
+
     async def test_a_tool_call_cut_off_before_any_input_is_dropped(self) -> None:
         body = [
             {
