@@ -25,14 +25,17 @@ import pytest
 
 # Rewrite the suites' assertions so a failing scenario reports its values.
 pytest.register_assert_rewrite(
-    "conduit.testing.conformance.transcript", "conduit.testing.conformance.token"
+    "conduit.testing.conformance.transcript",
+    "conduit.testing.conformance.token",
+    "conduit.testing.conformance.skill",
 )
 
 from conduit.testing.conformance.base import ConformanceSuite  # noqa: E402
+from conduit.testing.conformance.skill import SkillSourceSuite  # noqa: E402
 from conduit.testing.conformance.token import TokenStoreSuite  # noqa: E402
 from conduit.testing.conformance.transcript import TranscriptStoreSuite  # noqa: E402
 
-__all__ = ["ConformanceSuite", "TokenStoreSuite", "TranscriptStoreSuite"]
+__all__ = ["ConformanceSuite", "SkillSourceSuite", "TokenStoreSuite", "TranscriptStoreSuite"]
 
 
 def pytest_configure(config: pytest.Config) -> None:
