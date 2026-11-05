@@ -12,7 +12,7 @@ from conduit.core.errors import ConfigurationError
 from conduit.core.events import MemoryEventSink
 from conduit.core.transcript import SkillUse
 from conduit.core.types import CacheBreakpoint, TextBlock
-from conduit.skills.disclosure import DisclosureLimits, SkillSession
+from conduit.skills.disclosure import DisclosureLimits, SkillSession, render_skill
 from conduit.skills.errors import (
     SkillInvalid,
     SkillNotFound,
@@ -189,14 +189,24 @@ class TestLimits:
         assert caught.value.reason == "loaded_too_large"
 
     async def test_the_loaded_size_limit_is_inclusive(self) -> None:
+        # The limit counts each skill as rendered into the prefix, not its body alone.
         session = _session(
             skill("a", "x" * 60),
             skill("b", "x" * 40),
-            limits=DisclosureLimits(max_loaded_bytes=100),
+            limits=DisclosureLimits(max_loaded_bytes=1000),
         )
         await session.load("a")
         await session.load("b")
-        assert session.loaded_size == 100
+        exact = session.loaded_size
+        assert exact == sum(len(render_skill(s).encode()) for s in session.loaded)
+        again = _session(
+            skill("a", "x" * 60),
+            skill("b", "x" * 40),
+            limits=DisclosureLimits(max_loaded_bytes=exact),
+        )
+        await again.load("a")
+        await again.load("b")
+        assert again.loaded_size == exact
 
     async def test_a_resource_over_the_disclosure_limit_is_refused(self) -> None:
         session = _session(
@@ -372,6 +382,7 @@ class TestEvents:
             task_class="chat",
         )
         await session.load("a")
+        session_loaded = session.loaded
         await session.read_resource("a", "r.md")
         await session.unload("a")
         loaded, used, unloaded = sink.events
@@ -382,7 +393,9 @@ class TestEvents:
             len(body.encode()),
             1,
         )
-        assert (loaded.loaded_count, loaded.loaded_size) == (1, len(body.encode()))
+        # loaded_size is the loaded skills' size in the prefix, as rendered.
+        rendered = len(render_skill(session_loaded[0]).encode())
+        assert (loaded.loaded_count, loaded.loaded_size) == (1, rendered)
         assert (loaded.run_id, loaded.task_class) == ("run_1", "chat")
         assert isinstance(used, SkillUsedEvent)
         assert (used.resource, used.resource_size) == ("r.md", len(f"R {MARKER}".encode()))

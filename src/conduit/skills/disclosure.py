@@ -23,11 +23,23 @@ when one is given and kept in ``markers``, and a skill event carrying names, ver
 and sizes only. ``restore(transcript)`` reloads a resumed session's skills in their
 original order without writing new markers.
 
-Limits are guards: at most ``max_loaded`` skills and ``max_loaded_bytes`` of bodies
-at once, at most ``max_resource_bytes`` per resource read, only skills the session
-lists (and the product allows), and a resource only once its skill is loaded. The
-session holds a lock, so concurrent tool calls cannot pass a limit or load a skill
-twice.
+Limits are guards, and they count the prefix as it is sent:
+
+- at most ``max_loaded`` skills at once, and at most ``max_loaded_bytes`` of loaded
+  skills as rendered into the prefix (the product's ``render_skill`` output, so a
+  long resource list counts as much as the body);
+- at most ``max_listed`` skills in the listing, and a rendered listing of at most
+  ``max_listing_bytes``. The listing keeps the first skills by name that fit both
+  limits and leaves out the rest (logged by count); a skill left out is not listed
+  and so cannot be loaded. A summary whose name, version or description the format
+  would refuse (a description must be one line without control characters) is left
+  out too;
+- at most ``max_resource_bytes`` per resource read, only skills the session lists
+  (and the product allows), and a resource only once its skill is loaded.
+
+The session holds a lock, so concurrent tool calls cannot pass a limit or load a skill
+twice, and the listing snapshot is taken under its own lock, so concurrent first
+callers share one fetch and one listing.
 """
 
 from __future__ import annotations
@@ -58,7 +70,12 @@ from conduit.skills.events import (
     SkillUnloadedEvent,
     SkillUsedEvent,
 )
-from conduit.skills.format import is_skill_name, is_skill_version, resource_path_refusal
+from conduit.skills.format import (
+    is_skill_description,
+    is_skill_name,
+    is_skill_version,
+    resource_path_refusal,
+)
 
 if TYPE_CHECKING:
     from conduit.skills.tool import UseSkillTool
@@ -87,8 +104,10 @@ class DisclosureLimits:
     """What one session discloses. Each limit is inclusive."""
 
     max_loaded: int = 8
-    max_loaded_bytes: int = 256 * 1024
+    max_loaded_bytes: int = 256 * 1024  # loaded skills as rendered into the prefix
     max_resource_bytes: int = 64 * 1024
+    max_listed: int = 64
+    max_listing_bytes: int = 32 * 1024  # the rendered listing
 
     def __post_init__(self) -> None:
         for name in self.__slots__:
@@ -175,8 +194,10 @@ class SkillSession:
         self._render_listing = render_listing
         self._render_skill = render_skill
         self._lock = asyncio.Lock()
+        self._listing_lock = asyncio.Lock()
         self._summaries: tuple[SkillSummary, ...] | None = None
         self._loaded: dict[str, LoadedSkill] = {}
+        self._rendered: dict[str, int] = {}  # each loaded skill's rendered size
         self._markers: list[SkillUse] = []
         self._started = False
 
@@ -189,8 +210,8 @@ class SkillSession:
 
     @property
     def loaded_size(self) -> int:
-        """The loaded bodies' total size in UTF-8 bytes."""
-        return sum(s.body_size for s in self._loaded.values())
+        """The loaded skills' size in the prefix: their rendered text, in UTF-8 bytes."""
+        return sum(self._rendered.values())
 
     @property
     def markers(self) -> tuple[SkillUse, ...]:
@@ -207,13 +228,17 @@ class SkillSession:
 
     async def summaries(self) -> tuple[SkillSummary, ...]:
         """The skills the model may load, sorted by name: a snapshot taken on first use."""
-        if self._summaries is None:
-            self._summaries = await self._fetch_summaries()
-        return self._summaries
+        snapshot = self._summaries
+        if snapshot is not None:
+            return snapshot
+        async with self._listing_lock:
+            if self._summaries is None:
+                self._summaries = await self._fetch_summaries()
+            return self._summaries
 
     async def refresh(self) -> tuple[SkillSummary, ...]:
         """Take a new snapshot of the source's skills. Changes the prefix if they changed."""
-        async with self._lock:
+        async with self._lock, self._listing_lock:
             self._summaries = await self._fetch_summaries()
             return self._summaries
 
@@ -221,8 +246,10 @@ class SkillSession:
         kept: dict[str, SkillSummary] = {}
         left_out = 0
         for summary in await self._source.list_skills():
-            valid = is_skill_name(summary.name) and (
-                summary.version is None or is_skill_version(summary.version)
+            valid = (
+                is_skill_name(summary.name)
+                and (summary.version is None or is_skill_version(summary.version))
+                and is_skill_description(summary.description)
             )
             if not valid or summary.name in kept:
                 left_out += 1
@@ -232,9 +259,22 @@ class SkillSession:
             kept[summary.name] = summary
         if left_out:
             logger.warning(
-                "%d skill summaries left out: invalid or repeated names or versions", left_out
+                "%d skill summaries left out: invalid or repeated names, versions or descriptions",
+                left_out,
             )
-        return tuple(kept[name] for name in sorted(kept))
+        listed: list[SkillSummary] = []
+        for name in sorted(kept):
+            if len(listed) >= self.limits.max_listed:
+                break
+            rendered = self._render_listing([*listed, kept[name]])
+            if len(rendered.encode("utf-8")) > self.limits.max_listing_bytes:
+                break
+            listed.append(kept[name])
+        if len(listed) < len(kept):
+            logger.warning(
+                "%d skill(s) left out of the listing by its limits", len(kept) - len(listed)
+            )
+        return tuple(listed)
 
     async def _listed(self) -> frozenset[str]:
         return frozenset(s.name for s in await self.summaries())
@@ -272,9 +312,10 @@ class SkillSession:
             if len(self._loaded) >= self.limits.max_loaded:
                 await self._refuse("too_many_loaded", name, context)
                 raise SkillRefused("too_many_loaded", skill=name)
-            loaded = await self._acquire(name, context)
+            loaded, size = await self._acquire(name, context)
             await self._mark(loaded.name, loaded.version, "loaded")
             self._loaded[loaded.name] = loaded
+            self._rendered[loaded.name] = size
             self._started = True
             await self._emit_loaded(loaded, context)
             return loaded
@@ -314,6 +355,7 @@ class SkillSession:
                 raise SkillRefused("skill_not_loaded", skill=name if listed else None)
             await self._mark(loaded.name, loaded.version, "unloaded")
             del self._loaded[name]
+            del self._rendered[name]
             await self._emit(
                 SkillUnloadedEvent(
                     skill=loaded.name,
@@ -342,23 +384,25 @@ class SkillSession:
                     elif entry.skill not in order:
                         order[entry.skill] = entry.version
             for name, version in order.items():
-                loaded: LoadedSkill | None = None
+                acquired: tuple[LoadedSkill, int] | None = None
                 try:
                     if len(self._loaded) < self.limits.max_loaded:
-                        loaded = await self._acquire(name, None)
+                        acquired = await self._acquire(name, None)
                 except SkillError:
-                    loaded = None
-                if loaded is None:
+                    acquired = None
+                if acquired is None:
                     await self._mark(name, version, "unloaded")
                     continue
-                self._loaded[name] = loaded
-                await self._emit_loaded(loaded, None)
+                self._loaded[name], self._rendered[name] = acquired
+                await self._emit_loaded(acquired[0], None)
             self._started = True
 
     # Internals (called with the lock held).
 
-    async def _acquire(self, name: str, context: ToolCallContext | None) -> LoadedSkill:
-        """Load ``name`` from the source after every check; nothing is committed."""
+    async def _acquire(self, name: str, context: ToolCallContext | None) -> tuple[LoadedSkill, int]:
+        """``name`` from the source, with its rendered size, after every check.
+
+        Nothing is committed."""
         await self._require_listed(name, context)
         missing = False
         try:
@@ -383,10 +427,11 @@ class SkillSession:
             body=skill.body,
             resources=MappingProxyType(dict(skill.resources)),
         )
-        if self.loaded_size + loaded.body_size > self.limits.max_loaded_bytes:
+        size = len(self._render_skill(loaded).encode("utf-8"))
+        if self.loaded_size + size > self.limits.max_loaded_bytes:
             await self._refuse("loaded_too_large", name, context)
             raise SkillRefused("loaded_too_large", skill=name)
-        return loaded
+        return loaded, size
 
     def _resource(self, loaded: LoadedSkill, path: str) -> tuple[str, int, str | None]:
         """The resource's text and size, or the reason it is refused."""
