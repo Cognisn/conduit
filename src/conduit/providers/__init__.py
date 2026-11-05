@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from conduit.core.registry import ProviderFactory
+from conduit.providers.anthropic import AnthropicFactory
 from conduit.providers.bedrock import BedrockFactory
+from conduit.providers.gemini import GeminiFactory
+from conduit.providers.ollama import OllamaFactory
+from conduit.providers.openai_compat import OpenAICompatFactory
 from conduit.providers.stub import StubFactory
 
 __all__ = ["builtin_factories"]
@@ -15,4 +19,11 @@ def builtin_factories() -> list[ProviderFactory]:
     Each adapter imports its SDK only inside ``create_client``, so building this list
     never needs an extra installed.
     """
-    return [StubFactory(), BedrockFactory()]
+    return [
+        StubFactory(),
+        BedrockFactory(),
+        AnthropicFactory(),
+        OpenAICompatFactory(),
+        GeminiFactory(),
+        OllamaFactory(),
+    ]

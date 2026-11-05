@@ -1,0 +1,114 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "max_completion_tokens": 512,
+        "messages": [
+          {
+            "content": "You are a concise assistant.",
+            "role": "system"
+          },
+          {
+            "content": [
+              {
+                "text": "Say hello.",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "gpt-5",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "response": [
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "",
+                "role": "assistant"
+              },
+              "finish_reason": null,
+              "index": 0
+            }
+          ],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "gpt-5",
+          "object": "chat.completion.chunk",
+          "usage": null
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "Hello"
+              },
+              "finish_reason": null,
+              "index": 0
+            }
+          ],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "gpt-5",
+          "object": "chat.completion.chunk",
+          "usage": null
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": ", there."
+              },
+              "finish_reason": null,
+              "index": 0
+            }
+          ],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "gpt-5",
+          "object": "chat.completion.chunk",
+          "usage": null
+        },
+        {
+          "choices": [
+            {
+              "delta": {},
+              "finish_reason": "stop",
+              "index": 0
+            }
+          ],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "gpt-5",
+          "object": "chat.completion.chunk",
+          "usage": null
+        },
+        {
+          "choices": [],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "gpt-5",
+          "object": "chat.completion.chunk",
+          "usage": {
+            "completion_tokens": 24,
+            "completion_tokens_details": {
+              "reasoning_tokens": 16
+            },
+            "prompt_tokens": 2048,
+            "prompt_tokens_details": {
+              "cached_tokens": 1920
+            },
+            "total_tokens": 2072
+          }
+        }
+      ]
+    }
+  ],
+  "name": "openai-text-cached",
+  "provider": "openai_compat"
+}

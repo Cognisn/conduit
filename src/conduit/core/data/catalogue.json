@@ -1,6 +1,21 @@
 {
-  "version": "2026.11.2",
+  "version": "2026.11.5",
   "models": [
+    {
+      "model_id": "claude-fable-5-1",
+      "provider": "anthropic",
+      "kind": "chat",
+      "residency_scope": "global",
+      "regions": [],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
     {
       "model_id": "claude-opus-5-5",
       "provider": "anthropic",
@@ -59,7 +74,7 @@
         "structured_output": true
       },
       "context_window": 1000000,
-      "output_limit": 64000
+      "output_limit": 128000
     },
     {
       "model_id": "claude-haiku-4-5",
@@ -793,6 +808,36 @@
       "output_limit": 128000
     },
     {
+      "model_id": "gpt-6-astra",
+      "provider": "openai",
+      "kind": "chat",
+      "residency_scope": "global",
+      "regions": [],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1050000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "gpt-6.1-sol",
+      "provider": "openai",
+      "kind": "chat",
+      "residency_scope": "global",
+      "regions": [],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1050000,
+      "output_limit": 128000
+    },
+    {
       "model_id": "text-embedding-3-small",
       "provider": "openai",
       "kind": "embedding",
@@ -803,7 +848,7 @@
       "embedding_dimensions": 1536
     },
     {
-      "model_id": "grok-4",
+      "model_id": "grok-4.3",
       "provider": "xai",
       "kind": "chat",
       "residency_scope": "global",
@@ -814,11 +859,11 @@
         "prompt_caching": true,
         "structured_output": true
       },
-      "context_window": 256000,
-      "output_limit": 16384
+      "context_window": 1000000,
+      "output_limit": 128000
     },
     {
-      "model_id": "gemini-2.5-pro",
+      "model_id": "gemini-4-argon",
       "provider": "gemini",
       "kind": "chat",
       "residency_scope": "global",
@@ -833,7 +878,37 @@
       "output_limit": 65536
     },
     {
-      "model_id": "gemini-2.5-flash",
+      "model_id": "gemini-3.8-flash",
+      "provider": "gemini",
+      "kind": "chat",
+      "residency_scope": "global",
+      "regions": [],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1048576,
+      "output_limit": 65536
+    },
+    {
+      "model_id": "gemini-3.6-flash",
+      "provider": "gemini",
+      "kind": "chat",
+      "residency_scope": "global",
+      "regions": [],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1048576,
+      "output_limit": 65536
+    },
+    {
+      "model_id": "gemini-3.5-flash-lite",
       "provider": "gemini",
       "kind": "chat",
       "residency_scope": "global",
@@ -890,7 +965,7 @@
       "residency_scope": "local",
       "regions": [],
       "capabilities": {},
-      "context_window": 8192,
+      "context_window": 2048,
       "embedding_dimensions": 768
     },
     {

@@ -6,6 +6,81 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a7] - 2026-11-04
+
+Wave 2, sixth merge: the Gemini and Ollama adapters (`feat/0.1.0-provider-gemini-ollama`).
+
+### Added
+
+- The Gemini adapter (`conduit.providers.gemini`, `gemini` extra with google-genai):
+  - an API key as a secret reference, with the key, backend and base URL pinned against the environment;
+  - streaming text and function calls, with Gemini thought signatures remembered per call and returned on the next turn;
+  - usage from the final chunk, with cached prompt tokens reported as cache reads;
+  - cache breakpoints ignored, as documented in the adapter.
+- The Ollama adapter (`conduit.providers.ollama`, `ollama` extra with httpx):
+  - an httpx client with a loopback default, ignoring the environment's proxies and never following redirects;
+  - `/api/chat` NDJSON streaming with stream lines bounded at 8 MiB; text, tool calls, and usage with cached prompt tokens as cache reads where Ollama reports them;
+  - a call whose response finished is not failed by an error closing the body.
+- Both adapters map every failure to a provider failure that carries no part of the failing exception, and a failing close never replaces a failure.
+- Catalogue: four current Gemini models.
+- The import tripwire allows a library several owning layers: httpx is owned by the Ollama adapter and the MCP layer, asyncpg and aiosqlite by the SQL stores, and google.genai is pinned to the Gemini adapter.
+
+### Changed
+
+- `builtin_factories()` includes the Gemini and Ollama factories.
+- Catalogue: `nomic-embed-text`'s context window is 2048, and the catalogue's version is 2026.11.5.
+
+### Removed
+
+- Catalogue: Gemini 2.5 Pro and Gemini 2.5 Flash, which Google has deprecated.
+
+
+## [0.1.0a6] - 2026-11-04
+
+Wave 2, fifth merge: the OpenAI-compatible adapter (`feat/0.1.0-provider-openai-compat`).
+
+### Added
+
+- The OpenAI-compatible adapter (`conduit.providers.openai_compat`, `openai` extra with openai and azure-identity), for OpenAI, X.AI and Microsoft Foundry:
+  - Foundry takes an API key or Microsoft Entra ID.
+  - Streaming Chat Completions with usage on the final chunk; tool calls assembled from argument deltas; images and tool results.
+  - Structured output where the catalogue allows it.
+  - Cached prompt tokens reported as cache reads.
+  - Errors, including malformed stream chunks and stream close failures, mapped to provider failures with no provider text and no chained exception.
+  - Cache breakpoints are ignored, because caching on these services is automatic.
+- Catalogue: grok-4.3 on X.AI; GPT-6 Astra and GPT-6.1 Sol on OpenAI.
+- Licence audit: certifi (MPL-2.0), the CA bundle httpx and requests require, admitted as a named exception, used unmodified and installed separately (Q0016).
+
+### Changed
+
+- `builtin_factories()` includes the OpenAI-compatible factory.
+- The default catalogue's version is 2026.11.4.
+
+### Removed
+
+- Catalogue: the retired grok-4 entry (X.AI now serves grok-4.3 in its place).
+
+
+## [0.1.0a5] - 2026-11-04
+
+Wave 2, fourth merge: the Anthropic adapter (`feat/0.1.0-provider-anthropic`), and the Bedrock error-chain follow-up.
+
+### Added
+
+- The Anthropic adapter (`conduit.providers.anthropic`, `anthropic` extra) for the direct API and Claude in Microsoft Foundry:
+  - streaming text, and tool use assembled from input JSON deltas, reported once a call is known to be whole;
+  - all four usage counts, taken from the final message events;
+  - cache control from breakpoints, within the four-breakpoint limit;
+  - images, tool results, stop reasons and structured output;
+  - failures mapped to provider failures that carry no part of the failing exception.
+  - Keys are secret references. The client takes its key, endpoint and headers only from conduit's settings, and refuses SDK environment variables that would override them or log request content.
+
+### Changed
+
+- Default catalogue: Claude Sonnet 4.6's output limit is 128K on the Anthropic API, Claude Fable 5.1 is added, and the catalogue's version is 2026.11.3.
+- `builtin_factories()` includes the Anthropic factory.
+- Bedrock provider and configuration errors carry no part of the failing exception: no cause and no context. A stream event or Converse response whose fields have the wrong type is a protocol failure.
+
 ## [0.1.0a4] - 2026-11-04
 
 Wave 2, third merge: the Amazon Bedrock adapter (`feat/0.1.0-provider-bedrock`), and the stores follow-up (Q0018).

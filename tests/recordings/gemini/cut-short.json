@@ -1,0 +1,66 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "config": {
+          "max_output_tokens": 8,
+          "system_instruction": "You answer questions about the example.com inventory."
+        },
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Describe the example.com network."
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "gemini-3.8-flash"
+      },
+      "response": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "The example.com network "
+                  }
+                ],
+                "role": "model"
+              },
+              "index": 0
+            }
+          ],
+          "model_version": "gemini-3.8-flash",
+          "response_id": "resp_example0001"
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "has two"
+                  }
+                ],
+                "role": "model"
+              },
+              "finish_reason": "MAX_TOKENS",
+              "index": 0
+            }
+          ],
+          "model_version": "gemini-3.8-flash",
+          "response_id": "resp_example0001",
+          "usage_metadata": {
+            "candidates_token_count": 8,
+            "prompt_token_count": 30
+          }
+        }
+      ]
+    }
+  ],
+  "name": "gemini-cut-short",
+  "provider": "gemini"
+}

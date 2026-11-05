@@ -148,12 +148,15 @@ class BedrockFactory:
                 refresh_before_s=auth.refresh_before_s,
                 clock=clock,
             )
+            refused: str | None = None
             try:
                 key_source.current()  # refuse missing credentials at start-up
             except Exception as error:
+                refused = type(error).__name__
+            if refused is not None:
                 raise ConfigurationError(
-                    f"a short-term Bedrock API key cannot be generated: {type(error).__name__}"
-                ) from None
+                    f"a short-term Bedrock API key cannot be generated: {refused}"
+                )
             session = boto3.session.Session(region_name=region)
         elif isinstance(auth, LongTermApiKeyAuth):
             key_source = StaticKeySource(secret("auth.api_key"))
