@@ -10,6 +10,9 @@ Usage is computed deterministically and carries all four counts. A request with 
 cache breakpoint writes its prefix to the stub's cache the first time and reads it on
 every later call with the same prefix, so cache accounting can be tested end to end.
 
+A stub keeps every request it is sent (``requests``) and every cached prefix for its
+whole life: both grow without bound, which suits a test but not a long-running process.
+
 Constructing a stub needs ``not_for_production=True``, in code and in settings.
 """
 

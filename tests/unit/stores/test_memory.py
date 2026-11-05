@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
 from pydantic import SecretStr
 
 from conduit.core.backends import TokenSet, TokenStore
-from conduit.core.transcript import MessageEntry, TranscriptStore
+from conduit.core.transcript import CompactionPoint, MessageEntry, TranscriptStore
 from conduit.core.types import Message
 from conduit.stores.memory import MemoryTokenStore, MemoryTranscriptStore
 
@@ -39,3 +40,16 @@ async def test_the_token_store_round_trips_and_deletes() -> None:
     await store.delete("mcp:example")
     assert await store.get("mcp:example") is None
     await store.delete("mcp:example")  # deleting what is absent is not an error
+
+
+async def test_a_refused_append_leaves_the_stored_json_untouched() -> None:
+    store = MemoryTranscriptStore()
+    await store.append("s", [MessageEntry(message=Message.user("a"))])
+    before = store.raw("s")
+    ahead = CompactionPoint(summary=Message.user("later"), replaces_through=5, strategy="x")
+    with pytest.raises(ValueError):
+        await store.append("s", [MessageEntry(message=Message.user("b")), ahead])
+    assert store.raw("s") == before
+    with pytest.raises(ValueError):
+        await store.append("new", [ahead])
+    assert await store.list_sessions() == ["s"]

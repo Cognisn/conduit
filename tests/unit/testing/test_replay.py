@@ -75,6 +75,11 @@ class TestFiles:
             "someone@cognisn.com",
             "8.8.8.8",
             "arn:aws:bedrock:ap-southeast-2:987654321098:inference-profile/x",
+            "account 987654321098 in the response",
+            '"OwnerId": "111122223333"',
+            "2606:4700:4700::1111",
+            "fe80::1ff:fe23:4567:890a",
+            "[2a00:1450:4001:82a::200e]:443",
         ],
     )
     def test_an_unscrubbed_recording_is_refused(self, leak: str, tmp_path: Path) -> None:
@@ -102,6 +107,13 @@ class TestFiles:
             "203.0.113.200",
             "127.0.0.1",
             "arn:aws:bedrock:ap-southeast-2:123456789012:inference-profile/x",
+            "account 123456789012 in the response",
+            "2001:db8::10",
+            "2001:DB8:0:0:1::1",
+            "::1",
+            "the time was 12:30:45",
+            "1234567890123 is thirteen digits; 12345678901 is eleven",
+            "a version of 0.123456789012",
         ],
     )
     def test_synthetic_values_pass(self, allowed: str) -> None:
