@@ -59,7 +59,7 @@ all-providers = [
 ]
 # Layers (C12 to C15, C19, C10).
 local-embeddings = []
-mcp = []
+mcp = ["mcp>=1.30,<2"]
 sql = [
     "sqlalchemy[asyncio]>=2.0.30,<2.1",
     "alembic>=1.13,<2",
