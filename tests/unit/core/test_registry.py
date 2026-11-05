@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import aclosing
+
 import pytest
 
+from conduit.core.catalogue import Catalogue, ModelEntry
 from conduit.core.errors import (
     ConfigurationError,
+    ModelNotAssigned,
     ProviderError,
     ProviderFailure,
+    ResidencyRefused,
     SecretUnavailable,
     UndeclaredModel,
 )
@@ -18,10 +24,11 @@ from conduit.core.events import (
     ModelCallStartedEvent,
 )
 from conduit.core.registry import ProviderRegistry
+from conduit.core.residency import ResidencyPolicy, ResidencyScope
 from conduit.core.secrets import LiteralSecretResolver
-from conduit.core.streaming import StreamStopped
-from conduit.core.types import Message, ModelRequest
-from tests.unit.core.fakes import CATALOGUE, USAGE, FakeFactory, FakeSettings
+from conduit.core.streaming import StreamStopped, TextDelta
+from conduit.core.types import Message, ModelRequest, Usage
+from tests.unit.core.fakes import CATALOGUE, PARTIAL, USAGE, FakeFactory, FakeSettings
 
 SECRETS = LiteralSecretResolver({"fake/key": "not-a-real-key"})
 PROMPT = "Draft a note for the team at example.org"
@@ -38,14 +45,17 @@ def _registry(
     return registry, factory
 
 
-def _request(model: str = "fake-large") -> ModelRequest:
+def _request(model: str = "fake-large", task_class: str | None = "chat") -> ModelRequest:
     return ModelRequest(
         model=model,
         messages=(Message.user(PROMPT),),
         max_output_tokens=100,
         run_id="run_1",
-        task_class="chat",
+        task_class=task_class,
     )
+
+
+FAKE = {"kind": "fake", "api_key": "secret://fake/key"}
 
 
 class TestRegistration:
@@ -177,3 +187,259 @@ class TestMetering:
         finished = sink.events[-1]
         assert isinstance(finished, ModelCallFinishedEvent)
         assert finished.failure is ProviderFailure.PROTOCOL
+
+
+class TestAssignmentScope:
+    """A provider built for resolved assignments calls only the models resolved for it."""
+
+    async def test_the_resolved_models_are_exposed(self) -> None:
+        registry, _ = _registry()
+        provider = await registry.build(
+            "primary", FAKE, assigned={"chat": "fake-large", "summary": "fake-small"}
+        )
+        assert provider.assigned_models == frozenset({"fake-large", "fake-small"})
+        unbound = await registry.build("spare", FAKE)
+        assert unbound.assigned_models is None
+
+    async def test_another_declared_model_is_refused_before_the_adapter_is_called(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build("primary", FAKE, assigned={"chat": "fake-large"})
+        for task_class in ("chat", None):
+            with pytest.raises(ModelNotAssigned):
+                await provider.complete(_request("fake-small", task_class))
+        assert sink.events == []
+        assert factory.providers[0].requests == []
+
+    async def test_a_task_class_is_held_to_its_own_model(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build(
+            "primary", FAKE, assigned={"chat": "fake-large", "summary": "fake-small"}
+        )
+        with pytest.raises(ModelNotAssigned):
+            await provider.complete(_request("fake-small", "chat"))
+        with pytest.raises(ModelNotAssigned):
+            await provider.complete(_request("fake-large", "elsewhere"))
+        assert sink.events == []
+        assert factory.providers[0].requests == []
+
+    async def test_calls_within_the_assignment_are_served(self) -> None:
+        sink = MemoryEventSink()
+        registry, _ = _registry(sink)
+        provider = await registry.build(
+            "primary", FAKE, assigned={"chat": "fake-large", "summary": "fake-small"}
+        )
+        await provider.complete(_request("fake-large", "chat"))
+        await provider.complete(_request("fake-small", "summary"))
+        await provider.complete(_request("fake-small", None))
+        assert [e.type for e in sink.events].count("model_call_finished") == 3
+
+    async def test_an_empty_assignment_is_refused_when_built(self) -> None:
+        registry, factory = _registry()
+        with pytest.raises(ConfigurationError):
+            await registry.build("primary", FAKE, assigned={})
+        assert factory.clients == []
+
+    async def test_an_undeclared_assigned_model_is_refused_when_built(self) -> None:
+        registry, factory = _registry()
+        with pytest.raises(UndeclaredModel):
+            await registry.build("primary", FAKE, assigned={"chat": "fake-unknown"})
+        assert factory.clients == []
+
+
+def _scoped_catalogue() -> Catalogue:
+    return Catalogue(
+        [
+            *CATALOGUE,
+            ModelEntry(
+                model_id="fake-global",
+                provider="fake",
+                residency_scope=ResidencyScope.GLOBAL,
+                context_window=100_000,
+                output_limit=8_000,
+            ),
+        ],
+        version="fake-scoped-1",
+    )
+
+
+class TestRegistryResidency:
+    """A provider built without assignments is held to the registry's residency policy."""
+
+    async def test_a_model_outside_the_policy_is_refused_on_every_call(self) -> None:
+        sink = MemoryEventSink()
+        registry = ProviderRegistry(
+            secrets=SECRETS,
+            catalogue=_scoped_catalogue(),
+            events=sink,
+            residency=ResidencyPolicy(scopes=frozenset({ResidencyScope.LOCAL})),
+            factories=[FakeFactory()],
+        )
+        provider = await registry.build("p", FAKE)
+        with pytest.raises(ResidencyRefused):
+            await provider.complete(_request("fake-global"))
+        assert sink.events == []
+        await provider.complete(_request("fake-large"))
+        assert len(sink.events) == 2
+
+    async def test_without_a_policy_every_declared_model_is_allowed(self) -> None:
+        registry = ProviderRegistry(
+            secrets=SECRETS, catalogue=_scoped_catalogue(), factories=[FakeFactory()]
+        )
+        assert registry.residency == ResidencyPolicy()
+        provider = await registry.build("p", FAKE)
+        response = await provider.complete(_request("fake-global"))
+        assert response.text == f"echo: {PROMPT}"
+
+
+def _finished(sink: MemoryEventSink) -> list[ModelCallFinishedEvent]:
+    return [e for e in sink.events if isinstance(e, ModelCallFinishedEvent)]
+
+
+class TestEndedEarly:
+    """Every call is metered once, however it ends, and its inner stream is closed."""
+
+    async def test_a_consumer_that_stops_early_is_metered_as_abandoned(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build("p", FAKE)
+        async with aclosing(provider.stream(_request())) as events:
+            async for event in events:
+                if isinstance(event, TextDelta):
+                    break
+        (finished,) = _finished(sink)
+        assert finished.outcome == "failed"
+        assert finished.error_type == "abandoned"
+        assert finished.usage == Usage.zero()
+        assert factory.providers[0].streams_closed == 1
+
+    async def test_a_cancelled_call_is_metered_with_the_last_usage_seen(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build("p", {**FAKE, "behaviour": "slow"})
+        call = asyncio.create_task(provider.complete(_request()))
+        await asyncio.wait_for(factory.providers[0].waiting.wait(), 5)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        (finished,) = _finished(sink)
+        assert finished.outcome == "failed"
+        assert finished.error_type == "cancelled"
+        assert finished.usage == PARTIAL
+        assert factory.providers[0].streams_closed == 1
+
+    async def test_collect_refusing_an_event_after_the_stop_still_meters_the_call(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build("p", {**FAKE, "behaviour": "after_stop"})
+        with pytest.raises(ProviderError) as raised:
+            await provider.complete(_request())
+        assert raised.value.failure is ProviderFailure.PROTOCOL
+        (finished,) = _finished(sink)
+        assert finished.outcome == "failed"
+        assert finished.error_type == "abandoned"
+        assert finished.usage == USAGE
+        assert factory.providers[0].streams_closed == 1
+
+    async def test_a_finished_stream_is_metered_once_and_closed(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build("p", FAKE)
+        await provider.complete(_request())
+        (finished,) = _finished(sink)
+        assert finished.outcome == "ok"
+        assert factory.providers[0].streams_closed == 1
+
+    async def test_a_provider_failure_after_usage_carries_that_usage(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build("p", {**FAKE, "behaviour": "no_stop"})
+        with pytest.raises(ProviderError):
+            await provider.complete(_request())
+        (finished,) = _finished(sink)
+        assert finished.failure is ProviderFailure.PROTOCOL
+        assert finished.usage == PARTIAL
+        assert factory.providers[0].streams_closed == 1
+
+
+class _BlockingSink:
+    """Holds the started event until cancelled, to cancel a call during that emit."""
+
+    def __init__(self) -> None:
+        self.events: list[object] = []
+        self.blocked = asyncio.Event()
+
+    async def emit(self, event: object) -> None:
+        if isinstance(event, ModelCallStartedEvent):
+            self.blocked.set()
+            await asyncio.sleep(30)
+        self.events.append(event)
+
+
+class TestReviewFollowUps:
+    async def test_an_assigned_build_is_held_to_the_residency_policy(self) -> None:
+        registry = ProviderRegistry(
+            secrets=SECRETS,
+            catalogue=_scoped_catalogue(),
+            residency=ResidencyPolicy(scopes=frozenset({ResidencyScope.LOCAL})),
+            factories=[FakeFactory()],
+        )
+        with pytest.raises(ResidencyRefused):
+            await registry.build("p", FAKE, assigned={"anything": "fake-global"})
+        provider = await registry.build("q", FAKE, assigned={"anything": "fake-large"})
+        assert provider.assigned_models == frozenset({"fake-large"})
+
+    async def test_the_adapter_is_not_reachable_around_the_metering(self) -> None:
+        registry, _ = _registry()
+        provider = await registry.build("p", FAKE, assigned={"chat": "fake-small"})
+        assert not hasattr(provider, "inner")
+
+    async def test_a_stream_that_raises_when_called_is_metered_once(self) -> None:
+        sink = MemoryEventSink()
+        registry, _ = _registry(sink)
+        provider = await registry.build("p", {**FAKE, "behaviour": "sync_fail"})
+        with pytest.raises(RuntimeError):
+            await provider.complete(_request())
+        assert [e.type for e in sink.events] == ["model_call_started", "model_call_finished"]
+        (finished,) = _finished(sink)
+        assert finished.outcome == "failed" and finished.error_type == "RuntimeError"
+
+    async def test_a_call_cancelled_while_its_start_is_emitted_is_metered_once(self) -> None:
+        sink = _BlockingSink()
+        registry = ProviderRegistry(
+            secrets=SECRETS, catalogue=CATALOGUE, events=sink, factories=[FakeFactory()]
+        )
+        provider = await registry.build("p", FAKE)
+        call = asyncio.create_task(provider.complete(_request()))
+        await asyncio.wait_for(sink.blocked.wait(), 5)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        finished = [e for e in sink.events if isinstance(e, ModelCallFinishedEvent)]
+        assert len(finished) == 1 and finished[0].error_type == "cancelled"
+
+    async def test_a_consumer_that_stops_after_a_complete_stop_is_metered_ok(self) -> None:
+        sink = MemoryEventSink()
+        registry, _ = _registry(sink)
+        provider = await registry.build("p", FAKE)
+        async with aclosing(provider.stream(_request())) as events:
+            async for event in events:
+                if isinstance(event, StreamStopped):
+                    break
+        (finished,) = _finished(sink)
+        assert finished.outcome == "ok"
+        assert finished.usage == USAGE
+        assert finished.stop_reason is not None
+
+    async def test_a_request_over_the_model_output_limit_is_refused(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build("p", FAKE)
+        over = _request("fake-small").model_copy(update={"max_output_tokens": 1_001})
+        with pytest.raises(ConfigurationError, match="output limit"):
+            await provider.complete(over)
+        assert sink.events == []
+        assert factory.providers[0].requests == []
+        at_limit = _request("fake-small").model_copy(update={"max_output_tokens": 1_000})
+        await provider.complete(at_limit)

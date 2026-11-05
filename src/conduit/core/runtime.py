@@ -5,6 +5,11 @@ provider against its adapter, resolves every task-class assignment (capability f
 residency, undeclared models) and only then builds the providers some task class is
 assigned to. A refusal therefore happens at start-up, before any client exists, and
 never part-way through a task.
+
+Each provider is built for the assignments resolved to it, and serves only those: a
+call through ``Runtime.providers`` or ``TaskBinding.provider`` that names another
+model, or another task class's model, is refused with ``ModelNotAssigned`` before any
+client call. ``TaskBinding.request`` builds requests that stay within the assignment.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from typing import Any
 from pydantic import Field, field_validator
 
 from conduit.core.catalogue import Catalogue, CatalogueOverlay, default_catalogue
+from conduit.core.errors import ConfigurationError
 from conduit.core.events import CapturePolicy, EventSink
 from conduit.core.identifiers import IDENTIFIER_PATTERN
 from conduit.core.registry import MeteredProvider, ProviderFactory, ProviderRegistry
@@ -63,9 +69,14 @@ class TaskBinding:
         tools: Iterable[ToolSpec] = (),
         **fields: Any,
     ) -> ModelRequest:
-        """A request on this task's model, within its output budget."""
+        """A request on this task's model, within its output budget.
+
+        ``max_output_tokens`` defaults to the assignment's budget. One given explicitly
+        is checked again against the model's output limit, as the budget was at
+        start-up, and a ``ConfigurationError`` is raised above it.
+        """
         fields.setdefault("max_output_tokens", self.assignment.max_output_tokens)
-        return ModelRequest(
+        request = ModelRequest(
             model=self.assignment.model,
             system=tuple(system),
             messages=tuple(messages),
@@ -73,6 +84,14 @@ class TaskBinding:
             task_class=self.assignment.task_class.name,
             **fields,
         )
+        limit = self.assignment.entry.output_limit
+        if limit is not None and request.max_output_tokens > limit:
+            raise ConfigurationError(
+                f"{self.assignment.task_class.name}: max_output_tokens "
+                f"{request.max_output_tokens} exceeds model {self.assignment.model!r}'s "
+                f"output limit of {limit}"
+            )
+        return request
 
 
 class Runtime:
@@ -116,6 +135,7 @@ async def start(
         catalogue=applied,
         events=events,
         capture=settings.capture,
+        residency=settings.residency,
         factories=factories,
     )
     validated = {
@@ -132,7 +152,12 @@ async def start(
     providers: dict[str, MeteredProvider] = {}
     try:
         for name in sorted(assignments.providers):
-            providers[name] = await registry.build(name, validated[name])
+            assigned = {
+                task: resolved.model
+                for task, resolved in assignments.items()
+                if resolved.provider == name
+            }
+            providers[name] = await registry.build(name, validated[name], assigned=assigned)
     except BaseException:
         await registry.aclose()
         raise
