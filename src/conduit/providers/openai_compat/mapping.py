@@ -13,6 +13,9 @@ Requests
     cache long prompt prefixes automatically and take no cache markers. Cached tokens
     still come back in usage, as ``cache_read_tokens``.
 
+    Provider state blocks are left out, whatever their kind: this adapter makes none,
+    and other kinds' state is ignored so a conversation can move between providers.
+
     ``output_schema`` becomes a strict ``json_schema`` response format, only for a
     model the catalogue marks ``structured_output``; otherwise the call is refused as
     ``ProviderError(REJECTED)`` before it is made. Strict mode has the provider's own
@@ -29,6 +32,13 @@ Usage
     ``prompt_tokens_details.cached_tokens``, ``cache_read_tokens`` is the cached count,
     and ``cache_write_tokens`` is zero (these services do not bill or report writes).
     ``completion_tokens`` (reasoning included) is ``output_tokens``.
+
+    X.AI (Q0021): its documentation does not settle whether ``completion_tokens``
+    includes ``completion_tokens_details.reasoning_tokens``, so each response's own
+    arithmetic decides. When ``total_tokens`` equals prompt, completion and reasoning
+    tokens added together (with some reasoning), the reasoning is outside the
+    completion and is added to ``output_tokens``; otherwise ``completion_tokens``
+    stands. The rule applies to the ``xai`` service only.
 """
 
 from __future__ import annotations
@@ -55,6 +65,7 @@ from conduit.core.types import (
     ImageBlock,
     Message,
     ModelRequest,
+    ProviderStateBlock,
     StopReason,
     TextBlock,
     ToolResultBlock,
@@ -134,8 +145,8 @@ def _assistant_message(message: Message) -> dict[str, Any]:
                     "function": {"name": block.name, "arguments": _arguments(block.input)},
                 }
             )
-        elif isinstance(block, CacheBreakpoint):
-            continue
+        elif isinstance(block, CacheBreakpoint | ProviderStateBlock):
+            continue  # automatic caching; state is never sent (module docstring)
         else:
             raise ProviderError(ProviderFailure.REJECTED)  # images or results from the model
     body: dict[str, Any] = {"role": "assistant", "content": "".join(text) if text else None}
@@ -197,22 +208,52 @@ def _count(value: Any) -> int:
     return value
 
 
-def usage_from_openai(usage: Mapping[str, Any]) -> Usage:
-    """Usage from a Chat Completions ``usage`` object, cached tokens split out."""
+def _optional_count(value: Any) -> int | None:
+    return None if value is None else _count(value)
+
+
+def _details(usage: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    details = usage.get(key)
+    if details is None:
+        return {}
+    if not isinstance(details, Mapping):
+        raise _protocol()
+    return details
+
+
+def _reasoning_outside(usage: Mapping[str, Any], prompt: int, completion: int) -> int:
+    """The reasoning tokens ``total_tokens`` counts beside ``completion_tokens``, or 0.
+
+    They are counted only when ``total_tokens`` is exactly prompt, completion and
+    reasoning added together, with some reasoning; otherwise the completion already
+    holds them (or nothing says otherwise) and 0 is added.
+    """
+    reasoning = _optional_count(
+        _details(usage, "completion_tokens_details").get("reasoning_tokens")
+    )
+    total = _optional_count(usage.get("total_tokens"))
+    if reasoning and total == prompt + completion + reasoning:
+        return reasoning
+    return 0
+
+
+def usage_from_openai(usage: Mapping[str, Any], *, reasoning_by_total: bool = False) -> Usage:
+    """Usage from a Chat Completions ``usage`` object, cached tokens split out.
+
+    With ``reasoning_by_total`` (the X.AI service), reasoning tokens that
+    ``total_tokens`` shows to be outside ``completion_tokens`` are added to the output.
+    """
     prompt = _count(usage.get("prompt_tokens"))
     completion = _count(usage.get("completion_tokens"))
-    details = usage.get("prompt_tokens_details")
-    if details is None:
-        details = {}
-    elif not isinstance(details, Mapping):
-        raise _protocol()
-    cached_value = details.get("cached_tokens")
-    cached = 0 if cached_value is None else _count(cached_value)
+    cached = _optional_count(_details(usage, "prompt_tokens_details").get("cached_tokens")) or 0
     if cached > prompt:
         raise _protocol()
+    output = completion
+    if reasoning_by_total:
+        output += _reasoning_outside(usage, prompt, completion)
     return Usage(
         input_tokens=prompt - cached,
-        output_tokens=completion,
+        output_tokens=output,
         cache_read_tokens=cached,
         cache_write_tokens=0,
     )
@@ -255,9 +296,13 @@ class _ToolCall:
 
 
 class StreamMapper:
-    """Chat Completions chunks, one at a time, to conduit stream events."""
+    """Chat Completions chunks, one at a time, to conduit stream events.
 
-    def __init__(self) -> None:
+    ``reasoning_by_total`` applies the X.AI usage rule (module docstring).
+    """
+
+    def __init__(self, *, reasoning_by_total: bool = False) -> None:
+        self._reasoning_by_total = reasoning_by_total
         self._calls: dict[int, _ToolCall] = {}
         self._finish: str | None = None
         self._usage: Usage | None = None
@@ -272,7 +317,8 @@ class StreamMapper:
         if usage is not None:
             if not isinstance(usage, Mapping):
                 raise _protocol()
-            self._usage = usage_from_openai(usage)  # the last report wins; never summed
+            # The last report wins; never summed.
+            self._usage = usage_from_openai(usage, reasoning_by_total=self._reasoning_by_total)
         for choice in _sequence(chunk.get("choices")):
             if not isinstance(choice, Mapping):
                 raise _protocol()

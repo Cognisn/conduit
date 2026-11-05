@@ -9,6 +9,10 @@ that is not UTF-8, fails with ``PROTOCOL``. A redirect is never followed: any st
 but 200 is a failure (3xx and 4xx ``REJECTED``).
 If the consumer stops early, the response is closed.
 
+The catalogue (the registry's, passed through the factory) gives the default context
+window, and decides structured output: a schema for a model it does not mark
+``structured_output`` is refused as ``REJECTED`` before any call.
+
 Every error becomes ``ProviderError(failure)``, raised after the handler that caught
 httpx's error, so that error is neither its cause nor its context: Ollama's text
 reaches no log, exception or event. An error that is not one of httpx's own is
@@ -155,7 +159,14 @@ class OllamaProvider(BaseProvider):
         entry = self._catalogue.get(self.settings.catalogue_provider, model)
         return entry.context_window if entry is not None else None
 
+    def structured_output(self, model: str) -> bool:
+        """Whether the catalogue says ``model`` supports structured output."""
+        entry = self._catalogue.get(self.settings.catalogue_provider, model)
+        return entry is not None and entry.capabilities.structured_output
+
     async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
+        if request.output_schema is not None and not self.structured_output(request.model):
+            raise ProviderError(ProviderFailure.REJECTED)  # refused before any call
         body = build_chat_body(request, num_ctx=self.num_ctx(request.model))
         mapper = StreamMapper()
         response, failure = await _send(self.client, body, request.timeout_s)

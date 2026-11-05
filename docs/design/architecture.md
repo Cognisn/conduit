@@ -15,7 +15,7 @@ conduit gives every Cognisn product one AI integration layer: model providers, a
 | C3 | Concurrency | Async-first throughout. A supported sync facade, generated from the async API, runs calls on a loop conduit owns and refuses to run on that loop's own thread. Blocking SDK calls (boto3) run in a worker thread. |
 | C4 | Origin | Seeded from VOR's AI layer, generalised: VOR-specific pieces are replaced by conduit interfaces. SPARK's LLM layer is the second source. Termograph is a reference for lessons only: **no Termograph code is copied**, and Termograph's routing classifier stays in Termograph, above conduit. |
 | C5 | Licence and distribution | Public on PyPI as `cognisn-conduit` under MIT. |
-| C6 | Providers (first release) | Amazon Bedrock (AWS credential chain, credentials held as secrets through the secret resolver, and Bedrock API keys: short-term keys refreshed automatically, long-term keys only when a setting allows them); Anthropic (direct, and Claude in Microsoft Foundry through its Anthropic endpoint); one OpenAI-compatible adapter serving OpenAI, X.AI and Microsoft Foundry (API key and Microsoft Entra ID); Gemini; Ollama; and the stub. |
+| C6 | Providers (first release) | Amazon Bedrock (AWS credential chain, credentials held as secrets through the secret resolver, and Bedrock API keys: short-term keys refreshed automatically, long-term keys only when a setting allows them); Anthropic (direct, and Claude in Microsoft Foundry through its Anthropic endpoint, with an API key or Microsoft Entra ID); one OpenAI-compatible adapter serving OpenAI, X.AI and Microsoft Foundry (API key and Microsoft Entra ID); Gemini; Ollama; and the stub. |
 | C7 | ChatGPT | "ChatGPT" means the OpenAI API through the OpenAI provider. Signing in with a consumer ChatGPT subscription is deferred until OpenAI publishes a supported route for third-party products. |
 | C8 | Name | conduit (`cognisn-conduit`, repository `Cognisn/conduit`). |
 | C9 | Adoption | No product adopts conduit before 0.1.0 is released. |
@@ -87,7 +87,7 @@ The version lives only in `src/conduit/_version.txt`. Hatchling reads it for the
 | Extra | Layer | Holds |
 |---|---|---|
 | `bedrock` | `conduit.providers.bedrock` | boto3 and botocore |
-| `anthropic` | `conduit.providers.anthropic` | the Anthropic SDK |
+| `anthropic` | `conduit.providers.anthropic` | the Anthropic SDK, and azure-identity for Microsoft Entra ID on Claude in Microsoft Foundry |
 | `openai` | `conduit.providers.openai_compat` | the OpenAI SDK and Microsoft Entra ID support |
 | `gemini` | `conduit.providers.gemini` | the Google Gen AI SDK |
 | `ollama` | `conduit.providers.ollama` | the Ollama client |

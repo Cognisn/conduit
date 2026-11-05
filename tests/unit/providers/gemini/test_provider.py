@@ -9,10 +9,11 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
+from conduit.core.catalogue import Catalogue, CatalogueOverlay, default_catalogue
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.registry import MeteredProvider, ProviderRegistry
 from conduit.core.secrets import LiteralSecretResolver
@@ -42,11 +43,23 @@ TOOL = ToolSpec(
 )
 
 
-async def _build(client: Any, **factory: Any) -> MeteredProvider:
+async def _build(
+    client: Any, *, catalogue: Catalogue | None = None, **factory: Any
+) -> MeteredProvider:
     registry = ProviderRegistry(
-        secrets=LiteralSecretResolver({}), factories=[GeminiFactory(**factory)]
+        secrets=LiteralSecretResolver({}), catalogue=catalogue, factories=[GeminiFactory(**factory)]
     )
     return await registry.build("gemini", SETTINGS, client=client)
+
+
+def _structured(supported: bool) -> Catalogue:
+    entry = default_catalogue().require("gemini", recordings.MODEL)
+    changed = entry.model_copy(
+        update={
+            "capabilities": entry.capabilities.model_copy(update={"structured_output": supported})
+        }
+    )
+    return default_catalogue().apply(CatalogueOverlay(name="structured", override=(changed,)))
 
 
 def _request(*messages: Message, **fields: Any) -> ModelRequest:
@@ -152,11 +165,12 @@ class TestSignatures:
         parts = client.aio.models.calls[0]["contents"][1]["parts"]
         assert parts[0]["thought_signature"] == SKIP_SIGNATURE
 
-    async def test_signature_memory_is_bounded(self) -> None:
+    async def test_the_signature_travels_in_the_response_not_in_the_provider(self) -> None:
+        # Replaces D0029's per-call memory: a provider that saw a signature does not
+        # supply it again; only the state block in the assistant message does.
         def handle(params: dict[str, Any]) -> list[dict[str, Any]]:
-            n = len(client.aio.models.calls)
             part = {
-                "function_call": {"id": f"fc_{n}", "name": "lookup_host", "args": {}},
+                "function_call": {"id": "fc_1", "name": "lookup_host", "args": {}},
                 "thought_signature": "c2ln",
             }
             return [
@@ -169,13 +183,27 @@ class TestSignatures:
             ]
 
         client = FakeClient(handle)
-        factory = GeminiFactory(signature_memory=2)
-        settings = factory.settings_model.model_validate(SETTINGS)
-        provider = factory.create_provider("gemini", settings, client)
-        assert isinstance(provider, GeminiProvider)
-        for _ in range(3):
-            await provider.complete(_request())
-        assert dict(provider.signatures) == {"fc_2": b"sig", "fc_3": b"sig"}
+        provider = await _build(client)
+        response = await provider.complete(_request())
+        (state,) = response.provider_state
+        assert state.provider_kind == "gemini"
+        assert state.state_type == "thought_signature"
+        (call,) = response.tool_uses
+        result = Message(role="user", content=(ToolResultBlock(tool_use_id="fc_1", content=()),))
+
+        with_state = Message(role="assistant", content=response.content)
+        without_state = Message(role="assistant", content=(call,))
+        await provider.complete(_request(Message.user("Go"), with_state, result))
+        await provider.complete(_request(Message.user("Go"), without_state, result))
+        sent = [
+            c["contents"][1]["parts"][0]["thought_signature"] for c in client.aio.models.calls[1:]
+        ]
+        assert sent == [b"sig", SKIP_SIGNATURE]
+
+    def test_the_factory_takes_no_signature_memory(self) -> None:
+        with pytest.raises(TypeError):
+            GeminiFactory(signature_memory=2)  # type: ignore[call-arg]
+        assert not hasattr(GeminiProvider, "signatures")
 
 
 class _Slow:
@@ -193,6 +221,41 @@ class _Slow:
             yield {}
 
         return stream()
+
+
+class TestCatalogue:
+    SCHEMA: ClassVar[dict[str, Any]] = {"type": "object", "properties": {"a": {"type": "string"}}}
+
+    async def test_structured_output_is_sent_where_the_catalogue_allows_it(self) -> None:
+        seen: list[dict[str, Any]] = []
+
+        def handle(params: dict[str, Any]) -> Any:
+            seen.append(params)
+            return _done("{}")
+
+        provider = await _build(FakeClient(handle), catalogue=_structured(True))
+        await provider.complete(_request(output_schema=self.SCHEMA))
+        assert seen[0]["config"]["response_json_schema"] == self.SCHEMA
+
+    async def test_structured_output_is_refused_where_the_catalogue_says_no(self) -> None:
+        seen: list[dict[str, Any]] = []
+
+        def handle(params: dict[str, Any]) -> Any:
+            seen.append(params)
+            return _done("{}")
+
+        provider = await _build(FakeClient(handle), catalogue=_structured(False))
+        with pytest.raises(ProviderError) as caught:
+            await provider.complete(_request(output_schema=self.SCHEMA))
+        assert caught.value.failure is ProviderFailure.REJECTED
+        assert seen == []  # refused before any call
+
+    def test_without_the_registry_the_factory_uses_the_default_catalogue(self) -> None:
+        factory = GeminiFactory()
+        settings = factory.settings_model.model_validate(SETTINGS)
+        provider = factory.create_provider("gemini", settings, FakeClient(lambda p: _done()))
+        assert isinstance(provider, GeminiProvider)
+        assert provider.structured_output(recordings.MODEL) is True
 
 
 class TestFailures:
