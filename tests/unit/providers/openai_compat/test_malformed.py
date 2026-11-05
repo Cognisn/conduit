@@ -7,6 +7,7 @@ exception chain hold none of the chunk's values.
 
 from __future__ import annotations
 
+import asyncio
 import warnings
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any, cast
@@ -253,3 +254,40 @@ async def test_a_failing_close_on_an_abandoned_stream_is_quiet() -> None:
     async for _ in stream:
         break
     await stream.aclose()
+
+
+class _CancelledOnClose(_Stream):
+    """A stream whose close is cancelled."""
+
+    def __init__(self, chunks: list[Any], cancelled: asyncio.CancelledError) -> None:
+        super().__init__(chunks)
+        self.cancelled = cancelled
+
+    async def close(self) -> None:
+        raise self.cancelled
+
+
+class _CancellingClient(_Client):
+    def __init__(self, chunks: list[Any]) -> None:
+        super().__init__(chunks)
+        self.cancelled = asyncio.CancelledError()
+
+    async def create(self, **kwargs: Any) -> _Stream:
+        return _CancelledOnClose(self._chunks, self.cancelled)
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        [_choice({"content": "hi"}), STOP, USAGE],  # after a whole stream
+        [_choice({"content": "hi"}), {"choices": MARK}],  # while a ProviderError is leaving
+    ],
+    ids=["after a whole stream", "while a provider error leaves"],
+)
+async def test_a_cancellation_during_close_propagates_unchanged(chunks: list[Any]) -> None:
+    client = _CancellingClient(chunks)
+    provider = OpenAICompatProvider(client, catalogue_provider="openai")
+    with pytest.raises(asyncio.CancelledError) as caught:
+        async for _ in provider.stream(_request()):
+            pass
+    assert caught.value is client.cancelled
