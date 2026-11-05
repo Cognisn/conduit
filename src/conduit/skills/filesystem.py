@@ -23,7 +23,20 @@ Every file a skill can reach is confined to the skill's own folder:
 - every path is then resolved, following links, and refused (``path_link``) unless it
   stays inside the skill's folder; this covers a link in any part of the path, the
   skill folder itself and its ``SKILL.md``;
-- a skill folder must itself resolve inside the source's directory.
+- a skill folder must itself resolve inside the source's directory;
+- every file is checked again after it is opened: the resolved path is opened (on POSIX
+  with ``O_NOFOLLOW``), then the path is resolved again, checked again and must name
+  the same file (device and file number) as the open handle, so a link swapped in
+  between the check and the open is refused rather than followed. Reads are bounded
+  on the handle (at most one byte past the limit), so a file that grows after it is
+  checked cannot be read past its limit.
+
+Trust assumption: the directory's contents are trusted as far as their location goes.
+Whoever can write inside the skills directory can change any skill, and a hard link
+cannot be told apart from the file it links to, so a hard link to a file outside the
+folder is read as if it were inside. Keep the skills directory writable only by those
+trusted to author skills, on a volume where untrusted users cannot make hard links
+into it.
 
 A skill's resources are its other text files (UTF-8 without NUL bytes), up to
 ``SourceLimits``. Binary files are not resources and are left out. A resource larger
@@ -38,8 +51,10 @@ path from outside the format's rules, and none keeps the exception it was raised
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
 import os
+import stat
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,6 +110,83 @@ def _inside(base_real: str, path: Path | str) -> bool:
 
 def _real(path: Path) -> str:
     return os.path.normcase(os.path.realpath(path))
+
+
+def _within(base_real: str, real: str) -> bool:
+    """Whether the already resolved ``real`` is inside ``base_real``."""
+    real = os.path.normcase(real)
+    try:
+        return os.path.commonpath([base_real, real]) == base_real
+    except ValueError:  # another drive
+        return False
+
+
+#: Open flags: binary on Windows, and on POSIX never through a link in the last part.
+_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+_NOFOLLOW = bool(getattr(os, "O_NOFOLLOW", 0))
+
+
+def _open_fd(path: str) -> int:
+    """Open ``path`` for reading (a seam for the tests)."""
+    return os.open(path, _OPEN_FLAGS)
+
+
+def _identity(path: str) -> tuple[int, int]:
+    """The device and file number of what ``path`` names, links followed."""
+    found = os.stat(path)
+    return found.st_dev, found.st_ino
+
+
+def _read_up_to(fd: int, count: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = count
+    while remaining > 0:
+        chunk = os.read(fd, remaining)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _read_confined(path: Path, base_real: str, limit: int, skill: str) -> bytes | None:
+    """At most ``limit + 1`` bytes of the regular file at ``path``, or ``None`` if there
+    is none, refusing (``path_link``) unless the file opened is inside ``base_real``.
+
+    The path is resolved and checked, the resolved path opened (on POSIX with
+    ``O_NOFOLLOW``), and then, on the open handle, the path is resolved and checked
+    again and must name the same file (device and file number) as the handle. A link
+    swapped in between the check and the open is therefore refused, not followed.
+    """
+    real = os.path.realpath(path)
+    if not _within(base_real, real):
+        raise SkillResourceRefused("path_link", skill=skill)
+    if not os.path.isfile(real):
+        return None
+    missing = looped = False
+    fd = -1
+    try:
+        fd = _open_fd(real)
+    except FileNotFoundError:
+        missing = True
+    except OSError as error:
+        looped = _NOFOLLOW and error.errno == errno.ELOOP
+        if not looped:
+            raise
+    if missing:
+        return None
+    if looped:
+        raise SkillResourceRefused("path_link", skill=skill)
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            return None
+        again = os.path.realpath(path)
+        if not _within(base_real, again) or _identity(again) != (opened.st_dev, opened.st_ino):
+            raise SkillResourceRefused("path_link", skill=skill)
+        return _read_up_to(fd, limit + 1)
+    finally:
+        os.close(fd)
 
 
 def _text(data: bytes) -> str | None:
@@ -206,14 +298,13 @@ class FilesystemSkillSource:
 
     def _document(self, name: str) -> SkillDocument:
         folder, real = self._folder(name)
-        path = folder / SKILL_FILE
-        if os.path.lexists(path) and not _inside(real, path):
-            raise SkillResourceRefused("path_link", skill=name)
-        if not path.is_file():
+        limit = self._limits.max_skill_file_bytes
+        data = _read_confined(folder / SKILL_FILE, real, limit, name)
+        if data is None:
             raise SkillNotFound(name)
-        if path.stat().st_size > self._limits.max_skill_file_bytes:
+        if len(data) > limit:
             raise SkillInvalid("skill_file_too_large", skill=name)
-        text = _text(path.read_bytes())
+        text = _text(data)
         if text is None:
             raise SkillInvalid("skill_file_not_text", skill=name)
         return parse_skill_md(text, expected_name=name)
@@ -247,8 +338,9 @@ class FilesystemSkillSource:
         resources: dict[str, str] = {}
         total = 0
         for path, file in self._files(name, folder, real):
-            with file.open("rb") as handle:
-                data = handle.read(limits.max_resource_bytes + 1)
+            data = _read_confined(file, real, limits.max_resource_bytes, name)
+            if data is None:
+                continue  # gone, or no longer a regular file, since the folder was read
             if len(data) > limits.max_resource_bytes:
                 if b"\x00" in data[:_SNIFF_BYTES]:
                     continue  # a large binary file: not a resource
@@ -273,12 +365,9 @@ class FilesystemSkillSource:
         self._document(name)
         folder, real = self._folder(name)
         target = folder.joinpath(*path.split("/"))
-        if not _inside(real, target):
-            raise SkillResourceRefused("path_link", skill=name)
-        if not target.is_file():
+        data = _read_confined(target, real, self._limits.max_resource_bytes, name)
+        if data is None:
             raise SkillResourceRefused("resource_missing", skill=name)
-        with target.open("rb") as handle:
-            data = handle.read(self._limits.max_resource_bytes + 1)
         if len(data) > self._limits.max_resource_bytes:
             raise SkillResourceRefused("resource_too_large", skill=name)
         text = _text(data)

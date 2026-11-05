@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from conduit.core.backends import SkillSource, SkillSummary
 from conduit.core.errors import ConfigurationError
+from conduit.skills import filesystem
 from conduit.skills.errors import (
     SkillInvalid,
     SkillNotFound,
@@ -274,6 +277,8 @@ class TestConfinement:
             ("\\\\server\\share\\x", "path_absolute"),
             ("references\\style.md", "path_invalid"),
             ("SKILL.md", "path_reserved"),
+            ("SKILL.md.", "path_invalid"),
+            ("references/style.md.", "path_invalid"),
         ],
     )
     async def test_a_path_outside_the_skill_is_refused(
@@ -388,6 +393,149 @@ class TestConfinement:
         assert caught.value.reason == "path_link"
         with pytest.raises(SkillResourceRefused):
             await source.read_resource("s", "SKILL.md".lower() + "x")
+
+
+def _junction(link: Path, target: Path) -> None:
+    if sys.platform != "win32":
+        pytest.skip("junctions are a Windows feature")
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.skip("this machine does not let the test create a junction")
+
+
+class TestJunctions:
+    async def test_a_junction_to_a_folder_outside_is_refused(self, tmp_path: Path) -> None:
+        root = tmp_path / "root"
+        folder = _skill(root, "s")
+        _write(tmp_path / "elsewhere" / "data.md", MARKER)
+        _junction(folder / "linked", tmp_path / "elsewhere")
+        source = FilesystemSkillSource(root)
+        with pytest.raises(SkillResourceRefused) as caught:
+            await source.read_resource("s", "linked/data.md")
+        assert caught.value.reason == "path_link"
+        with pytest.raises(SkillResourceRefused) as caught:
+            await source.load_skill("s")
+        assert caught.value.reason == "path_link"
+
+    async def test_a_skill_folder_that_is_a_junction_outside_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "root"
+        root.mkdir()
+        _skill(tmp_path / "elsewhere", "s")
+        _junction(root / "s", tmp_path / "elsewhere" / "s")
+        source = FilesystemSkillSource(root)
+        assert await source.list_skills() == []
+        with pytest.raises(SkillResourceRefused) as caught:
+            await source.load_skill("s")
+        assert caught.value.reason == "path_link"
+
+
+class TestOpenAfterCheck:
+    """The file read is the file checked: confinement is checked again on the open handle."""
+
+    def _swap_on_open(
+        self, monkeypatch: pytest.MonkeyPatch, victim: Path, outside: Path
+    ) -> list[str]:
+        """Replace ``victim`` with a link to ``outside`` just before it is opened, once.
+        Returns the paths swapped (one, once the swap has happened)."""
+        swapped: list[str] = []
+        original = filesystem._open_fd
+        expected = os.path.normcase(str(victim.resolve()))
+
+        def swapping(path: str) -> int:
+            if not swapped and os.path.normcase(path) == expected:
+                victim.unlink()
+                _link(victim, outside)
+                swapped.append(path)
+            return original(path)
+
+        monkeypatch.setattr(filesystem, "_open_fd", swapping)
+        return swapped
+
+    async def test_a_resource_swapped_for_a_link_after_the_check_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "root"
+        folder = _skill(root, "s")
+        _write(folder / "note.md", "inside")
+        _write(tmp_path / "outside.md", MARKER)
+        _link(tmp_path / "probe", tmp_path / "outside.md")  # skip early without links
+        swapped = self._swap_on_open(monkeypatch, folder / "note.md", tmp_path / "outside.md")
+        with pytest.raises(SkillResourceRefused) as caught:
+            await FilesystemSkillSource(root).read_resource("s", "note.md")
+        assert swapped
+        assert caught.value.reason == "path_link"
+        _clean(caught.value, MARKER)
+
+    async def test_a_resource_swapped_during_load_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "root"
+        folder = _skill(root, "s")
+        _write(folder / "note.md", "inside")
+        _write(tmp_path / "outside.md", MARKER)
+        _link(tmp_path / "probe", tmp_path / "outside.md")
+        swapped = self._swap_on_open(monkeypatch, folder / "note.md", tmp_path / "outside.md")
+        with pytest.raises(SkillResourceRefused) as caught:
+            await FilesystemSkillSource(root).load_skill("s")
+        assert swapped
+        assert caught.value.reason == "path_link"
+
+    async def test_a_skill_file_swapped_after_the_check_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "root"
+        folder = _skill(root, "s")
+        _write(tmp_path / "SKILL.md", f"---\nname: s\ndescription: {MARKER}\n---\nb\n")
+        _link(tmp_path / "probe", tmp_path / "SKILL.md")
+        swapped = self._swap_on_open(monkeypatch, folder / "SKILL.md", tmp_path / "SKILL.md")
+        with pytest.raises(SkillResourceRefused) as caught:
+            await FilesystemSkillSource(root).load_document("s")
+        assert swapped
+        assert caught.value.reason == "path_link"
+        _clean(caught.value, MARKER)
+
+    @pytest.mark.parametrize("operation", ["read", "load", "document"])
+    async def test_a_different_file_behind_the_handle_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+    ) -> None:
+        folder = _skill(tmp_path, "s")
+        _write(folder / "note.md", "inside")
+        monkeypatch.setattr(filesystem, "_identity", lambda path: (-1, -1))
+        source = FilesystemSkillSource(tmp_path)
+        with pytest.raises(SkillResourceRefused) as caught:
+            if operation == "read":
+                await source.read_resource("s", "note.md")
+            elif operation == "load":
+                await source.load_skill("s")
+            else:
+                await source.load_document("s")
+        assert caught.value.reason == "path_link"
+
+    async def test_the_skill_file_is_read_no_further_than_its_limit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        folder = _skill(tmp_path, "s", body="x" * 1_000_000)
+        requested: list[int] = []
+        original = os.read
+
+        def counting(fd: int, n: int) -> bytes:
+            requested.append(n)
+            return original(fd, n)
+
+        monkeypatch.setattr(os, "read", counting)
+        source = FilesystemSkillSource(tmp_path, limits=SourceLimits(max_skill_file_bytes=100))
+        with pytest.raises(SkillInvalid) as caught:
+            await source.load_document("s")
+        assert caught.value.reason == "skill_file_too_large"
+        assert 0 < sum(requested) <= 101
+        assert (folder / "SKILL.md").stat().st_size > 1_000_000
 
 
 class TestFailures:
