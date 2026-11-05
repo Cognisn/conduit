@@ -45,12 +45,12 @@ import contextlib
 import inspect
 import json
 import logging
+import os
 import re
 import time
 import warnings
 from collections.abc import AsyncGenerator, AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, SecretStr, ValidationError
@@ -89,8 +89,19 @@ from conduit.core.types import ModelRequest, ModelResponse, ToolResultBlock, Too
 
 logger = logging.getLogger("conduit.registry")
 
+
+def _source_prefixes() -> tuple[str, ...]:
+    """conduit's source tree, as imported and as resolved, each ending in a separator
+    so a sibling directory (``conduit_x``) does not match."""
+    imported = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    resolved = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    return tuple(dict.fromkeys(path.rstrip(os.sep) + os.sep for path in (imported, resolved)))
+
+
 #: conduit's own source tree: a deprecation warning names the first frame outside it.
-_CONDUIT_SOURCE = str(Path(__file__).resolve().parents[1])
+#: Frame filenames keep the form the code was imported under (a short name, a mapped
+#: drive, a junction), so the unresolved form is used, with the resolved one beside it.
+_CONDUIT_SOURCES = _source_prefixes()
 
 _UNSET: Any = object()
 
@@ -406,7 +417,7 @@ class ProviderRegistry:
                 f"provider factory for kind {factory.kind!r}: create_provider without the "
                 "catalogue keyword is deprecated and will be refused in the next release",
                 DeprecationWarning,
-                skip_file_prefixes=(_CONDUIT_SOURCE,),
+                skip_file_prefixes=_CONDUIT_SOURCES,
             )
         self._factories[factory.kind] = factory
         self._with_catalogue[factory.kind] = takes

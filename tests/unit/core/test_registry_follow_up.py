@@ -297,3 +297,40 @@ class TestUnvalidatedKind:
         registry, _ = _registry()
         with pytest.raises(ConfigurationError, match="'absent'"):
             await registry.build("p", {"kind": "absent"})
+
+
+class TestConduitSourcePrefixes:
+    """The prefixes skipped for the warning match frames as they were imported."""
+
+    def test_the_prefixes_cover_this_module_as_imported(self) -> None:
+        import os
+
+        from conduit.core import registry
+
+        imported = os.path.abspath(registry.__file__)
+        assert any(imported.startswith(p) for p in registry._CONDUIT_SOURCES)
+
+    def test_a_sibling_directory_does_not_match(self) -> None:
+        import os
+
+        from conduit.core import registry
+
+        assert all(p.endswith(os.sep) for p in registry._CONDUIT_SOURCES)
+        for prefix in registry._CONDUIT_SOURCES:
+            sibling = prefix.rstrip(os.sep) + "_x" + os.sep + "product.py"
+            assert not any(sibling.startswith(p) for p in registry._CONDUIT_SOURCES)
+
+    def test_the_imported_form_is_kept_when_resolving_changes_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import os
+
+        from conduit.core import registry
+
+        imported = os.path.dirname(os.path.dirname(os.path.abspath(registry.__file__)))
+        elsewhere = os.path.join(os.path.dirname(imported), "resolved-elsewhere", "conduit")
+        monkeypatch.setattr(
+            os.path, "realpath", lambda path: os.path.join(elsewhere, "core", "registry.py")
+        )
+        prefixes = registry._source_prefixes()
+        assert prefixes == (imported + os.sep, elsewhere + os.sep)

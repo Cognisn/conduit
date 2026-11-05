@@ -100,6 +100,11 @@ class TestPlaintextInExtraFields:
             {"notes": "basic setup"},
             {"api_key": {"ref": "secret://tenant/key"}},
             {"allow_long_term_api_keys": True, "rotate_keys": None},
+            # Numbers are never credentials, whatever they are called.
+            {"max_output_tokens": 1000},
+            {"limits": {"max_tokens": 4096}},
+            {"password_policy": {"min_length": 12}},
+            {"secret_ttl": 30.5},
         ],
     )
     def test_references_and_ordinary_fields_are_kept(self, fields: dict[str, Any]) -> None:

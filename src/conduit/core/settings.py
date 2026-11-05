@@ -177,8 +177,10 @@ def _plaintext_credentials(
     elif isinstance(value, list | tuple):
         for index, item in enumerate(value):
             yield from _plaintext_credentials(item, f"{path}.{index}", credential, carried)
-    elif isinstance(value, bool) or value is None:
-        return  # a flag or an absence is never a credential (allow_long_term_api_keys)
+    elif isinstance(value, bool | int | float) or value is None:
+        # A flag, a number or an absence is never a credential (allow_long_term_api_keys,
+        # max_output_tokens, secret_ttl).
+        return
     elif (credential and not _is_reference(value)) or (
         isinstance(value, str) and _AUTHORISATION_VALUE.match(value)
     ):
