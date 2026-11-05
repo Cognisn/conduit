@@ -36,10 +36,12 @@ CLI = "conduit.cli"
 OPTIONAL_LIBRARIES: Mapping[str, tuple[str, ...]] = {
     # Provider SDKs (C6), each behind its own extra.
     "boto3": ("conduit.providers.bedrock",),
-    "botocore": ("conduit.providers.bedrock",),
+    # botocore also presigns the bedrock-mantle adapter's short-term keys.
+    "botocore": ("conduit.providers.bedrock", "conduit.providers.bedrock_mantle"),
     "aioboto3": ("conduit.providers.bedrock",),
     "aiobotocore": ("conduit.providers.bedrock",),
-    "anthropic": ("conduit.providers.anthropic",),
+    # The anthropic SDK also serves Claude on bedrock-mantle (its mantle client).
+    "anthropic": ("conduit.providers.anthropic", "conduit.providers.bedrock_mantle"),
     "openai": ("conduit.providers.openai_compat",),
     "azure.identity": ("conduit.providers.openai_compat",),
     "google.genai": ("conduit.providers.gemini",),

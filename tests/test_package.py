@@ -33,6 +33,7 @@ LAYERS = [
 
 EXTRAS = {
     "bedrock",
+    "bedrock-mantle",
     "anthropic",
     "openai",
     "gemini",
@@ -178,7 +179,7 @@ def test_the_top_level_exports_nothing_unlisted() -> None:
     assert set(conduit.__all__) == listed | {"__version__"}
 
 
-PROVIDER_EXTRAS = ("bedrock", "anthropic", "openai", "gemini", "ollama")
+PROVIDER_EXTRAS = ("bedrock", "bedrock-mantle", "anthropic", "openai", "gemini", "ollama")
 
 
 def _extra_requirements(extra: str) -> set[str]:

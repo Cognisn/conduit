@@ -778,6 +778,185 @@
       "embedding_dimensions": 1024
     },
     {
+      "model_id": "anthropic.claude-opus-5-5",
+      "provider": "bedrock_mantle",
+      "kind": "chat",
+      "residency_scope": "in_region",
+      "regions": [
+        "ap-southeast-4",
+        "us-east-1",
+        "us-gov-west-1"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "anthropic.claude-sonnet-5-5",
+      "provider": "bedrock_mantle",
+      "kind": "chat",
+      "residency_scope": "in_region",
+      "regions": [
+        "us-gov-west-1"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "anthropic.claude-haiku-5-5",
+      "provider": "bedrock_mantle",
+      "kind": "chat",
+      "residency_scope": "in_region",
+      "regions": [
+        "us-gov-west-1"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "anthropic.claude-fable-5-1",
+      "provider": "bedrock_mantle",
+      "kind": "chat",
+      "residency_scope": "in_region",
+      "regions": [
+        "us-gov-west-1"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "anthropic.claude-opus-5",
+      "provider": "bedrock_mantle",
+      "kind": "chat",
+      "residency_scope": "in_region",
+      "regions": [
+        "ap-southeast-4",
+        "eu-north-1",
+        "eu-west-1",
+        "us-east-1",
+        "us-gov-west-1"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "anthropic.claude-sonnet-5",
+      "provider": "bedrock_mantle",
+      "kind": "chat",
+      "residency_scope": "in_region",
+      "regions": [
+        "ap-southeast-4",
+        "eu-north-1",
+        "eu-west-1",
+        "us-east-1",
+        "us-gov-west-1"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "anthropic.claude-opus-4-8",
+      "provider": "bedrock_mantle",
+      "kind": "chat",
+      "residency_scope": "in_region",
+      "regions": [
+        "ap-northeast-1",
+        "ap-southeast-4",
+        "eu-north-1",
+        "eu-west-1",
+        "us-east-1",
+        "us-gov-west-1"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "anthropic.claude-opus-4-7",
+      "provider": "bedrock_mantle",
+      "kind": "chat",
+      "residency_scope": "in_region",
+      "regions": [
+        "ap-northeast-1",
+        "ap-southeast-4",
+        "eu-north-1",
+        "eu-west-1",
+        "us-east-1"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
+      "model_id": "anthropic.claude-haiku-4-5",
+      "provider": "bedrock_mantle",
+      "kind": "chat",
+      "residency_scope": "in_region",
+      "regions": [
+        "ap-northeast-1",
+        "ap-southeast-4",
+        "eu-north-1",
+        "eu-west-1",
+        "us-east-1",
+        "us-east-2",
+        "us-gov-west-1",
+        "us-west-2"
+      ],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": false,
+        "structured_output": true
+      },
+      "context_window": 200000,
+      "output_limit": 64000
+    },
+    {
       "model_id": "gpt-5",
       "provider": "openai",
       "kind": "chat",

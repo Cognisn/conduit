@@ -46,6 +46,9 @@ dependencies = ["pydantic>=2.9,<3"]
 # Provider SDKs (C6).
 bedrock = ["boto3>=1.35,<2"]
 anthropic = ["anthropic>=2.4,<3", "azure-identity>=1.27,<2"]
+# Claude on bedrock-mantle: the anthropic SDK's mantle client, and botocore (from boto3)
+# to presign short-term Bedrock API keys.
+bedrock-mantle = ["anthropic>=2.4,<3", "boto3>=1.35,<2"]
 openai = ["openai>=3.45,<4", "azure-identity>=1.27,<2"]
 gemini = ["google-genai>=2.30,<3"]
 ollama = ["httpx>=0.28,<1"]
