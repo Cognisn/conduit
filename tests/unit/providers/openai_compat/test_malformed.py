@@ -8,8 +8,8 @@ exception chain hold none of the chunk's values.
 from __future__ import annotations
 
 import warnings
-from collections.abc import AsyncIterator
-from typing import Any
+from collections.abc import AsyncGenerator, AsyncIterator
+from typing import Any, cast
 
 import pytest
 
@@ -204,3 +204,52 @@ async def test_a_result_that_is_not_a_stream_is_a_protocol_failure() -> None:
             pass
     assert caught.value.failure is ProviderFailure.PROTOCOL
     assert _chain(caught.value) == [caught.value]
+
+
+class _ClosingStream(_Stream):
+    """A stream whose close fails with provider text."""
+
+    async def close(self) -> None:
+        raise RuntimeError(MARK + "-close")
+
+
+class _ClosingClient(_Client):
+    async def create(self, **kwargs: Any) -> _Stream:
+        return _ClosingStream(self._chunks)
+
+
+def _request() -> ModelRequest:
+    return ModelRequest(model="gpt-5", messages=(Message.user("hi"),), max_output_tokens=10)
+
+
+async def test_a_failing_close_on_its_own_is_a_provider_error_without_a_chain() -> None:
+    chunks = [_choice({"content": "hi"}), STOP, USAGE]
+    provider = OpenAICompatProvider(_ClosingClient(chunks), catalogue_provider="openai")
+    with pytest.raises(ProviderError) as caught:
+        async for _ in provider.stream(_request()):
+            pass
+    assert caught.value.failure is ProviderFailure.UNAVAILABLE
+    assert _chain(caught.value) == [caught.value]
+    assert MARK not in str(caught.value)
+    assert MARK not in repr(caught.value)
+
+
+async def test_a_failing_close_never_replaces_the_error_already_leaving() -> None:
+    chunks = [_choice({"content": "hi"}), {"choices": MARK}]
+    provider = OpenAICompatProvider(_ClosingClient(chunks), catalogue_provider="openai")
+    with pytest.raises(ProviderError) as caught:
+        async for _ in provider.stream(_request()):
+            pass
+    assert caught.value.failure is ProviderFailure.PROTOCOL
+    assert _chain(caught.value) == [caught.value]
+    assert MARK not in str(caught.value)
+    assert MARK not in repr(caught.value)
+
+
+async def test_a_failing_close_on_an_abandoned_stream_is_quiet() -> None:
+    chunks = [_choice({"content": "hi"}), _choice({"content": "there"}), STOP, USAGE]
+    provider = OpenAICompatProvider(_ClosingClient(chunks), catalogue_provider="openai")
+    stream = cast(AsyncGenerator[Any, None], provider.stream(_request()))
+    async for _ in stream:
+        break
+    await stream.aclose()

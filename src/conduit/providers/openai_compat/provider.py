@@ -53,6 +53,21 @@ def _feed(mapper: StreamMapper, chunk: Any) -> list[StreamEvent]:
     return mapper.feed(_mapping(chunk))
 
 
+async def _close_stream(chunks: Any, *, quiet: bool) -> None:
+    """Close the SDK stream. A failure is dropped when ``quiet`` (something else is
+    already leaving), and otherwise leaves as an unchained ``ProviderError``."""
+    close = getattr(chunks, "close", None)
+    if not callable(close):
+        return
+    failure: ProviderFailure | None = None
+    try:
+        await close()
+    except Exception as error:
+        failure = classify(error)
+    if failure is not None and not quiet:
+        raise ProviderError(failure)
+
+
 class OpenAICompatProvider(BaseProvider):
     """Streams Chat Completions through ``client.chat.completions.create``.
 
@@ -107,10 +122,12 @@ class OpenAICompatProvider(BaseProvider):
             while (chunk := await self._next(iterator)) is not _END:
                 for event in _protocol(_feed, mapper, chunk):
                     yield event
-        finally:
-            close = getattr(chunks, "close", None)
-            if callable(close):
-                await close()
+        except BaseException:
+            # Something is already leaving (an error, a cancellation, the consumer
+            # closing the stream): close quietly so it is never replaced.
+            await _close_stream(chunks, quiet=True)
+            raise
+        await _close_stream(chunks, quiet=False)
         for event in _protocol(mapper.finish):
             yield event
 
