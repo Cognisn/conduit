@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -18,6 +19,7 @@ from conduit.core.streaming import (
 from conduit.core.types import Message, ModelRequest, StopReason, ToolUseBlock, Usage
 from conduit.providers.anthropic import AnthropicProvider
 from conduit.providers.anthropic.errors import failure_for
+from conduit.providers.anthropic.stream import translate
 
 from . import fakes
 from .fakes import (
@@ -175,6 +177,17 @@ class TestToolUse:
         )
         with pytest.raises(ProviderError) as caught:
             await _events(_provider(client))
+        assert caught.value.failure is ProviderFailure.PROTOCOL
+
+    async def test_the_translator_itself_refuses_non_object_input(self) -> None:
+        events = _simple(*tool_block(0, "toolu_01", "x", '"text"'), stop_reason="tool_use")
+
+        async def source() -> AsyncIterator[Any]:
+            for event in events:
+                yield event
+
+        with pytest.raises(ProviderError) as caught:
+            _ = [event async for event in translate(source())]
         assert caught.value.failure is ProviderFailure.PROTOCOL
 
     async def test_a_tool_call_cut_off_by_max_tokens_is_dropped(self) -> None:

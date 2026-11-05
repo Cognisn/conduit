@@ -273,6 +273,14 @@ class TestCacheControl:
         request = _request(Message(role="user", content=tuple(blocks)))
         assert len(_marked(build_params(request, structured_output=False))) == count
 
+    def test_repeated_breakpoints_do_not_use_up_the_limit(self) -> None:
+        content: list[Any] = [TextBlock(text="a"), CacheBreakpoint(), CacheBreakpoint()]
+        for name in ("b", "c", "d"):
+            content += [TextBlock(text=name), CacheBreakpoint()]
+        request = _request(Message(role="user", content=tuple(content)))
+        marked = _marked(build_params(request, structured_output=False))
+        assert [b["text"] for b in marked] == ["a", "b", "c", "d"]
+
     def test_beyond_the_limit_the_first_three_and_the_last_are_kept(self) -> None:
         request = _request(
             Message(
