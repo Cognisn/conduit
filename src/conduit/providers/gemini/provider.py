@@ -35,16 +35,18 @@ from conduit.providers.gemini.settings import GeminiSettings
 DEFAULT_SIGNATURE_MEMORY = 4096
 
 
-def _as_json(chunk: Any) -> Mapping[str, Any]:
-    """A chunk in JSON form: SDK objects are dumped, mappings pass through."""
-    dump = getattr(chunk, "model_dump", None)
-    if callable(dump):
-        data = dump(mode="json", exclude_none=True)
-        if isinstance(data, Mapping):
-            return data
+def _as_json(chunk: Any) -> Mapping[str, Any] | None:
+    """A chunk in JSON form (SDK objects are dumped, mappings pass through), or
+    ``None`` for a chunk of any other type, which the caller treats as PROTOCOL."""
     if isinstance(chunk, Mapping):
         return chunk
-    raise TypeError("unexpected chunk type")
+    dump = getattr(chunk, "model_dump", None)
+    if not callable(dump):
+        return None
+    data: Any = None
+    with contextlib.suppress(Exception):
+        data = dump(mode="json", exclude_none=True)
+    return data if isinstance(data, Mapping) else None
 
 
 async def _next_chunk(
@@ -56,11 +58,14 @@ async def _next_chunk(
     this handler has finished, so the SDK's error is neither its cause nor its context.
     """
     try:
-        return _as_json(await asyncio.wait_for(anext(chunks), timeout)), None
+        raw = await asyncio.wait_for(anext(chunks), timeout)
     except StopAsyncIteration:
         return None, None
     except Exception as error:
         return None, classify(error)
+    chunk = _as_json(raw)
+    # A chunk the SDK should never yield breaks the stream's contract: PROTOCOL.
+    return (chunk, None) if chunk is not None else (None, ProviderFailure.PROTOCOL)
 
 
 def _feed(

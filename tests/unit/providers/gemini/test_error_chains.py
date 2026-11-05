@@ -174,3 +174,10 @@ def test_the_mapper_itself_attaches_nothing(part: dict[str, Any]) -> None:
         StreamMapper().feed(_chunk(part))
     assert caught.value.failure is ProviderFailure.PROTOCOL
     assert_nothing_attached(caught.value, SECRET)
+
+
+@pytest.mark.parametrize("chunk", [object(), 42, ["a", SECRET]])
+async def test_a_chunk_of_an_unexpected_type_is_a_protocol_failure(chunk: Any) -> None:
+    error = await _failure(FakeClient(lambda params: [chunk]))
+    assert error.failure is ProviderFailure.PROTOCOL
+    assert_nothing_attached(error, SECRET)
