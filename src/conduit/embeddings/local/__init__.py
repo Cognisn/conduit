@@ -7,7 +7,7 @@
 # 2.4 GB of NVIDIA CUDA packages that conduit never uses; macOS and Windows wheels from
 # PyPI are CPU-only already. With each installer:
 #
-# - pip: ``pip install torch --index-url https://download.pytorch.org/whl/cpu``, then
+# - pip: ``pip install "torch>=2.15,<3" --index-url https://download.pytorch.org/whl/cpu``, then
 #   ``pip install "cognisn-conduit[local-embeddings]"``. A later ``pip install --upgrade
 #   torch`` without ``--index-url`` brings the CUDA build back.
 # - uv, in a project: ``uv add "cognisn-conduit[local-embeddings]"`` with torch taken

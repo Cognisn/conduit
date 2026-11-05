@@ -864,3 +864,40 @@ async def test_no_remote_adapter_will_embed_with_a_chat_model(
     embedder = await _registry().build_embedder("probe", settings, client=client)
     with pytest.raises(ConfigurationError, match="chat model"):
         await embedder.embed(EmbeddingRequest(model=model, texts=TEXTS))
+
+
+# Review m1 and m2 --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("length", [128, 255, 257, 511, 1023, 1024, 2048])
+def test_titan_v2_refuses_every_other_shorter_length(length: int) -> None:
+    embedder = BedrockEmbedder("titan", None, None, catalogue=default_catalogue())  # type: ignore[arg-type]
+    assert not embedder.accepts_dimensions(recordings.TITAN, length)
+
+
+@pytest.mark.parametrize("length", [0, -1])
+def test_openai_offers_no_length_below_one(length: int) -> None:
+    from conduit.embeddings.openai_compat import OpenAICompatEmbedder
+
+    embedder = OpenAICompatEmbedder("o", None, None, catalogue=default_catalogue())  # type: ignore[arg-type]
+    assert not embedder.accepts_dimensions("text-embedding-3-small", length)
+
+
+async def test_ollama_sums_usage_across_batches() -> None:
+    httpx = pytest.importorskip("httpx")
+    counts = iter([4, 5])
+
+    def handler(request: Any) -> Any:
+        body = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "embeddings": [synthetic_vector(0, 768)] * len(body["input"]),
+                "prompt_eval_count": next(counts),
+            },
+        )
+
+    embedder = await _ollama(handler)
+    embedder._inner._max_texts = 1
+    response = await embedder.embed(EmbeddingRequest(model=recordings.OLLAMA, texts=TEXTS))
+    assert response.usage == embedding_usage(9)

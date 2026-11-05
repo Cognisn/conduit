@@ -62,6 +62,7 @@ import logging
 import math
 import os
 import re
+import sys
 import time
 import warnings
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping
@@ -470,6 +471,9 @@ class EmbeddingProviderFactory(Protocol):
         ...
 
 
+#: The largest magnitude a vector value may have.
+_FLOAT_MAX = sys.float_info.max
+
 #: Only the registry holds this, so only the registry can make a ``MeteredEmbedder``.
 _EMBEDDER_TOKEN = object()
 
@@ -498,12 +502,19 @@ def _well_formed(response: object, count: int, dimensions: int) -> bool:
     for vector in vectors:
         if not isinstance(vector, tuple) or len(vector) != dimensions:
             return False
-        if any(isinstance(value, bool) or not isinstance(value, float | int) for value in vector):
-            return False
-        # A NaN or an infinity anywhere makes the sum non-finite.
-        if not math.isfinite(math.fsum(vector)):
+        if not all(_finite_number(value) for value in vector):
             return False
     return True
+
+
+def _finite_number(value: object) -> bool:
+    """Whether ``value`` is a finite float, or an int a float can hold. Never raises:
+    each value is checked on its own, so no sum can overflow."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return abs(value) <= _FLOAT_MAX
+    return isinstance(value, float) and math.isfinite(value)
 
 
 class MeteredEmbedder:
@@ -878,6 +889,8 @@ class ProviderRegistry:
                     f"to {name!r}"
                 )
             own = entries[task].embedding_dimensions or 0
+            if fixed[task] < 1:
+                raise CapabilityRefused(f"{task}: dimensions must be at least 1")
             if fixed[task] > own:
                 raise CapabilityRefused(
                     f"{task}: {fixed[task]} dimensions exceed model "

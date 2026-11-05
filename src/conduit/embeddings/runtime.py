@@ -145,6 +145,8 @@ async def start_embeddings(
         own = resolved.entry.embedding_dimensions or 0
         length = wanted.get(task_name, own)
         floor = resolved.task_class.floor.min_embedding_dimensions
+        if length < 1:
+            raise CapabilityRefused(f"{task_name}: {length} dimensions are fewer than 1")
         if length < floor:
             raise CapabilityRefused(
                 f"{task_name}: {length} dimensions are below the task's floor of {floor}"

@@ -45,3 +45,12 @@ def test_counts_are_read() -> None:
 
 def test_batches_split_in_order() -> None:
     assert list(batches(("a", "b", "c"), 2)) == [("a", "b"), ("c",)]
+
+
+@pytest.mark.parametrize("value", [10**400, -(10**400)])
+def test_an_integer_beyond_a_float_is_not_a_vector_value(value: int) -> None:
+    assert read_vector([value, 0.1]) is None
+
+
+def test_the_largest_finite_values_are_read() -> None:
+    assert read_vector([1e308, -1e308]) == (1e308, -1e308)

@@ -98,7 +98,7 @@ class OpenAICompatEmbedder(BaseEmbeddingProvider):
         self._max_inputs = max_inputs
 
     def accepts_dimensions(self, model: str, dimensions: int) -> bool:
-        return model.startswith(REDUCIBLE_PREFIX)
+        return dimensions >= 1 and model.startswith(REDUCIBLE_PREFIX)
 
     async def _create(self, body: dict[str, Any], timeout: float) -> Any:
         failure: ProviderFailure | None = None

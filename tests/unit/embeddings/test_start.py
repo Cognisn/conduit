@@ -277,3 +277,40 @@ def test_the_builtin_factories_cover_every_remote_kind() -> None:
         "sentence_transformers",
     }
     assert isinstance(builtin_embedding_factories()[0], StubEmbeddingFactory)
+
+
+def _stub_settings() -> ConduitSettings:
+    return ConduitSettings.model_validate(
+        {
+            "providers": {"stub": STUB},
+            "assignments": {"search": {"provider": "stub", "model": STUB_EMBED_MODEL}},
+        }
+    )
+
+
+@pytest.mark.parametrize("length", [0, -3])
+async def test_dimensions_below_one_are_refused_at_start(length: int) -> None:
+    with pytest.raises(CapabilityRefused, match="fewer than 1"):
+        await start_embeddings(
+            _stub_settings(),
+            task_classes=[SEARCH],
+            factories=builtin_embedding_factories(),
+            secrets=SECRETS,
+            dimensions={"search": length},
+        )
+
+
+async def test_the_stub_serves_reduced_dimensions_end_to_end() -> None:
+    from conduit.embeddings.stub import stub_vector
+
+    runtime = await start_embeddings(
+        _stub_settings(),
+        task_classes=[SEARCH],
+        factories=builtin_embedding_factories(),
+        secrets=SECRETS,
+        dimensions={"search": 3},
+    )
+    response = await runtime.for_task("search").embed(["A note about example.com"])
+    assert response.dimensions == 3
+    assert response.vectors[0] == stub_vector("A note about example.com", 8)[:3]
+    await runtime.aclose()

@@ -7,6 +7,7 @@ Readers return ``None`` for a value of the wrong shape, so the adapter can raise
 from __future__ import annotations
 
 import math
+import sys
 from collections.abc import Iterator, Sequence
 from typing import Any
 
@@ -25,6 +26,8 @@ def read_vector(values: Any) -> tuple[float, ...] | None:
     for value in values:
         if isinstance(value, bool) or not isinstance(value, int | float):
             return None
+        if isinstance(value, int) and abs(value) > sys.float_info.max:
+            return None  # float() would overflow
         number = float(value)
         if not math.isfinite(number):
             return None

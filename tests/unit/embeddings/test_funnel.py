@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import warnings
 from typing import Any
 
@@ -20,7 +21,12 @@ from conduit.core.errors import (
     UndeclaredModel,
 )
 from conduit.core.events import CapturePolicy, ContentKind, FanOutSink, MemoryEventSink
-from conduit.core.provider import EmbeddingProvider, EmbeddingRequest, embedding_usage
+from conduit.core.provider import (
+    EmbeddingProvider,
+    EmbeddingRequest,
+    EmbeddingResponse,
+    embedding_usage,
+)
 from conduit.core.registry import (
     EmbeddingCallFinishedEvent,
     EmbeddingCallStartedEvent,
@@ -550,3 +556,100 @@ async def test_the_registry_closes_its_embedders() -> None:
     await registry.build_embedder("two", FAKE)
     await registry.aclose()
     assert all(e.closed for e in factory.embedders)
+
+
+# Vector values (review B1, m2) -------------------------------------------------------
+
+
+async def _answering(vector: tuple[Any, ...]) -> tuple[Any, MemoryEventSink]:
+    """An embedder whose adapter answers every text with ``vector``."""
+    sink = MemoryEventSink()
+    registry, factory = _registry(sink)
+    embedder = await registry.build_embedder("embed", FAKE)
+    inner = _inner(factory)
+
+    async def answer(request: EmbeddingRequest) -> EmbeddingResponse:
+        return EmbeddingResponse(
+            model=request.model,
+            vectors=tuple(vector for _ in request.texts),
+            usage=embedding_usage(1),
+        )
+
+    inner.embed = answer  # type: ignore[method-assign]
+    return embedder, sink
+
+
+def _finished(sink: MemoryEventSink) -> list[EmbeddingCallFinishedEvent]:
+    return [e for e in sink.events if isinstance(e, EmbeddingCallFinishedEvent)]
+
+
+@pytest.mark.parametrize(
+    "vector",
+    [
+        (float("inf"), float("-inf"), *([0.0] * 6)),
+        (10**400, *([0.0] * 7)),
+        (-(10**400), *([0.0] * 7)),
+        (True, *([0.0] * 7)),
+        (0.0, False, *([0.0] * 6)),
+        ("0.5", *([0.0] * 7)),
+        (None, *([0.0] * 7)),
+        (float("nan"), *([0.0] * 7)),
+    ],
+)
+async def test_a_bad_value_is_a_protocol_failure_and_metered_once(vector: tuple[Any, ...]) -> None:
+    embedder, sink = await _answering(vector)
+    with pytest.raises(ProviderError) as caught:
+        await embedder.embed(_request())
+    assert caught.value.failure is ProviderFailure.PROTOCOL
+    _clean(caught.value)
+    (finished,) = _finished(sink)
+    assert (finished.outcome, finished.failure) == ("failed", ProviderFailure.PROTOCOL)
+
+
+@pytest.mark.parametrize(
+    "vector",
+    [
+        (1e308,) * 8,
+        (-1e308,) * 8,
+        (sys.float_info.max,) * 8,
+        (1, 2, 3, 4, 5, 6, 7, 8),
+        (int(sys.float_info.max),) * 8,
+    ],
+)
+async def test_large_finite_values_are_accepted_and_metered_once(vector: tuple[Any, ...]) -> None:
+    embedder, sink = await _answering(vector)
+    response = await embedder.embed(_request())
+    assert response.vectors[0] == vector
+    (finished,) = _finished(sink)
+    assert finished.outcome == "ok"
+
+
+# Dimensions of zero (review m1) ------------------------------------------------------
+
+
+async def test_zero_assigned_dimensions_are_refused_at_build() -> None:
+    from conduit.embeddings.stub import StubEmbeddingFactory
+
+    registry = ProviderRegistry(secrets=SECRETS, embedding_factories=[StubEmbeddingFactory()])
+    with pytest.raises(CapabilityRefused, match="at least 1"):
+        await registry.build_embedder(
+            "stub",
+            {"kind": "stub", "not_for_production": True},
+            assigned={"search": "stub-embed"},
+            dimensions={"search": 0},
+        )
+
+
+# The request's own errors (review m2) ------------------------------------------------
+
+
+class _Marked:
+    def __repr__(self) -> str:
+        return "zz-marker-text-4417"
+
+
+def test_a_request_error_never_quotes_the_input() -> None:
+    with pytest.raises(ValueError) as caught:
+        EmbeddingRequest(model="fake-embed", texts=(_Marked(),))  # type: ignore[arg-type]
+    assert "zz-marker-text-4417" not in str(caught.value)
+    assert "zz-marker-text-4417" not in repr(caught.value)
