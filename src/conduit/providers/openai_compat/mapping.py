@@ -13,6 +13,9 @@ Requests
     cache long prompt prefixes automatically and take no cache markers. Cached tokens
     still come back in usage, as ``cache_read_tokens``.
 
+    Provider state blocks are left out, whatever their kind: this adapter makes none,
+    and other kinds' state is ignored so a conversation can move between providers.
+
     ``output_schema`` becomes a strict ``json_schema`` response format, only for a
     model the catalogue marks ``structured_output``; otherwise the call is refused as
     ``ProviderError(REJECTED)`` before it is made. Strict mode has the provider's own
@@ -55,6 +58,7 @@ from conduit.core.types import (
     ImageBlock,
     Message,
     ModelRequest,
+    ProviderStateBlock,
     StopReason,
     TextBlock,
     ToolResultBlock,
@@ -134,8 +138,8 @@ def _assistant_message(message: Message) -> dict[str, Any]:
                     "function": {"name": block.name, "arguments": _arguments(block.input)},
                 }
             )
-        elif isinstance(block, CacheBreakpoint):
-            continue
+        elif isinstance(block, CacheBreakpoint | ProviderStateBlock):
+            continue  # automatic caching; state is never sent (module docstring)
         else:
             raise ProviderError(ProviderFailure.REJECTED)  # images or results from the model
     body: dict[str, Any] = {"role": "assistant", "content": "".join(text) if text else None}
