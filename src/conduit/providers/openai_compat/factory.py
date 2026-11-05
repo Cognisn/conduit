@@ -41,7 +41,11 @@ from conduit.core.catalogue import Catalogue, default_catalogue
 from conduit.core.errors import ConfigurationError
 from conduit.core.provider import Provider
 from conduit.core.settings import ProviderSettings
-from conduit.providers.openai_compat.entra import close_soon, entra_id_token_provider
+from conduit.providers.openai_compat.entra import (
+    close_quietly,
+    close_soon,
+    entra_id_token_provider,
+)
 from conduit.providers.openai_compat.provider import OpenAICompatProvider
 from conduit.providers.openai_compat.settings import (
     FoundryApiKey,
@@ -69,7 +73,7 @@ class OpenAICompatClient:
             await self.sdk.close()
         finally:
             if self.credential is not None:
-                await self.credential.close()
+                await close_quietly(self.credential)  # never replaces the SDK's failure
 
 
 def _secret(secrets: Mapping[str, SecretStr], path: str) -> str:

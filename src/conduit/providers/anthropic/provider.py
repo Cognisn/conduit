@@ -57,7 +57,11 @@ from conduit.providers.anthropic.errors import failure_for
 from conduit.providers.anthropic.request import build_params
 from conduit.providers.anthropic.settings import DEFAULT_BASE_URL, AnthropicSettings
 from conduit.providers.anthropic.stream import translate
-from conduit.providers.openai_compat.entra import close_soon, entra_id_token_provider
+from conduit.providers.openai_compat.entra import (
+    close_quietly,
+    close_soon,
+    entra_id_token_provider,
+)
 
 logger = logging.getLogger("conduit.providers.anthropic")
 
@@ -166,7 +170,8 @@ def _check_environment(endpoint: str) -> None:
 class FoundryEntraClient:
     """The Foundry SDK client with the Entra ID credential that signs its requests.
 
-    ``close`` closes the SDK client and then, whatever happened, the credential.
+    ``close`` closes the SDK client and then, whatever happened, the credential; a
+    failing credential close is logged by class name and never replaces the SDK's.
     """
 
     sdk: Any
@@ -180,7 +185,7 @@ class FoundryEntraClient:
         try:
             await self.sdk.close()
         finally:
-            await self.credential.close()
+            await close_quietly(self.credential)  # never replaces the SDK's failure
 
 
 def _settings(settings: ProviderSettings) -> AnthropicSettings:

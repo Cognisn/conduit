@@ -605,6 +605,33 @@ class TestFoundryEntraId:
             await client.close()
         assert credential.made[0].closed
 
+    async def test_when_both_closes_fail_the_sdk_failure_is_what_surfaces(
+        self,
+        credential: type[_StandInCredential],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        pytest.importorskip("anthropic")
+        client = AnthropicFactory().create_client(
+            AnthropicSettings.model_validate(ENTRA_SETTINGS), {}
+        )
+        sdk_failure = RuntimeError("zz-sdk-close-zz")
+
+        async def fail_sdk() -> None:
+            raise sdk_failure
+
+        async def fail_credential() -> None:
+            raise ValueError("zz-credential-close-zz")
+
+        monkeypatch.setattr(client.sdk, "close", fail_sdk)
+        monkeypatch.setattr(credential.made[0], "close", fail_credential)
+        with pytest.raises(RuntimeError) as raised:
+            await client.close()
+        assert raised.value is sdk_failure
+        assert raised.value.__cause__ is None and raised.value.__context__ is None
+        assert any("ValueError" in r.getMessage() for r in caplog.records)
+        assert all("zz-credential-close-zz" not in r.getMessage() for r in caplog.records)
+
     async def test_the_provider_closes_the_credential_quietly(
         self, credential: type[_StandInCredential], caplog: pytest.LogCaptureFixture
     ) -> None:
