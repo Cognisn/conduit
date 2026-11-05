@@ -6,6 +6,7 @@ import asyncio
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 import pytest
 
@@ -290,3 +291,97 @@ class TestClose:
 
         assert loop.run(close_from_inside(), timeout=3).startswith("refused")
         assert loop.run(Service().add(1, 1)) == 2  # still serving
+
+
+def _wait_in_thread(owned: LoopThread, awaitable: Any) -> tuple[threading.Thread, list[object]]:
+    outcome: list[object] = []
+
+    def wait() -> None:
+        try:
+            outcome.append(owned.run(awaitable, timeout=None))
+        except BaseException as error:
+            outcome.append(error)
+
+    caller = threading.Thread(target=wait, name="caller", daemon=True)
+    caller.start()
+    return caller, outcome
+
+
+class TestCloseRaces:
+    def test_a_call_submitted_as_close_begins_is_failed_not_stranded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The reviewer's interleaving: the caller has passed the closed check, close()
+        # runs its shutdown, and only then does the caller's submission land.
+        owned = LoopThread()
+        owned.run(asyncio.sleep(0))
+        shut_down = threading.Event()
+        real_shutdown = facade._shutdown
+        real_submit = asyncio.run_coroutine_threadsafe
+
+        async def tracked(loop: asyncio.AbstractEventLoop) -> None:
+            await real_shutdown(loop)
+            shut_down.set()
+
+        def late_submit(coroutine: Any, loop: asyncio.AbstractEventLoop) -> Any:
+            if threading.current_thread().name == "caller":
+                closer = threading.Thread(target=owned.close, daemon=True)
+                closer.start()
+                shut_down.wait(1)  # close cannot get this far while a submission is pending
+            return real_submit(coroutine, loop)
+
+        monkeypatch.setattr(facade, "_shutdown", tracked)
+        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", late_submit)
+        caller, outcome = _wait_in_thread(owned, asyncio.sleep(3600))
+        caller.join(10)
+        assert not caller.is_alive(), "the caller was left waiting on a closed loop"
+        assert len(outcome) == 1 and isinstance(outcome[0], FacadeError)
+
+    def test_a_close_completing_before_the_submission_lands_still_gives_facade_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The closed check and the submission are one step: a close() that ran to the
+        # end in between would leave the caller submitting to a closed loop.
+        owned = LoopThread()
+        owned.run(asyncio.sleep(0))
+        real_submit = asyncio.run_coroutine_threadsafe
+
+        def late_submit(coroutine: Any, loop: asyncio.AbstractEventLoop) -> Any:
+            if threading.current_thread().name == "caller":
+                closer = threading.Thread(target=owned.close, daemon=True)
+                closer.start()
+                closer.join(1)  # close cannot finish while a submission is under way
+            return real_submit(coroutine, loop)
+
+        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", late_submit)
+        caller, outcome = _wait_in_thread(owned, asyncio.sleep(3600))
+        caller.join(10)
+        assert not caller.is_alive(), "the caller was left waiting on a closed loop"
+        assert len(outcome) == 1 and isinstance(outcome[0], FacadeError), outcome
+
+    def test_a_call_ignoring_cancellation_is_failed_when_close_gives_up(self) -> None:
+        owned = LoopThread()
+        started = threading.Event()
+
+        async def stubborn() -> None:
+            started.set()
+            while True:
+                try:
+                    await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    continue  # ignores every cancellation
+
+        caller, outcome = _wait_in_thread(owned, stubborn())
+        assert started.wait(5)
+        owned.close(join_timeout=0.3)
+        caller.join(5)
+        assert not caller.is_alive(), "the caller was left waiting on a closed loop"
+        assert len(outcome) == 1 and isinstance(outcome[0], FacadeError)
+
+    def test_every_call_after_close_is_refused_with_facade_error(self) -> None:
+        owned = LoopThread()
+        owned.run(asyncio.sleep(0))
+        owned.close()
+        coroutine = asyncio.sleep(0)
+        with pytest.raises(FacadeError):
+            owned.run(coroutine)
