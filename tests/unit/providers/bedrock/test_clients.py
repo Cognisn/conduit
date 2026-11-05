@@ -192,8 +192,9 @@ class TestApiKeys:
         monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "none"))
         monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "none"))
         monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
-        with pytest.raises(ConfigurationError, match="NoCredentialsError"):
+        with pytest.raises(ConfigurationError, match="NoCredentialsError") as raised:
             client_for({"mode": "short_term_api_key"})
+        assert raised.value.__cause__ is None and raised.value.__context__ is None
 
 
 class AnsweringFactory(BedrockFactory):

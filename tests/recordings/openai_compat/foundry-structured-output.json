@@ -1,0 +1,137 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "max_completion_tokens": 512,
+        "messages": [
+          {
+            "content": "You are a concise assistant.",
+            "role": "system"
+          },
+          {
+            "content": [
+              {
+                "text": "Weather in Hobart as JSON.",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "example-gpt-deployment",
+        "response_format": {
+          "json_schema": {
+            "name": "output",
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "celsius": {
+                  "type": "number"
+                },
+                "city": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city",
+                "celsius"
+              ],
+              "type": "object"
+            },
+            "strict": true
+          },
+          "type": "json_schema"
+        },
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "response": [
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "{\"city\": \"Hob",
+                "role": "assistant"
+              },
+              "finish_reason": null,
+              "index": 0
+            }
+          ],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "example-gpt-deployment",
+          "object": "chat.completion.chunk",
+          "usage": null
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "art\", \"celsius\": 11"
+              },
+              "finish_reason": null,
+              "index": 0
+            }
+          ],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "example-gpt-deployment",
+          "object": "chat.completion.chunk",
+          "usage": null
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "}"
+              },
+              "finish_reason": null,
+              "index": 0
+            }
+          ],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "example-gpt-deployment",
+          "object": "chat.completion.chunk",
+          "usage": null
+        },
+        {
+          "choices": [
+            {
+              "delta": {},
+              "finish_reason": "stop",
+              "index": 0
+            }
+          ],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "example-gpt-deployment",
+          "object": "chat.completion.chunk",
+          "usage": null
+        },
+        {
+          "choices": [],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "example-gpt-deployment",
+          "object": "chat.completion.chunk",
+          "usage": {
+            "completion_tokens": 12,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens": 1100,
+            "prompt_tokens_details": {
+              "cached_tokens": 1024
+            },
+            "total_tokens": 1112
+          }
+        }
+      ]
+    }
+  ],
+  "name": "foundry-structured-output",
+  "provider": "openai_compat"
+}

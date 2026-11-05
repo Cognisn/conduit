@@ -390,6 +390,11 @@ class TestStream:
         "raw_events",
         [
             pytest.param([{"messageStop": {"stopReason": "end_turn"}}], id="no metadata"),
+            pytest.param([{"messageStop": {}}], id="a message stop without a reason"),
+            pytest.param(
+                [{"contentBlockDelta": {"delta": {"text": 5}, "contentBlockIndex": 0}}],
+                id="text that is not a string",
+            ),
             pytest.param([METADATA], id="no message stop"),
             pytest.param(
                 [{"messageStop": {"stopReason": "end_turn"}}, METADATA, METADATA],
@@ -450,6 +455,7 @@ class TestStream:
         with pytest.raises(ProviderError) as raised:
             run(raw_events)
         assert raised.value.failure is ProviderFailure.PROTOCOL
+        assert raised.value.__cause__ is None and raised.value.__context__ is None
 
 
 class TestConverseResponse:
@@ -494,3 +500,4 @@ class TestConverseResponse:
                 {"output": {"message": {"content": []}}, "stopReason": "end_turn"}
             )
         assert raised.value.failure is ProviderFailure.PROTOCOL
+        assert raised.value.__cause__ is None and raised.value.__context__ is None
