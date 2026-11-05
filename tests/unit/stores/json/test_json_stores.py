@@ -351,3 +351,35 @@ async def test_a_damaged_transcript_file_is_refused_without_echo(tmp_path: Path)
                 await call
             assert "SECRET" not in str(raised.value) and "SECRET" not in repr(raised.value)
             assert raised.value.__cause__ is None and raised.value.__context__ is None
+
+
+async def test_a_failed_directory_sync_does_not_fail_a_completed_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The replace has already happened, so the write is complete: a directory sync that
+    # fails only weakens durability and must not report the write as failed.
+    real_open, real_fsync, real_close = os.open, os.fsync, os.close
+
+    def fake_open(path: Any, flags: int, *args: Any) -> int:
+        return -7 if Path(path) == tmp_path else real_open(path, flags, *args)
+
+    def fake_fsync(fd: int) -> None:
+        if fd == -7:
+            raise OSError("directory sync not supported here")
+        real_fsync(fd)
+
+    def fake_close(fd: int) -> None:
+        if fd != -7:
+            real_close(fd)
+
+    monkeypatch.setattr(json_stores, "_SYNC_DIRECTORY", True)
+    monkeypatch.setattr(os, "open", fake_open)
+    monkeypatch.setattr(os, "fsync", fake_fsync)
+    monkeypatch.setattr(os, "close", fake_close)
+    store = JsonTranscriptStore(tmp_path)
+    await store.append("sess_1", [_message("one")])
+    tokens = JsonTokenStore(tmp_path)
+    await tokens.put("mcp:example", TokenSet(access_token=SecretStr("a-1")))
+    monkeypatch.undo()
+    assert [entry.seq for entry in (await store.load("sess_1")).entries] == [1]
+    assert await tokens.get("mcp:example") is not None

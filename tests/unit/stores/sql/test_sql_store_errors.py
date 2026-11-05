@@ -164,3 +164,73 @@ async def test_an_append_survives_a_delete_between_its_statements(postgres_url: 
     finally:
         await first.dispose()
         await other.dispose()
+
+
+async def _migrated_sqlite(tmp_path: Path) -> AsyncEngine:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'conduit.db'}")
+    await migrate(engine)
+    return engine
+
+
+async def test_a_token_row_that_cannot_be_decoded_is_refused_without_echo(tmp_path: Path) -> None:
+    engine = await _migrated_sqlite(tmp_path)
+    try:
+        store = SqlTokenStore(engine)
+        await store.put("mcp:example", _tokens())
+        for data in ('{"access_token": "SECRET-damaged', '{"SECRET": 1}', '["SECRET"]'):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text("UPDATE conduit_tokens SET data = :data WHERE key = 'mcp:example'"),
+                    {"data": data},
+                )
+            with pytest.raises(StoreError) as raised:
+                await store.get("mcp:example")
+            _assert_clean(raised.value)
+    finally:
+        await engine.dispose()
+
+
+async def test_a_transcript_row_that_cannot_be_decoded_is_refused_without_echo(
+    tmp_path: Path,
+) -> None:
+    engine = await _migrated_sqlite(tmp_path)
+    try:
+        store = SqlTranscriptStore(engine)
+        entry = MessageEntry(message=Message.user("hello"))
+        await store.append("sess_1", [entry])
+        for body in ('{"type": "message", "SECRET', '{"type": "SECRET-kind"}'):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text("UPDATE conduit_transcript_entries SET body = :body"), {"body": body}
+                )
+            with pytest.raises(StoreError) as raised:
+                await store.load("sess_1")
+            _assert_clean(raised.value)
+    finally:
+        await engine.dispose()
+
+
+async def test_a_session_id_the_transcript_refuses_is_not_echoed(tmp_path: Path) -> None:
+    engine = await _migrated_sqlite(tmp_path)
+    try:
+        store = SqlTranscriptStore(engine)
+        entry = MessageEntry(message=Message.user("hello"))
+        long_id = "sess_SECRET" + "x" * 256
+        for call in (store.append(long_id, [entry]), store.load(long_id), store.load("")):
+            with pytest.raises(ValueError, match="session id") as raised:
+                await call
+            assert "SECRET" not in str(raised.value) and "SECRET" not in repr(raised.value)
+            assert raised.value.__cause__ is None and raised.value.__context__ is None
+    finally:
+        await engine.dispose()
+
+
+async def test_a_store_error_names_the_driver_error_class(tmp_path: Path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'unmigrated.db'}")
+    try:
+        with pytest.raises(StoreError) as raised:
+            await SqlTokenStore(engine).get("mcp:example")
+        assert raised.value.error_class == "OperationalError from sqlite3.OperationalError"
+        _assert_clean(raised.value)
+    finally:
+        await engine.dispose()
