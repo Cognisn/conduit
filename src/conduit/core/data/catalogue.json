@@ -2,6 +2,21 @@
   "version": "2026.11.1",
   "models": [
     {
+      "model_id": "claude-fable-5-1",
+      "provider": "anthropic",
+      "kind": "chat",
+      "residency_scope": "global",
+      "regions": [],
+      "capabilities": {
+        "tools": true,
+        "vision": true,
+        "prompt_caching": true,
+        "structured_output": true
+      },
+      "context_window": 1000000,
+      "output_limit": 128000
+    },
+    {
       "model_id": "claude-opus-5-5",
       "provider": "anthropic",
       "kind": "chat",
@@ -59,7 +74,7 @@
         "structured_output": true
       },
       "context_window": 1000000,
-      "output_limit": 64000
+      "output_limit": 128000
     },
     {
       "model_id": "claude-haiku-4-5",
