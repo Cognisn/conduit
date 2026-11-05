@@ -160,11 +160,14 @@ def _write_atomic(path: Path, text: str) -> None:
             os.fsync(handle.fileno())
         _retrying(os.replace, temporary, path)
         if _SYNC_DIRECTORY:
-            directory = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+            # The replace has happened, so the write is complete: a directory that
+            # cannot be synced weakens durability only and does not fail the write.
+            with contextlib.suppress(OSError):
+                directory = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
     except BaseException:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary)
