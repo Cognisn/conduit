@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a15] - 2026-11-05
+
+Wave 4, sixth and last merge: the bedrock-mantle adapter (`feat/0.1.0-provider-bedrock-mantle`). Milestone M3 (agent runner, skills, MCP client and embeddings).
+
+### Added
+
+- The bedrock-mantle adapter (`conduit.providers.bedrock_mantle`, `bedrock-mantle` extra with anthropic and boto3). It serves single-Region Claude through the Anthropic Messages API on Amazon Bedrock's bedrock-mantle endpoint.
+  - Short-term Bedrock API keys are generated from AWS credentials and refreshed before they, or their credentials, expire.
+  - The key is sent as a bearer token set at send time on every attempt, and is kept out of every log record.
+  - Long-term keys are refused unless explicitly allowed. That refusal, and the Region and endpoint checks, hold however the settings were made.
+  - Requests, streaming, usage and errors are the anthropic adapter's.
+  - Prompt caching is used only where the catalogue says the model caches.
+- Catalogue 2026.11.6: in-region bedrock-mantle entries for Claude Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1, Opus 5, Sonnet 5, Opus 4.8, Opus 4.7 and Haiku 4.5, six of them in ap-southeast-4 (Melbourne).
+
+### Changed
+
+- `builtin_factories()` includes the bedrock-mantle factory.
+- The client-construction tripwire covers the bedrock-mantle client.
+
 ## [0.1.0a14] - 2026-11-05
 
 Wave 4, fifth merge: embeddings (`feat/0.1.0-embeddings`).
