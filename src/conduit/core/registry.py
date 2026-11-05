@@ -36,6 +36,20 @@ holds the call to what the provider was built for:
 It then emits a ``ModelCallStartedEvent`` and a ``ModelCallFinishedEvent`` (with the
 final usage, all four counts) for every call, under the content-capture policy. The
 adapter it wraps is private: there is no way to call it around these checks.
+
+Embedding providers (C13) are built by the same registry, from an
+``EmbeddingProviderFactory`` registered with ``register_embedding``: it normally shares
+the chat adapter's settings model and ``create_client`` (so authentication is the same)
+and supplies ``create_embedder``. ``build_embedder`` validates, resolves and makes the
+client exactly as ``build`` does, and wraps the embedder in a ``MeteredEmbedder``, which
+only the registry can make. Before any client call it refuses a model the catalogue does
+not declare, a chat model, a model the adapter has no request shape for, and dimensions
+above the model's own or that the model does not offer; it holds the call to its
+resolved assignments, or to the residency policy, as ``MeteredProvider`` does. It checks
+every response (one finite vector per text, each of the expected length, and usage of
+input tokens only), raising ``ProviderError(PROTOCOL)`` for anything else, and emits an
+``EmbeddingCallStartedEvent`` and an ``EmbeddingCallFinishedEvent`` for every call. The
+texts are prompt content, captured only when the policy captures prompts.
 """
 
 from __future__ import annotations
@@ -45,18 +59,20 @@ import contextlib
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import time
 import warnings
-from collections.abc import AsyncGenerator, AsyncIterator, Iterable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel, SecretStr, ValidationError
+from pydantic import BaseModel, NonNegativeFloat, NonNegativeInt, SecretStr, ValidationError
 
-from conduit.core.catalogue import Catalogue, default_catalogue
+from conduit.core.catalogue import Catalogue, ModelEntry, default_catalogue
 from conduit.core.errors import (
+    CapabilityRefused,
     ConfigurationError,
     ModelNotAssigned,
     ProviderError,
@@ -64,16 +80,23 @@ from conduit.core.errors import (
     SettingsRefused,
 )
 from conduit.core.events import (
+    CallOutcome,
     CapturedContent,
     CapturePolicy,
     ContentKind,
+    Event,
     EventSink,
     FanOutSink,
     ModelCallFinishedEvent,
     ModelCallStartedEvent,
 )
-from conduit.core.identifiers import new_id
-from conduit.core.provider import Provider
+from conduit.core.identifiers import Identifier, new_id
+from conduit.core.provider import (
+    EmbeddingProvider,
+    EmbeddingRequest,
+    EmbeddingResponse,
+    Provider,
+)
 from conduit.core.residency import ResidencyPolicy
 from conduit.core.secrets import SecretResolver, resolve_secret_fields
 from conduit.core.settings import KIND_PATTERN, ProviderSettings, refusals
@@ -378,6 +401,268 @@ class MeteredProvider:
         return f"MeteredProvider(name={self.name!r}, kind={self.kind!r})"
 
 
+class EmbeddingCallStartedEvent(Event):
+    """An embedding call, as it starts. ``input`` is the batch of texts, as content."""
+
+    type: Literal["embedding_call_started"] = "embedding_call_started"
+    call_id: Identifier
+    provider: Identifier  # the configured provider's name
+    kind: Identifier
+    model: Identifier
+    input: CapturedContent
+    text_count: NonNegativeInt
+    dimensions: NonNegativeInt
+
+
+class EmbeddingCallFinishedEvent(Event):
+    """One embedding call's outcome and usage: the metering point for embeddings.
+
+    Every call has exactly one, however it ends. ``usage`` is ``None`` for a failed call
+    and for a provider that reports no count. ``error_type`` is the exception's class
+    name, or ``cancelled`` for a call cancelled part-way.
+    """
+
+    type: Literal["embedding_call_finished"] = "embedding_call_finished"
+    call_id: Identifier
+    provider: Identifier
+    kind: Identifier
+    model: Identifier
+    outcome: CallOutcome
+    usage: Usage | None = None
+    failure: ProviderFailure | None = None
+    error_type: Identifier | None = None
+    duration_ms: NonNegativeFloat
+    vector_count: NonNegativeInt = 0
+    dimensions: NonNegativeInt
+
+
+@runtime_checkable
+class EmbeddingProviderFactory(Protocol):
+    """What an embedding adapter gives the registry.
+
+    ``settings_model`` and ``create_client`` are normally the chat adapter's own (an
+    embedding factory subclasses the chat factory), so an embedding provider shares the
+    chat provider's settings and authentication.
+    """
+
+    @property
+    def kind(self) -> str:
+        """The provider kind this adapter serves: the kind of its settings."""
+        ...
+
+    @property
+    def settings_model(self) -> type[ProviderSettings]: ...
+
+    def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
+        """The SDK client (or ``None`` for an adapter that needs none)."""
+        ...
+
+    def create_embedder(
+        self,
+        name: str,
+        settings: ProviderSettings,
+        client: Any,
+        *,
+        catalogue: Catalogue | None = None,
+    ) -> EmbeddingProvider:
+        """The embedding provider for one configured name, around ``client``. The
+        registry always passes its applied catalogue."""
+        ...
+
+
+#: Only the registry holds this, so only the registry can make a ``MeteredEmbedder``.
+_EMBEDDER_TOKEN = object()
+
+
+def _capture_texts(request: EmbeddingRequest, policy: CapturePolicy) -> CapturedContent:
+    text = json.dumps(list(request.texts), ensure_ascii=False)
+    return policy.capture(ContentKind.PROMPT, text)
+
+
+def _well_formed(response: object, count: int, dimensions: int) -> bool:
+    """Whether ``response`` holds ``count`` finite vectors of ``dimensions`` each, and
+    usage of input tokens only (or none)."""
+    if not isinstance(response, EmbeddingResponse):
+        return False
+    usage = response.usage
+    if usage is not None and (
+        not isinstance(usage, Usage)
+        or usage.output_tokens
+        or usage.cache_read_tokens
+        or usage.cache_write_tokens
+    ):
+        return False
+    vectors = response.vectors
+    if not isinstance(vectors, tuple) or len(vectors) != count:
+        return False
+    for vector in vectors:
+        if not isinstance(vector, tuple) or len(vector) != dimensions:
+            return False
+        if any(isinstance(value, bool) or not isinstance(value, float | int) for value in vector):
+            return False
+        # A NaN or an infinity anywhere makes the sum non-finite.
+        if not math.isfinite(math.fsum(vector)):
+            return False
+    return True
+
+
+class MeteredEmbedder:
+    """A built embedding provider, as the registry hands it out: checked and metered.
+
+    Made only by ``ProviderRegistry.build_embedder``; the adapter it wraps is private.
+    """
+
+    def __init__(
+        self,
+        inner: EmbeddingProvider,
+        *,
+        token: object,
+        name: str,
+        settings: ProviderSettings,
+        catalogue: Catalogue,
+        events: FanOutSink,
+        assigned: Mapping[str, str] | None = None,
+        dimensions: Mapping[str, int] | None = None,
+        residency: ResidencyPolicy | None = None,
+    ) -> None:
+        if token is not _EMBEDDER_TOKEN:
+            raise TypeError("a MeteredEmbedder is made only by ProviderRegistry.build_embedder")
+        self._inner = inner
+        self.name = name
+        self.kind = inner.kind
+        self.settings = settings
+        self._catalogue = catalogue
+        self._events = events
+        self._assigned = dict(assigned) if assigned is not None else None
+        self._models = frozenset(self._assigned.values()) if self._assigned is not None else None
+        self._dimensions = dict(dimensions or {})
+        self._residency = residency if residency is not None else ResidencyPolicy()
+
+    @property
+    def assigned_models(self) -> frozenset[str] | None:
+        """The models resolved for this provider, or ``None`` when it was built without
+        assignments (and is held to the registry's residency policy instead)."""
+        return self._models
+
+    def serves(self, model: str) -> bool:
+        return self._inner.serves(model)
+
+    def accepts_dimensions(self, model: str, dimensions: int) -> bool:
+        return self._inner.accepts_dimensions(model, dimensions)
+
+    def _admit(self, request: EmbeddingRequest) -> tuple[int, EmbeddingRequest]:
+        """The dimensions expected, and the request as the adapter receives it.
+
+        Refuses, before any client call, a call outside what this provider serves.
+        """
+        model = request.model
+        entry = self._catalogue.require(self.settings.catalogue_provider, model)
+        if entry.kind != "embedding":
+            raise CapabilityRefused(f"model {model!r} is a chat model, not an embedding model")
+        wanted = request.dimensions
+        if self._assigned is None or self._models is None:
+            task = request.task_class or self.name
+            self._residency.check(entry, self.settings.region, task=task)
+        elif request.task_class is not None:
+            if self._assigned.get(request.task_class) != model:
+                raise ModelNotAssigned(self.name, model, request.task_class)
+            fixed = self._dimensions.get(request.task_class)
+            if fixed is not None:
+                if wanted is not None and wanted != fixed:
+                    raise ConfigurationError(
+                        f"{request.task_class}: dimensions {wanted} differ from the task "
+                        f"class's {fixed}"
+                    )
+                wanted = fixed
+        elif model not in self._models:
+            raise ModelNotAssigned(self.name, model, None)
+        if not self._inner.serves(model):
+            raise ConfigurationError(f"the {self.kind} embedding adapter cannot call {model!r}")
+        own = entry.embedding_dimensions or 0
+        wanted = wanted if wanted is not None else own
+        if wanted > own:
+            raise ConfigurationError(
+                f"dimensions {wanted} exceed model {model!r}'s {own} dimensions"
+            )
+        if wanted != own and not self._inner.accepts_dimensions(model, wanted):
+            raise ConfigurationError(f"model {model!r} does not offer {wanted} dimensions")
+        forwarded = request.model_copy(update={"dimensions": None if wanted == own else wanted})
+        return wanted, forwarded
+
+    async def embed(self, request: EmbeddingRequest) -> EmbeddingResponse:
+        dimensions, forwarded = self._admit(request)
+        policy = self._events.policy
+        common: dict[str, Any] = {
+            "call_id": new_id("call"),
+            "provider": self.name,
+            "kind": self.kind,
+            "model": request.model,
+            "run_id": request.run_id,
+            "correlation_id": request.correlation_id,
+            "task_class": request.task_class,
+        }
+        began = time.perf_counter()
+
+        async def finished(**fields: Any) -> None:
+            await self._events.emit(
+                EmbeddingCallFinishedEvent(
+                    **common,
+                    duration_ms=(time.perf_counter() - began) * 1000,
+                    dimensions=dimensions,
+                    **fields,
+                )
+            )
+
+        await self._events.emit(
+            EmbeddingCallStartedEvent(
+                **common,
+                input=_capture_texts(request, policy),
+                text_count=len(request.texts),
+                dimensions=dimensions,
+            )
+        )
+        try:
+            response = await self._inner.embed(forwarded)
+        except ProviderError as error:
+            await finished(outcome="failed", failure=error.failure)
+            raise
+        except Exception as error:
+            await finished(outcome="failed", error_type=type(error).__name__)
+            raise
+        except asyncio.CancelledError:
+            await finished(outcome="failed", error_type=CANCELLED)
+            raise
+        except BaseException as error:
+            await finished(outcome="failed", error_type=type(error).__name__)
+            raise
+        # Checked and raised outside any handler: the error has no cause or context.
+        if not _well_formed(response, len(request.texts), dimensions):
+            await finished(outcome="failed", failure=ProviderFailure.PROTOCOL)
+            raise ProviderError(ProviderFailure.PROTOCOL)
+        await finished(outcome="ok", usage=response.usage, vector_count=len(response.vectors))
+        return response
+
+    async def aclose(self) -> None:
+        """Close the adapter. A close that raises is logged (the adapter's class and the
+        exception's class only) and never raised. Cancellation propagates unchanged."""
+        await _close_quietly(self._inner, self.name)
+
+    def __repr__(self) -> str:
+        return f"MeteredEmbedder(name={self.name!r}, kind={self.kind!r})"
+
+
+async def _close_quietly(inner: EmbeddingProvider, name: str) -> None:
+    failed: str | None = None
+    try:
+        await inner.aclose()
+    except Exception as error:
+        failed = type(error).__name__
+    if failed is not None:
+        logger.warning(
+            "closing embedding provider %s (%s) failed: %s", name, type(inner).__name__, failed
+        )
+
+
 class ProviderRegistry:
     """Provider adapters by kind, and every provider built from them."""
 
@@ -390,6 +675,7 @@ class ProviderRegistry:
         capture: CapturePolicy | None = None,
         residency: ResidencyPolicy | None = None,
         factories: Iterable[ProviderFactory] = (),
+        embedding_factories: Iterable[EmbeddingProviderFactory] = (),
     ) -> None:
         self._secrets = secrets
         self.catalogue = catalogue if catalogue is not None else default_catalogue()
@@ -399,8 +685,12 @@ class ProviderRegistry:
         self._factories: dict[str, ProviderFactory] = {}
         self._with_catalogue: dict[str, bool] = {}
         self._built: list[MeteredProvider] = []
+        self._embedding_factories: dict[str, EmbeddingProviderFactory] = {}
+        self._embedders: list[MeteredEmbedder] = []
         for factory in factories:
             self.register(factory)
+        for embedding_factory in embedding_factories:
+            self.register_embedding(embedding_factory)
 
     @property
     def kinds(self) -> frozenset[str]:
@@ -422,6 +712,28 @@ class ProviderRegistry:
         self._factories[factory.kind] = factory
         self._with_catalogue[factory.kind] = takes
 
+    @property
+    def embedding_kinds(self) -> frozenset[str]:
+        return frozenset(self._embedding_factories)
+
+    def register_embedding(self, factory: EmbeddingProviderFactory) -> None:
+        """Register an embedding adapter. Its kind may also have a chat adapter."""
+        if not re.fullmatch(KIND_PATTERN, factory.kind):
+            raise ConfigurationError(
+                f"embedding provider kind {factory.kind!r} is not a valid kind"
+            )
+        if factory.kind in self._embedding_factories:
+            raise ConfigurationError(
+                f"embedding provider kind {factory.kind!r} is registered twice"
+            )
+        self._embedding_factories[factory.kind] = factory
+
+    def _embedding_factory(self, kind: str) -> EmbeddingProviderFactory:
+        if kind not in self._embedding_factories:
+            named = f"kind {kind!r}" if re.fullmatch(KIND_PATTERN, kind) else "that kind"
+            raise ConfigurationError(f"no embedding adapter for {named}")
+        return self._embedding_factories[kind]
+
     def _factory(self, kind: str) -> ProviderFactory:
         if kind not in self._factories:
             # The kind may come from an unvalidated mapping: name it only if it is a kind.
@@ -440,6 +752,23 @@ class ProviderRegistry:
         fields, or ``ConfigurationError`` for an instance whose fields cannot be read;
         neither keeps the exception it was raised for.
         """
+        return self._validated(name, settings, lambda kind: self._factory(kind).settings_model)
+
+    def validate_embedding(
+        self, name: str, settings: ProviderSettings | Mapping[str, Any]
+    ) -> ProviderSettings:
+        """``settings`` re-validated against its embedding adapter's own model, as
+        ``validate`` does for a chat adapter."""
+        return self._validated(
+            name, settings, lambda kind: self._embedding_factory(kind).settings_model
+        )
+
+    def _validated(
+        self,
+        name: str,
+        settings: ProviderSettings | Mapping[str, Any],
+        settings_model: Callable[[str], type[ProviderSettings]],
+    ) -> ProviderSettings:
         data: dict[str, Any] | None = None
         if isinstance(settings, BaseModel):
             try:
@@ -451,8 +780,7 @@ class ProviderRegistry:
                 raise ConfigurationError(f"provider {name!r}: settings cannot be read")
         else:
             data = dict(settings)
-        factory = self._factory(str(data.get("kind")))
-        model = factory.settings_model
+        model = settings_model(str(data.get("kind")))
         if isinstance(settings, model):
             model = type(settings)
         found: tuple[list[str], list[str]] = ([], [])
@@ -510,7 +838,100 @@ class ProviderRegistry:
         logger.debug("built provider %s (%s)", name, validated.kind)
         return provider
 
+    async def build_embedder(
+        self,
+        name: str,
+        settings: ProviderSettings | Mapping[str, Any],
+        *,
+        client: Any = _UNSET,
+        assigned: Mapping[str, str] | None = None,
+        dimensions: Mapping[str, int] | None = None,
+    ) -> MeteredEmbedder:
+        """The embedding provider for one configured name. ``client`` replaces the SDK
+        client in tests.
+
+        ``assigned`` maps each embedding task class this provider serves to its model;
+        each must be declared, an embedding model, and within the residency policy,
+        checked before the client is made. ``dimensions`` fixes a task class's vector
+        length below its model's own; the model must offer it. Without ``assigned``,
+        every call is held to the policy.
+        """
+        validated = self.validate_embedding(name, settings)
+        factory = self._embedding_factory(validated.kind)
+        entries: dict[str, ModelEntry] = {}
+        if assigned is not None:
+            if not assigned:
+                raise ConfigurationError(f"embedding provider {name!r} is built for no assignment")
+            for task in sorted(assigned):
+                entry = self.catalogue.require(validated.catalogue_provider, assigned[task])
+                if entry.kind != "embedding":
+                    raise CapabilityRefused(
+                        f"{task}: model {assigned[task]!r} is a chat model, not an embedding model"
+                    )
+                self.residency.check(entry, validated.region, task=task)
+                entries[task] = entry
+        fixed = dict(dimensions or {})
+        for task in sorted(fixed):
+            if task not in entries:
+                raise ConfigurationError(
+                    f"dimensions are given for task class {task!r}, which is not assigned "
+                    f"to {name!r}"
+                )
+            own = entries[task].embedding_dimensions or 0
+            if fixed[task] > own:
+                raise CapabilityRefused(
+                    f"{task}: {fixed[task]} dimensions exceed model "
+                    f"{entries[task].model_id!r}'s {own} dimensions"
+                )
+        if client is _UNSET:
+            secrets = await resolve_secret_fields(validated, self._secrets)
+            client = factory.create_client(validated, secrets)
+        inner = factory.create_embedder(name, validated, client, catalogue=self.catalogue)
+        refusal: ConfigurationError | None = None
+        for task in sorted(entries):
+            model = entries[task].model_id
+            wanted = fixed.get(task)
+            if not inner.serves(model):
+                refusal = ConfigurationError(
+                    f"{task}: the {validated.kind} embedding adapter cannot call {model!r}"
+                )
+            elif (
+                wanted is not None
+                and wanted != entries[task].embedding_dimensions
+                and not inner.accepts_dimensions(model, wanted)
+            ):
+                refusal = CapabilityRefused(
+                    f"{task}: model {model!r} does not offer {wanted} dimensions"
+                )
+            if refusal is not None:
+                break
+        if refusal is not None:
+            await _close_quietly(inner, name)
+            raise refusal
+        reduced = {
+            task: wanted
+            for task, wanted in fixed.items()
+            if wanted != entries[task].embedding_dimensions
+        }
+        embedder = MeteredEmbedder(
+            inner,
+            token=_EMBEDDER_TOKEN,
+            name=name,
+            settings=validated,
+            catalogue=self.catalogue,
+            events=self._events,
+            assigned=assigned,
+            dimensions=reduced,
+            residency=self.residency,
+        )
+        self._embedders.append(embedder)
+        logger.debug("built embedding provider %s (%s)", name, validated.kind)
+        return embedder
+
     async def aclose(self) -> None:
+        embedders, self._embedders = self._embedders, []
+        for embedder in reversed(embedders):
+            await embedder.aclose()
         built, self._built = self._built, []
         for provider in reversed(built):
             try:
