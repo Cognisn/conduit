@@ -22,15 +22,15 @@ should know them:
   ``NO_PROXY``, so a proxy set in the environment sees every call (the TLS session
   still ends at the provider).
 
-If building the SDK client fails after an Entra ID credential was made, the credential
-is closed: on the running loop when there is one, otherwise straight away.
+Entra ID comes from ``conduit.providers.openai_compat.entra``, which the Anthropic
+adapter's Foundry endpoint shares. If building the SDK client fails after an Entra ID
+credential was made, the credential is closed: on the running loop when there is one,
+otherwise straight away.
 """
 
 from __future__ import annotations
 
-import asyncio
 import importlib
-import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -41,6 +41,7 @@ from conduit.core.catalogue import Catalogue, default_catalogue
 from conduit.core.errors import ConfigurationError
 from conduit.core.provider import Provider
 from conduit.core.settings import ProviderSettings
+from conduit.providers.openai_compat.entra import close_soon, entra_id_token_provider
 from conduit.providers.openai_compat.provider import OpenAICompatProvider
 from conduit.providers.openai_compat.settings import (
     FoundryApiKey,
@@ -49,30 +50,6 @@ from conduit.providers.openai_compat.settings import (
     OpenAIService,
     XAIService,
 )
-
-logger = logging.getLogger("conduit.providers.openai_compat")
-
-#: Credential closes scheduled on a running loop, kept until they finish.
-_CLOSING: set[asyncio.Task[None]] = set()
-
-
-async def _close_quietly(credential: Any) -> None:
-    try:
-        await credential.close()
-    except Exception as error:
-        logger.warning("closing an Entra ID credential failed: %s", type(error).__name__)
-
-
-def _close_soon(credential: Any) -> None:
-    """Close ``credential`` from synchronous code, on the running loop if there is one."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        asyncio.run(_close_quietly(credential))
-        return
-    task = loop.create_task(_close_quietly(credential))
-    _CLOSING.add(task)
-    task.add_done_callback(_CLOSING.discard)
 
 
 @dataclass(eq=False)
@@ -126,18 +103,7 @@ class OpenAICompatFactory:
             if isinstance(service.auth, FoundryApiKey):
                 api_key = _secret(secrets, "service.auth.api_key")
             else:
-                identity = importlib.import_module("azure.identity.aio")
-                options: dict[str, Any] = {}
-                if service.auth.managed_identity_client_id is not None:
-                    options["managed_identity_client_id"] = service.auth.managed_identity_client_id
-                credential = identity.DefaultAzureCredential(**options)
-                try:
-                    token_provider = identity.get_bearer_token_provider(
-                        credential, service.auth.scope
-                    )
-                except Exception:
-                    _close_soon(credential)
-                    raise
+                credential, token_provider = entra_id_token_provider(service.auth)
                 api_key = token_provider
         else:
             base_url = service.base_url
@@ -154,7 +120,7 @@ class OpenAICompatFactory:
             )
         except Exception:
             if credential is not None:
-                _close_soon(credential)
+                close_soon(credential)
             raise
         # Never the environment's values (see the module docstring).
         sdk.organization = organization
