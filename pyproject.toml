@@ -59,7 +59,7 @@ sql = [
     "asyncpg>=0.30,<1",
     "aiosqlite>=0.20,<1",
 ]
-konfig = []
+konfig = ["cognisn-konfig>=0.5,<1"]
 warden = []
 otel = []
 cli = []
