@@ -1,15 +1,8 @@
-"""SKILL.md skills: format, validation, skill sources and progressive disclosure.
+"""SKILL.md skills: format, validation, skill sources and progressive disclosure."""
 
-- ``conduit.skills.format``: the SKILL.md format, ``parse_skill_md`` and the
-  resource path rule.
-- ``conduit.skills.filesystem``: ``FilesystemSkillSource``, a ``SkillSource`` over a
-  product-given directory, with every path confined to its skill's folder.
-- ``conduit.skills.memory``: ``MemorySkillSource``, skills given in code.
-- ``conduit.skills.disclosure``: ``SkillSession``, the listing, loading on demand,
-  resources, limits, transcript markers and the cached request prefix.
-- ``conduit.skills.tool``: the ``use_skill`` tool and ``with_use_skill``.
-- ``conduit.skills.events``: skill events (names, versions and sizes only).
-"""
+# Modules: format (SKILL.md and the resource path rule), filesystem (a confined
+# directory source), memory (skills given in code), disclosure (SkillSession: listing,
+# loading, limits, markers and the cached prefix), tool (use_skill) and events.
 
 from __future__ import annotations
 

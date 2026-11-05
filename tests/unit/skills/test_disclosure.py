@@ -127,6 +127,16 @@ class TestLoading:
             await SkillSession(Wrong([skill("a"), skill("other")])).load("a")
         assert caught.value.reason == "name_mismatch"
 
+    async def test_a_source_that_answers_with_an_invalid_version_is_refused(self) -> None:
+        class Odd(MemorySkillSource):
+            async def load_skill(self, name: str) -> Skill:
+                return skill(name, version=f"{MARKER} x")
+
+        with pytest.raises(SkillInvalid) as caught:
+            await SkillSession(Odd([skill("a")])).load("a")
+        assert caught.value.reason == "version_invalid"
+        clean(caught.value, MARKER)
+
     async def test_a_source_lookup_error_becomes_not_found_unchained(self) -> None:
         class Gone(MemorySkillSource):
             async def load_skill(self, name: str) -> Skill:
@@ -391,10 +401,16 @@ class TestEvents:
             await session.load("b")
         with pytest.raises(SkillNotFound):
             await session.load(f"{MARKER}-x")
+        with pytest.raises(SkillRefused):
+            await session.read_resource(f"{MARKER}-x", "r.md")
+        with pytest.raises(SkillRefused):
+            await session.read_resource("b", "r.md")
         refusals = [e for e in sink.events if isinstance(e, SkillRefusedEvent)]
         assert [(e.skill, e.reason) for e in refusals] == [
             ("b", "too_many_loaded"),
             (None, "skill_unknown"),
+            (None, "skill_not_loaded"),
+            ("b", "skill_not_loaded"),
         ]
         assert MARKER not in "".join(e.model_dump_json() for e in sink.events)
 
