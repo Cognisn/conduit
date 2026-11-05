@@ -194,6 +194,65 @@ class TestFactory:
         assert provider.kind == "anthropic"
 
 
+FOUNDRY_URL = "https://example-resource.services.ai.azure.example.com/anthropic/"
+ENVIRONMENT_VALUE = "x-api-key: env-synthetic-key\nanthropic-version: 2023-06-01"
+
+
+def _settings(endpoint: str) -> AnthropicSettings:
+    if endpoint == "foundry":
+        return AnthropicSettings(
+            kind="anthropic", endpoint="foundry", api_key=SecretRef("K"), base_url=FOUNDRY_URL
+        )
+    return AnthropicSettings(kind="anthropic", api_key=SecretRef("K"))
+
+
+class TestEnvironmentCannotOverrideTheSettings:
+    """The SDK reads some variables even when conduit passes every value explicitly."""
+
+    @pytest.mark.parametrize("endpoint", ["direct", "foundry"])
+    @pytest.mark.parametrize("value", [ENVIRONMENT_VALUE, ""])
+    def test_custom_headers_are_refused(
+        self, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch, endpoint: str, value: str
+    ) -> None:
+        monkeypatch.setenv("ANTHROPIC_CUSTOM_HEADERS", value)
+        with pytest.raises(ConfigurationError, match="ANTHROPIC_CUSTOM_HEADERS") as caught:
+            AnthropicFactory().create_client(_settings(endpoint), {"api_key": SecretStr(KEY)})
+        assert "env-synthetic-key" not in str(caught.value)
+        assert fake_sdk.made == []
+
+    def test_a_foundry_resource_is_refused_for_foundry(
+        self, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "elsewhere-synthetic")
+        with pytest.raises(ConfigurationError, match="ANTHROPIC_FOUNDRY_RESOURCE") as caught:
+            AnthropicFactory().create_client(_settings("foundry"), {"api_key": SecretStr(KEY)})
+        assert "elsewhere-synthetic" not in str(caught.value)
+        assert fake_sdk.made == []
+
+    def test_a_foundry_resource_does_not_affect_the_direct_api(
+        self, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "elsewhere-synthetic")
+        AnthropicFactory().create_client(_settings("direct"), {"api_key": SecretStr(KEY)})
+        assert fake_sdk.made[0][0] == "AsyncAnthropic"
+
+    @pytest.mark.parametrize("endpoint", ["direct", "foundry"])
+    def test_sdk_debug_logging_is_refused(
+        self, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch, endpoint: str
+    ) -> None:
+        monkeypatch.setenv("ANTHROPIC_LOG", "debug")
+        with pytest.raises(ConfigurationError, match="ANTHROPIC_LOG"):
+            AnthropicFactory().create_client(_settings(endpoint), {"api_key": SecretStr(KEY)})
+        assert fake_sdk.made == []
+
+    def test_sdk_info_logging_is_allowed(
+        self, fake_sdk: _FakeSdk, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ANTHROPIC_LOG", "info")
+        AnthropicFactory().create_client(_settings("direct"), {"api_key": SecretStr(KEY)})
+        assert len(fake_sdk.made) == 1
+
+
 class TestThroughTheRegistry:
     async def test_build_resolves_the_key_and_meters_calls(self, fake_sdk: _FakeSdk) -> None:
         sink = MemoryEventSink()
@@ -255,18 +314,48 @@ class TestWithTheRealSdk:
         assert isinstance(foundry, sdk.AsyncAnthropicFoundry)
         assert "example-resource" in str(foundry.base_url)
 
+    @pytest.mark.parametrize("endpoint", ["direct", "foundry"])
     def test_the_environment_does_not_redirect_the_client(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, endpoint: str
     ) -> None:
         pytest.importorskip("anthropic")
         monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://elsewhere.example.org")
+        monkeypatch.setenv("ANTHROPIC_FOUNDRY_BASE_URL", "https://elsewhere.example.org")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "another-synthetic-key")
-        client = AnthropicFactory().create_client(
-            AnthropicSettings(kind="anthropic", api_key=SecretRef("K")),
-            {"api_key": SecretStr(KEY)},
-        )
+        monkeypatch.setenv("ANTHROPIC_FOUNDRY_API_KEY", "another-synthetic-key")
+        monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "another-synthetic-token")
+        client = AnthropicFactory().create_client(_settings(endpoint), {"api_key": SecretStr(KEY)})
         assert "elsewhere" not in str(client.base_url)
         assert client.api_key == KEY
+        headers = {k.lower(): v for k, v in client.default_headers.items()}
+        assert "another-synthetic" not in repr(headers)
+        assert headers["anthropic-version"] == "2026-10-21"
+        if endpoint == "direct":
+            assert headers["authorization"] == f"Bearer {KEY}"
+        else:
+            assert "authorization" not in headers
+
+    @pytest.mark.parametrize("endpoint", ["direct", "foundry"])
+    def test_custom_headers_never_reach_a_real_client(
+        self, monkeypatch: pytest.MonkeyPatch, endpoint: str
+    ) -> None:
+        pytest.importorskip("anthropic")
+        monkeypatch.setenv(
+            "ANTHROPIC_CUSTOM_HEADERS",
+            "x-api-key: env-synthetic\napi-key: env-synthetic\n"
+            "Authorization: Bearer env-synthetic\nanthropic-version: 2023-06-01",
+        )
+        with pytest.raises(ConfigurationError, match="ANTHROPIC_CUSTOM_HEADERS") as caught:
+            AnthropicFactory().create_client(_settings(endpoint), {"api_key": SecretStr(KEY)})
+        assert "env-synthetic" not in str(caught.value)
+
+    def test_a_foundry_resource_is_a_configuration_error_with_the_real_sdk(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pytest.importorskip("anthropic")
+        monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "elsewhere-synthetic")
+        with pytest.raises(ConfigurationError, match="ANTHROPIC_FOUNDRY_RESOURCE"):
+            AnthropicFactory().create_client(_settings("foundry"), {"api_key": SecretStr(KEY)})
 
     def test_real_sdk_errors_are_classified(self) -> None:
         sdk = pytest.importorskip("anthropic")

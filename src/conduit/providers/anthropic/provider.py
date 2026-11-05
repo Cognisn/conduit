@@ -1,17 +1,31 @@
 """The Anthropic provider and its factory for the provider registry.
 
 The factory builds the SDK's async client: ``AsyncAnthropic`` for the direct API or
-``AsyncAnthropicFoundry`` for Claude in Microsoft Foundry. The key and endpoint are
-always passed explicitly, so the SDK never reads a key, profile or endpoint from the
-environment, and the SDK's own OpenTelemetry spans are switched off, since they can
-carry request content outside conduit's content-capture policy. The SDK is imported
-only inside ``create_client``.
+``AsyncAnthropicFoundry`` for Claude in Microsoft Foundry. The client takes its key,
+endpoint and headers only from conduit's settings:
+
+- the key and endpoint are always passed explicitly, so the SDK never reads a key,
+  token, profile or endpoint from the environment;
+- the SDK merges ``ANTHROPIC_CUSTOM_HEADERS`` over the headers it is given, including
+  the key and API version, so a client is refused while that variable is set;
+- for Foundry, the SDK refuses an endpoint alongside ``ANTHROPIC_FOUNDRY_RESOURCE``, so
+  that variable is refused with a clear configuration error.
+
+Content capture (C19): the SDK's own OpenTelemetry spans are switched off, since they
+can carry request content outside conduit's capture policy. ``ANTHROPIC_LOG=debug``
+makes the SDK log whole request bodies on the ``anthropic`` logger, so a client is
+refused while it is set (``info`` logs only retries and is allowed). A product that
+sets the ``anthropic`` logger to DEBUG itself takes on the same exposure.
+
+The SDK is imported only inside ``create_client``. Errors name the variable, never its
+value.
 """
 
 from __future__ import annotations
 
 import importlib
 import inspect
+import os
 from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Any
 
@@ -88,6 +102,25 @@ class AnthropicProvider(BaseProvider):
         return f"AnthropicProvider(name={self.name!r})"
 
 
+def _check_environment(endpoint: str) -> None:
+    """Refuse variables through which the SDK would override conduit's settings."""
+    if "ANTHROPIC_CUSTOM_HEADERS" in os.environ:
+        raise ConfigurationError(
+            "ANTHROPIC_CUSTOM_HEADERS is set; the anthropic SDK would merge it over the "
+            "key and headers conduit configures. Unset it to build an anthropic provider"
+        )
+    if endpoint == "foundry" and "ANTHROPIC_FOUNDRY_RESOURCE" in os.environ:
+        raise ConfigurationError(
+            "ANTHROPIC_FOUNDRY_RESOURCE is set; a foundry provider takes its endpoint only "
+            "from base_url in its settings. Unset the variable"
+        )
+    if os.environ.get("ANTHROPIC_LOG") == "debug":
+        raise ConfigurationError(
+            "ANTHROPIC_LOG=debug makes the anthropic SDK log request content outside "
+            "conduit's content-capture policy. Unset it or use info"
+        )
+
+
 def _settings(settings: ProviderSettings) -> AnthropicSettings:
     if not isinstance(settings, AnthropicSettings):
         raise ConfigurationError("anthropic settings expected")
@@ -102,6 +135,7 @@ class AnthropicFactory:
 
     def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
         validated = _settings(settings)
+        _check_environment(validated.endpoint)
         try:
             sdk = importlib.import_module("anthropic")
         except ImportError:
