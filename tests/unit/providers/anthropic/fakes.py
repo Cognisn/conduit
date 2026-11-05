@@ -119,12 +119,15 @@ class FakeMessages:
 
 
 class FakeClient:
-    def __init__(self, answer: Answer) -> None:
+    def __init__(self, answer: Answer, *, close_error: BaseException | None = None) -> None:
         self.messages = FakeMessages(answer)
         self.closed = False
+        self._close_error = close_error
 
     async def close(self) -> None:
         self.closed = True
+        if self._close_error is not None:
+            raise self._close_error
 
 
 def scripted_client(*streams: Sequence[Event | BaseException] | BaseException) -> FakeClient:

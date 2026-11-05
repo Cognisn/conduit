@@ -73,6 +73,15 @@ def _stopped(events: list[StreamEvent]) -> StreamStopped:
     return stops[0]
 
 
+def _assert_close_logged(caplog: pytest.LogCaptureFixture, class_name: str) -> None:
+    """One warning names the failing close's class, and no log carries its text."""
+    records = [r for r in caplog.records if r.name == "conduit.providers.anthropic"]
+    assert any(class_name in r.getMessage() for r in records)
+    for record in caplog.records:
+        assert "SECRET-MARKER" not in record.getMessage()
+        assert record.exc_info is None
+
+
 class TestText:
     async def test_text_deltas_stream_in_order(self) -> None:
         client = scripted_client(_simple(*text_block(0, "Hel", "lo", "!")))
@@ -471,7 +480,9 @@ class TestErrors:
         assert caught.value.failure is ProviderFailure.PROTOCOL
         fakes.assert_clean(caught.value, "SECRET-MARKER")
 
-    async def test_a_failing_close_does_not_replace_or_chain_the_failure(self) -> None:
+    async def test_a_failing_close_does_not_replace_or_chain_the_failure(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         stream = fakes.FakeStream(
             [message_start(usage(5)), fakes.RateLimitError("SECRET-MARKER", status_code=429)],
             close_error=RuntimeError("SECRET-MARKER on close"),
@@ -482,14 +493,28 @@ class TestErrors:
         assert caught.value.failure is ProviderFailure.UNAVAILABLE
         fakes.assert_clean(caught.value, "SECRET-MARKER")
         assert stream.closed
+        _assert_close_logged(caplog, "RuntimeError")
 
-    async def test_a_failing_close_after_a_whole_stream_is_not_raised(self) -> None:
+    async def test_a_failing_close_after_a_whole_stream_is_not_raised(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         stream = fakes.FakeStream(
             _simple(*text_block(0, "fine")), close_error=RuntimeError("SECRET-MARKER")
         )
         client = fakes.FakeClient(lambda params: stream)
         response = await _provider(client).complete(_request())
         assert response.text == "fine"
+        _assert_close_logged(caplog, "RuntimeError")
+
+    async def test_a_failing_client_close_is_logged_by_class_and_not_raised(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = fakes.FakeClient(
+            lambda params: fakes.FakeStream([]), close_error=OSError("SECRET-MARKER")
+        )
+        await _provider(client).aclose()
+        assert client.closed
+        _assert_close_logged(caplog, "OSError")
 
     async def test_error_event_text_is_not_carried(self) -> None:
         events = [

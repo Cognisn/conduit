@@ -80,6 +80,21 @@ class TestSettings:
             )
         assert "password" not in str(caught.value)
 
+    def test_an_unparsable_url_is_refused_with_nothing_chained(self) -> None:
+        # urlsplit's own error quotes the netloc, credential included.
+        url = "https://user:SECRET-MARKER@ex\uff03ample.com/"
+        with pytest.raises(ValidationError) as caught:
+            AnthropicSettings.model_validate(
+                {"kind": "anthropic", "api_key": "secret://K", "base_url": url}
+            )
+        assert "SECRET-MARKER" not in str(caught.value)
+        inner = caught.value.errors()[0]["ctx"]["error"]
+        assert isinstance(inner, ValueError)
+        assert inner.__cause__ is None
+        assert inner.__context__ is None
+        for text in (str(inner), repr(inner), *(repr(a) for a in inner.args)):
+            assert "SECRET-MARKER" not in text
+
     @pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "[::1]"])
     def test_plain_http_is_allowed_to_loopback(self, host: str) -> None:
         settings = AnthropicSettings.model_validate(

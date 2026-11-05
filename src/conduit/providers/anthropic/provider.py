@@ -64,15 +64,18 @@ async def _close(resource: Any) -> None:
         await result
 
 
-async def _close_quietly(resource: Any) -> None:
-    """Close an SDK stream; a failing close is logged by class and never raised."""
+async def _close_quietly(resource: Any, what: str) -> None:
+    """Close an SDK stream or client; a failing close is logged by class and never raised.
+
+    Only the exception's class name is logged: its message can carry provider text.
+    """
     failed: str | None = None
     try:
         await _close(resource)
     except Exception as error:
         failed = type(error).__name__
     if failed is not None:
-        logger.warning("closing an anthropic stream failed: %s", failed)
+        logger.warning("closing an anthropic %s failed: %s", what, failed)
 
 
 class AnthropicProvider(BaseProvider):
@@ -109,14 +112,14 @@ class AnthropicProvider(BaseProvider):
             failure = failure_for(error)
         finally:
             if sdk_stream is not None:
-                await _close_quietly(sdk_stream)
+                await _close_quietly(sdk_stream, "stream")
         # Raised here, after the handler, so the failing exception is neither the
         # cause nor the context of the ProviderError.
         if failure is not None:
             raise ProviderError(failure)
 
     async def aclose(self) -> None:
-        await _close(self._client)
+        await _close_quietly(self._client, "client")
 
     def __repr__(self) -> str:
         return f"AnthropicProvider(name={self.name!r})"
