@@ -46,7 +46,7 @@ dependencies = ["pydantic>=2.9,<3"]
 # Provider SDKs (C6).
 bedrock = ["boto3>=1.35,<2"]
 anthropic = ["anthropic>=2.4,<3"]
-openai = []
+openai = ["openai>=3.45,<4", "azure-identity>=1.27,<2"]
 gemini = []
 ollama = []
 all-providers = []
