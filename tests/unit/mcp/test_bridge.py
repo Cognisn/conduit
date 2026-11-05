@@ -211,6 +211,13 @@ class TestCalling:
             with pytest.raises(UnknownTool):
                 await bridge(Other(), {}, context())
 
+    async def test_a_tool_of_another_bridge_is_unknown(self) -> None:
+        async with connection("docs") as docs, connection("docs") as twin:
+            tools = await McpToolBridge([twin]).tools()
+            theirs = next(t for t in tools if t.remote_name == "echo")
+            with pytest.raises(UnknownTool):
+                await McpToolBridge([docs])(theirs, {"text": "x"}, context())
+
     async def test_the_executor_hands_other_tools_to_the_product(self) -> None:
         class Local:
             name = "local_lookup"

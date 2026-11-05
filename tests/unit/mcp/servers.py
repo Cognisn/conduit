@@ -22,8 +22,10 @@ from typing import Any
 import anyio
 import uvicorn
 from mcp.server.fastmcp import FastMCP, Image
+from mcp.server.lowlevel import Server
+from mcp.shared.exceptions import McpError as SdkMcpError
 from mcp.shared.memory import create_client_server_memory_streams
-from mcp.types import EmbeddedResource, ResourceLink, TextResourceContents
+from mcp.types import EmbeddedResource, ErrorData, ResourceLink, TextResourceContents
 from pydantic import AnyUrl
 
 #: The first port of this worktree's slot (24); offsets within the block are fixed below.
@@ -86,12 +88,25 @@ def build_server(name: str = "example", **settings: Any) -> FastMCP:
 Streams = tuple[Any, Any]
 
 
-def memory_transport(server: FastMCP) -> Callable[[], Any]:
+def rejecting_server() -> Server[Any]:
+    """A low-level server that answers every tool listing with a JSON-RPC error."""
+    server: Server[Any] = Server("rejecting")
+
+    @server.list_tools()  # type: ignore[no-untyped-call, untyped-decorator]
+    async def refuse() -> list[Any]:
+        raise SdkMcpError(
+            ErrorData(code=-32603, message="zz-stdio-env-secret-0000zz server-side detail")
+        )
+
+    return server
+
+
+def memory_transport(server: FastMCP | Server[Any]) -> Callable[[], Any]:
     """A transport opener for ``McpConnection`` that runs ``server`` in-process."""
 
     @asynccontextmanager
     async def opener() -> AsyncIterator[Streams]:
-        lowlevel = server._mcp_server
+        lowlevel = server._mcp_server if isinstance(server, FastMCP) else server
         async with (
             create_client_server_memory_streams() as (client, srv),
             anyio.create_task_group() as group,
@@ -125,6 +140,21 @@ def failing_transport(error: BaseException) -> Callable[[], Any]:
     async def opener() -> AsyncIterator[Streams]:
         raise error
         yield  # pragma: no cover
+
+    return opener
+
+
+def hanging_transport(server: FastMCP) -> Callable[[], Any]:
+    """A working transport whose exit never finishes unless it is cancelled."""
+    inner = memory_transport(server)
+
+    @asynccontextmanager
+    async def opener() -> AsyncIterator[Streams]:
+        try:
+            async with inner() as streams:
+                yield streams
+        finally:
+            await anyio.sleep(3600)
 
     return opener
 

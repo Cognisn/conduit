@@ -18,7 +18,9 @@ from conduit.mcp.settings import McpServerSettings
 from tests.unit.mcp.servers import (
     build_server,
     failing_transport,
+    hanging_transport,
     memory_transport,
+    rejecting_server,
     silent_transport,
     stubborn_transport,
 )
@@ -171,14 +173,16 @@ class TestFailures:
         assert not conn.connected
         assert conn._runner is None
 
-    async def test_close_while_a_call_is_running_fails_the_call(self) -> None:
-        conn = connection()
+    async def test_close_while_a_call_is_running_fails_the_call_at_once(self) -> None:
+        conn = connection(call_timeout=60)
         await conn.connect()
-        task = asyncio.create_task(conn.call_tool("slow", {"seconds": 5}))
+        task = asyncio.create_task(conn.call_tool("slow", {"seconds": 30}))
         await asyncio.sleep(0.2)
+        started = time.monotonic()
         await conn.close()
         with pytest.raises(McpError) as caught:
             await task
+        assert time.monotonic() - started < 5  # not left waiting for the call timeout
         assert caught.value.failure is McpFailure.CLOSED
         assert_clean(caught.value)
 
@@ -189,6 +193,25 @@ class TestFailures:
         await conn.close()
         assert time.monotonic() - started < 2.5
         assert not conn.connected
+
+    async def test_close_cancels_a_runner_that_does_not_stop(self) -> None:
+        conn = connection(hanging_transport(build_server()), close_timeout=0.3)
+        await conn.connect()
+        runner = conn._runner
+        assert runner is not None
+        await conn.close()
+        await asyncio.sleep(0)
+        assert runner.done()
+
+    async def test_a_server_error_is_a_clean_rejection(self) -> None:
+        conn = connection(memory_transport(rejecting_server()))
+        async with conn:
+            with pytest.raises(McpError) as caught:
+                await conn.list_tools()
+        assert caught.value.failure is McpFailure.REJECTED
+        assert_clean(caught.value)
+        for text in (str(caught.value), repr(caught.value), repr(caught.value.args)):
+            assert SYNTHETIC_SECRET not in text
 
     async def test_a_body_failure_is_not_replaced_by_close(self) -> None:
         conn = connection(stubborn_transport(build_server(), hold=1), close_timeout=0.2)

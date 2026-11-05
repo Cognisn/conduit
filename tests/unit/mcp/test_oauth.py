@@ -331,11 +331,17 @@ class TestDiscoveryChecks:
             await client(server).access_token()
         return caught.value
 
-    async def test_another_issuer_in_the_metadata_is_refused(self) -> None:
-        error = await self._refused(
-            FakeAuthServer(server_metadata={"issuer": "https://evil.example"})
+    @pytest.mark.parametrize("iss_parameter", [True, False])
+    async def test_another_issuer_in_the_metadata_is_refused(self, iss_parameter: bool) -> None:
+        # Refused at discovery, before registering: not left to the callback's check,
+        # which a server that sends no issuer parameter would never reach.
+        server = FakeAuthServer(
+            server_metadata={"issuer": "https://evil.example"}, iss_parameter=iss_parameter
         )
+        error = await self._refused(server)
         assert_refused(error, OAuthFailure.ISSUER_MISMATCH, "evil.example")
+        assert not server.clients
+        assert not server.authorise_requests
 
     @pytest.mark.parametrize(
         "resource",
@@ -438,6 +444,16 @@ class TestRefresh:
         assert third.get_secret_value() not in {first.get_secret_value(), second.get_secret_value()}
         assert server.token_requests[-1]["refresh_token"] == new_refresh
 
+    async def test_a_token_inside_the_refresh_margin_is_refreshed_early(self) -> None:
+        server = FakeAuthServer()
+        clock = Clock()
+        oauth = client(server, clock=clock, refresh_margin=60)
+        first = await oauth.access_token()
+        clock.advance(3570)  # 30 seconds left: still valid, but inside the margin
+        second = await oauth.access_token(interactive=False)
+        assert second.get_secret_value() != first.get_secret_value()
+        assert server.token_requests[-1]["grant_type"] == "refresh_token"
+
     async def test_a_token_well_inside_its_life_is_not_refreshed(self) -> None:
         server = FakeAuthServer()
         clock = Clock()
@@ -489,7 +505,20 @@ class TestRefresh:
 
     async def test_a_rejected_token_is_refreshed_once_under_concurrency(self) -> None:
         server = FakeAuthServer()
-        oauth = client(server)
+
+        async def slow(request: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(0.05)  # every request yields, so the callers interleave
+            return server.handle(request)
+
+        oauth = OAuthClient(
+            settings(),
+            resource=RESOURCE,
+            store=MemoryTokenStore(),
+            sign_in=server.sign_in_hook(),
+            secrets=LiteralSecretResolver({}),
+            http_transport=httpx.MockTransport(slow),
+            clock=Clock(),
+        )
         stale = await oauth.access_token()
         before = len(server.token_requests)
         fresh = await asyncio.gather(*(oauth.refreshed(stale) for _ in range(8)))
