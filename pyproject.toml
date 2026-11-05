@@ -44,7 +44,7 @@ dependencies = ["pydantic>=2.9,<3"]
 [project.optional-dependencies]
 # Each extra is declared now and filled by the workstream that builds its layer.
 # Provider SDKs (C6).
-bedrock = []
+bedrock = ["boto3>=1.35,<2"]
 anthropic = []
 openai = []
 gemini = []
