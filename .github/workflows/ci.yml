@@ -54,7 +54,7 @@ jobs:
       # torch first, from the PyTorch CPU index, so the local-embeddings extra keeps it
       # and no NVIDIA package is installed (C13, Q0029).
       - name: Install CPU-only torch
-        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+        run: pip install "torch>=2.15,<3" --index-url https://download.pytorch.org/whl/cpu
       # Every runtime extra, so mypy sees each layer's libraries (Q0008).
       - name: Install with every runtime extra
         shell: bash
@@ -91,7 +91,7 @@ jobs:
       # are CPU-only already (C13, Q0029). The suite checks no NVIDIA package is present.
       - name: Install CPU-only torch
         if: runner.os == 'Linux'
-        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+        run: pip install "torch>=2.15,<3" --index-url https://download.pytorch.org/whl/cpu
       # Every runtime extra, so each layer's tests run and the licence audit test sees
       # the full install (Q0008). Names come from the package metadata, so a new extra
       # is picked up without editing this file.
@@ -165,7 +165,7 @@ jobs:
       # the default Linux torch would bring NVIDIA CUDA packages, which are never
       # installed or audited (C13).
       - name: Install CPU-only torch
-        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+        run: pip install "torch>=2.15,<3" --index-url https://download.pytorch.org/whl/cpu
       - name: Install every runtime extra
         run: |
           extras=$(python -c "import importlib.metadata as m; print(','.join(e for e in m.metadata('cognisn-conduit').get_all('Provides-Extra') or [] if e != 'dev'))")
@@ -191,7 +191,7 @@ jobs:
           cache: pip
       - name: Install CPU-only torch, then the extra
         run: |
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install "torch>=2.15,<3" --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[dev,local-embeddings]"
       - name: Refuse any NVIDIA package
         run: |
