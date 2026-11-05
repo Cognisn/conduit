@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a9] - 2026-11-05
+
+Wave 3: the core follow-up (`fix/0.1.0-core-follow-up`).
+
+### Added
+
+- `ProviderStateBlock`: opaque provider state (provider kind, type and payload), never rendered as text, carried in assistant messages and responses. The `ProviderStateReported` stream event carries it, and `collect()` keeps it in stream order. The stub can emit state and keeps the stub state sent back to it, and the transcript store suite stores and loads it.
+- `start_sync`, returning a `SyncRuntime` whose task bindings (`SyncTaskBinding`) and providers (`SyncProvider`) are blocking views, so sync code never holds an async object.
+- `SettingsRefused`: provider settings that fail validation name the provider and the failing fields, never pydantic's text or an input value.
+
+### Changed
+
+- `create_provider` receives the registry's applied catalogue (product overlays included) as the keyword `catalogue`. A factory without it still works for this release, with a `DeprecationWarning` attributed to the code that registered it.
+- The provider registry re-validates every settings instance it is given, including ones made with `model_construct` or changed with `model_copy(update=...)`.
+- The generic `ProviderSettings` refuses a plaintext credential in an unknown field at any depth: under a credential-like name, or anything held by a key, secret, token, password or credential field, or as an HTTP authorisation value. Only the field is named. Numbers, booleans and null are never treated as credentials.
+- An unknown provider kind is named in the error only when it is a well-formed kind.
+- `MeteredProvider.aclose` logs an adapter close that raises, by class names only, and never raises it. Leaving a `SyncRuntime` block that is already raising logs a failing close the same way and lets the block's error propagate.
+- Errors raised by the core, the stub and the replay helpers keep neither cause nor context. Catalogue and recording load errors name failing locations.
+- The Anthropic and Bedrock adapters leave provider state out of their requests until they round-trip their own.
+
 ## [0.1.0a8] - 2026-11-04
 
 Wave 2, seventh and last merge: the konfig integration (`feat/0.1.0-konfig`), and the Wave 2 close. Milestone M2 (providers and stores).
