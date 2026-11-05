@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 import logging
 import sys
 import webbrowser
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from conduit.core.errors import ConfigurationError
 from conduit.mcp.settings import is_loopback_host
@@ -32,10 +33,31 @@ __all__ = ["LoopbackSignIn", "SignInHook", "SignInRequest", "SignInResult"]
 logger = logging.getLogger("conduit.mcp")
 
 _REQUEST_LIMIT = 16 * 1024
+#: Seconds a connection may take to send its request line and headers.
+_READ_TIMEOUT = 5.0
+#: Seconds the listener's close may take before it is left to finish on its own.
+_CLOSE_TIMEOUT = 2.0
 _PAGE = (
     b"<!doctype html><html><head><meta charset='utf-8'><title>Signed in</title></head>"
     b"<body><p>Sign-in complete. You can close this window.</p></body></html>"
 )
+_FAILED_PAGE = (
+    b"<!doctype html><html><head><meta charset='utf-8'><title>Not signed in</title></head>"
+    b"<body><p>Sign-in did not succeed. You can close this window.</p></body></html>"
+)
+
+
+def _expected_state(authorization_url: str) -> str | None:
+    states = parse_qs(urlsplit(authorization_url).query).get("state", [])
+    return states[0] if len(states) == 1 else None
+
+
+def _carries(target: str, state: str | None) -> bool:
+    """Whether the callback ``target`` carries exactly the ``state`` the request sent."""
+    if state is None:
+        return True
+    states = parse_qs(urlsplit(target).query, keep_blank_values=True).get("state", [])
+    return len(states) == 1 and hmac.compare_digest(states[0].encode(), state.encode())
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,10 +99,14 @@ class LoopbackSignIn:
     ``port`` is fixed (an authorisation server matches registered redirect URIs
     exactly). ``open_url`` opens the address (``webbrowser.open`` by default, run in a
     worker thread); if it reports failure, the address is written to standard error
-    for the person to open themselves. Only a request for ``path`` completes the
-    sign-in; anything else is answered 404. The listener is closed when the sign-in
-    ends, however it ends. A sign-in not completed within ``timeout`` seconds raises
-    ``TimeoutError``.
+    for the person to open themselves. Only a request for ``path`` carrying the
+    ``state`` of the authorisation request completes the sign-in; anything else is
+    answered 404 and the listener carries on waiting. A callback reporting an error
+    completes it too (the OAuth client refuses it), but its page does not claim
+    success. A connection has a few seconds to send its request. The listener and every
+    connection to it are closed when the sign-in ends, however it ends, and an idle
+    connection cannot hold it open. A sign-in not completed within ``timeout`` seconds
+    raises ``TimeoutError``.
     """
 
     def __init__(
@@ -114,22 +140,31 @@ class LoopbackSignIn:
     async def sign_in(self, request: SignInRequest) -> SignInResult:
         loop = asyncio.get_running_loop()
         received: asyncio.Future[str] = loop.create_future()
+        state = _expected_state(request.authorization_url)
+        writers: set[asyncio.StreamWriter] = set()
 
         async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            writers.add(writer)
             try:
-                target = await self._read_target(reader)
-                matched = target is not None and urlsplit(target).path == self._path
+                target = await asyncio.wait_for(self._read_target(reader), _READ_TIMEOUT)
+                matched = (
+                    target is not None
+                    and urlsplit(target).path == self._path
+                    and _carries(target, state)
+                )
                 if matched and target is not None and not received.done():
-                    await self._answer(writer, 200, _PAGE)
+                    failed = "error" in parse_qs(urlsplit(target).query)
+                    await self._answer(writer, 200, _FAILED_PAGE if failed else _PAGE)
                     received.set_result(target)
                 else:
                     await self._answer(writer, 404, b"Not found")
-            except (OSError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+            except (OSError, TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
                 pass
             finally:
+                writers.discard(writer)
                 writer.close()
-                with contextlib.suppress(OSError):
-                    await writer.wait_closed()
+                with contextlib.suppress(OSError, TimeoutError):
+                    await asyncio.wait_for(writer.wait_closed(), _CLOSE_TIMEOUT)
 
         server = await asyncio.start_server(handle, self._host, self._port, limit=_REQUEST_LIMIT)
         try:
@@ -142,7 +177,10 @@ class LoopbackSignIn:
             target = await asyncio.wait_for(received, timeout=self._timeout)
         finally:
             server.close()
-            await server.wait_closed()
+            for writer in list(writers):
+                writer.close()
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(server.wait_closed(), _CLOSE_TIMEOUT)
         shown = f"[{self._host}]" if ":" in self._host else self._host
         return SignInResult(callback_url=f"http://{shown}:{self._port}{target}")
 

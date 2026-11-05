@@ -44,7 +44,7 @@ def visit(path: str) -> Any:
     return opener
 
 
-def request(url: str = "https://auth.example.com/authorize?x=1") -> SignInRequest:
+def request(url: str = "https://auth.example.com/authorize?x=1&state=s1") -> SignInRequest:
     return SignInRequest(
         server="docs",
         authorization_url=url,
@@ -90,7 +90,7 @@ class TestLoopbackSignIn:
 
         hook = LoopbackSignIn(port("callback"), open_url=opener, timeout=10)
         result = await hook.sign_in(request())
-        assert opened == ["https://auth.example.com/authorize?x=1"]
+        assert opened == ["https://auth.example.com/authorize?x=1&state=s1"]
         assert result.callback_url == (
             f"http://127.0.0.1:{port('callback')}/callback?code=zz-code-zz&state=s1"
         )
@@ -102,7 +102,7 @@ class TestLoopbackSignIn:
             with httpx.Client(timeout=10, trust_env=False) as client:
                 base = f"http://127.0.0.1:{port('callback')}"
                 assert client.get(f"{base}/favicon.ico").status_code == 404
-                assert client.get(f"{base}/callback?code=c&state=s").status_code == 200
+                assert client.get(f"{base}/callback?code=c&state=s1").status_code == 200
             return True
 
         result = await LoopbackSignIn(port("callback"), open_url=opener, timeout=10).sign_in(
@@ -121,13 +121,81 @@ class TestLoopbackSignIn:
     ) -> None:
         async def person_later() -> None:
             await asyncio.sleep(0.2)
-            await asyncio.to_thread(visit("/callback?code=c&state=s"), "")
+            await asyncio.to_thread(visit("/callback?code=c&state=s1"), "")
 
         hook = LoopbackSignIn(port("callback"), open_url=lambda url: False, timeout=10)
         visiting = asyncio.create_task(person_later())
-        await hook.sign_in(request("https://auth.example.com/authorize?shown=1"))
+        await hook.sign_in(request("https://auth.example.com/authorize?shown=1&state=s1"))
         await visiting
-        assert "https://auth.example.com/authorize?shown=1" in capsys.readouterr().err
+        assert "https://auth.example.com/authorize?shown=1&state=s1" in capsys.readouterr().err
+
+    async def test_a_callback_without_the_state_sent_does_not_end_it(self) -> None:
+        answers: list[int] = []
+
+        def opener(url: str) -> bool:
+            with httpx.Client(timeout=10, trust_env=False) as client:
+                base = f"http://127.0.0.1:{port('callback')}/callback"
+                answers.append(client.get(f"{base}?code=forged&state=forged").status_code)
+                answers.append(client.get(f"{base}?code=forged").status_code)
+                answers.append(client.get(f"{base}?code=real&state=s1").status_code)
+            return True
+
+        hook = LoopbackSignIn(port("callback"), open_url=opener, timeout=10)
+        result = await hook.sign_in(request())
+        assert answers == [404, 404, 200]
+        assert "code=real" in result.callback_url
+
+    async def test_an_error_callback_does_not_report_success(self) -> None:
+        pages: list[str] = []
+
+        def opener(url: str) -> bool:
+            with httpx.Client(timeout=10, trust_env=False) as client:
+                base = f"http://127.0.0.1:{port('callback')}/callback"
+                pages.append(client.get(f"{base}?error=access_denied&state=s1").text)
+            return True
+
+        result = await LoopbackSignIn(port("callback"), open_url=opener, timeout=10).sign_in(
+            request()
+        )
+        assert "error=access_denied" in result.callback_url
+        assert pages and "complete" not in pages[0].lower()
+        assert "did not" in pages[0].lower()
+
+    async def test_an_idle_connection_does_not_hold_the_sign_in_past_its_timeout(
+        self,
+    ) -> None:
+        def idle(url: str) -> bool:
+            sockets.append(socket.create_connection(("127.0.0.1", port("callback"))))
+            return True
+
+        sockets: list[socket.socket] = []
+        hook = LoopbackSignIn(port("callback"), open_url=idle, timeout=0.5)
+        started = asyncio.get_running_loop().time()
+        try:
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(hook.sign_in(request()), timeout=20)
+            assert asyncio.get_running_loop().time() - started < 5
+        finally:
+            for held in sockets:
+                held.close()
+        assert port_is_free(port("callback"))
+
+    async def test_an_idle_connection_does_not_block_the_callback(self) -> None:
+        sockets: list[socket.socket] = []
+
+        def idle_then_visit(url: str) -> bool:
+            sockets.append(socket.create_connection(("127.0.0.1", port("callback"))))
+            return bool(visit("/callback?code=c&state=s1")(url))
+
+        hook = LoopbackSignIn(port("callback"), open_url=idle_then_visit, timeout=10)
+        started = asyncio.get_running_loop().time()
+        try:
+            result = await asyncio.wait_for(hook.sign_in(request()), timeout=20)
+            assert asyncio.get_running_loop().time() - started < 5
+        finally:
+            for held in sockets:
+                held.close()
+        assert "code=c" in result.callback_url
 
     async def test_cancellation_closes_the_listener(self) -> None:
         hook = LoopbackSignIn(port("callback"), open_url=lambda url: True, timeout=30)
