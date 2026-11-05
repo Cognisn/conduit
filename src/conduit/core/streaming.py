@@ -4,6 +4,9 @@ Every provider streams (C19). A stream is a sequence of events ending with exact
 one ``StreamStopped``, which carries the call's final usage: usage is taken from the
 final stream event, and ``UsageReported`` events before it are progress reports only,
 never summed. A non-streaming call is defined as the collected stream (``collect``).
+
+``ProviderStateReported`` carries one opaque ``ProviderStateBlock``; ``collect`` keeps it
+in the response's content, in stream order, and never as text.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.types import (
     TOOL_NAME_PATTERN,
     ModelResponse,
+    ProviderStateBlock,
     StopReason,
     TextBlock,
     ToolUseBlock,
@@ -46,6 +50,13 @@ class ToolCallFinished(_Event):
     input: dict[str, Any]
 
 
+class ProviderStateReported(_Event):
+    """Opaque provider state, to be sent back unchanged in the assistant message."""
+
+    type: Literal["provider_state"] = "provider_state"
+    state: ProviderStateBlock
+
+
 class UsageReported(_Event):
     """A progress report of usage so far. Never summed; the final event's usage wins."""
 
@@ -62,7 +73,12 @@ class StreamStopped(_Event):
 
 
 StreamEvent = Annotated[
-    TextDelta | ToolCallStarted | ToolCallFinished | UsageReported | StreamStopped,
+    TextDelta
+    | ToolCallStarted
+    | ToolCallFinished
+    | ProviderStateReported
+    | UsageReported
+    | StreamStopped,
     Field(discriminator="type"),
 ]
 
@@ -78,7 +94,7 @@ async def collect(events: AsyncIterator[StreamEvent], *, model: str) -> ModelRes
     carries events after it, or finishes a tool call it never started (or under
     another name), or starts one it never finishes.
     """
-    blocks: list[TextBlock | ToolUseBlock] = []
+    blocks: list[TextBlock | ToolUseBlock | ProviderStateBlock] = []
     text: list[str] = []
     open_calls: dict[str, str] = {}
     stopped: StreamStopped | None = None
@@ -102,6 +118,9 @@ async def collect(events: AsyncIterator[StreamEvent], *, model: str) -> ModelRes
             if open_calls.pop(event.id, None) != event.name:
                 raise _broken()
             blocks.append(ToolUseBlock(id=event.id, name=event.name, input=event.input))
+        elif isinstance(event, ProviderStateReported):
+            flush_text()
+            blocks.append(event.state)
         elif isinstance(event, StreamStopped):
             stopped = event
         # UsageReported: progress only.

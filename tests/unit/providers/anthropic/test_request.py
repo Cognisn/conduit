@@ -12,6 +12,7 @@ from conduit.core.types import (
     ImageBlock,
     Message,
     ModelRequest,
+    ProviderStateBlock,
     TextBlock,
     ToolResultBlock,
     ToolSpec,
@@ -307,3 +308,24 @@ class TestCacheControl:
         names = [b.get("name") or b.get("text") for b in marked]
         # tools, system, m0 are the first three; m4 (the last) is kept; m1 and m3 merge on.
         assert names == ["a", "sys", "m0", "m4"]
+
+
+class TestProviderState:
+    """Until the adapter round-trips its own state, every kind's state is left out."""
+
+    @pytest.mark.parametrize("kind", ["gemini", "anthropic"])
+    def test_provider_state_is_not_sent(self, kind: str) -> None:
+        state = ProviderStateBlock(
+            provider_kind=kind, state_type="thinking", payload=b"zz-state-marker-zz"
+        )
+        params = build_params(
+            _request(
+                Message.user("hello"),
+                Message(role="assistant", content=(state, TextBlock(text="Hi."))),
+                Message.user("again"),
+            ),
+            structured_output=False,
+        )
+        assert params["messages"][1]["content"] == [{"type": "text", "text": "Hi."}]
+        assert "zz-state-marker-zz" not in repr(params)
+        assert base64.b64encode(b"zz-state-marker-zz").decode() not in repr(params)

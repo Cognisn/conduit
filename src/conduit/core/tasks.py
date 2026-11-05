@@ -110,10 +110,9 @@ class Assignments(Mapping[str, ResolvedAssignment]):
         self._resolved = dict(resolved)
 
     def for_task(self, task_class: str) -> ResolvedAssignment:
-        try:
-            return self._resolved[task_class]
-        except KeyError:
-            raise UnknownTaskClass(f"no assignment for task class {task_class!r}") from None
+        if task_class not in self._resolved:
+            raise UnknownTaskClass(f"no assignment for task class {task_class!r}")
+        return self._resolved[task_class]
 
     def __getitem__(self, key: str) -> ResolvedAssignment:
         return self._resolved[key]

@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from conduit.core.errors import ConfigurationError, ReplayMismatch
-from conduit.core.streaming import StreamEvent, StreamStopped, TextDelta
-from conduit.core.types import Message, ModelRequest, StopReason, Usage
+from conduit.core.streaming import ProviderStateReported, StreamEvent, StreamStopped, TextDelta
+from conduit.core.types import Message, ModelRequest, ProviderStateBlock, StopReason, Usage
 from conduit.testing.replay import (
     Interaction,
     Recording,
@@ -143,3 +143,20 @@ class TestReplayProvider:
         provider = ReplayProvider(recording)
         assert (await provider.complete(request)).text == "Hello"
         provider.replay.assert_exhausted()
+
+    async def test_replayed_provider_state_keeps_its_bytes(self, tmp_path: Path) -> None:
+        payload = b"\x00\xff\x80 synthetic signed state"
+        state = ProviderStateBlock(provider_kind="stub", state_type="thinking", payload=payload)
+        events: list[StreamEvent] = [
+            ProviderStateReported(state=state),
+            TextDelta(text="Hello"),
+            StreamStopped(stop_reason=StopReason.END_TURN, usage=Usage.zero()),
+        ]
+        request = ModelRequest(
+            model="stub-echo", messages=(Message.user("x"),), max_output_tokens=5
+        )
+        path = tmp_path / "state.json"
+        save_recording(ReplayProvider.record(request, events, name="state"), path)
+        response = await ReplayProvider(load_recording(path)).complete(request)
+        assert response.provider_state == (state,)
+        assert response.provider_state[0].payload == payload

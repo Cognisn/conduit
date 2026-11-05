@@ -9,6 +9,13 @@ Usage keeps four counts apart, all required: ``input_tokens`` (uncached input on
 state every one explicitly, and a mapping carrying any other key is refused, so a
 provider's own name for a count (Bedrock's ``cacheReadInputTokens``, for example) can
 never be read as zero by mistake.
+
+``ProviderStateBlock`` carries state a provider needs back unchanged on a later
+request (a model's signed reasoning, for example): the provider kind that made it,
+its type and an opaque payload. conduit never reads, renders or edits the payload.
+Each adapter is expected to send back its own kind's blocks and ignore every other
+kind's, so a conversation can move between providers; the providers follow-up brings
+every adapter into line. Only an assistant message may carry one.
 """
 
 from __future__ import annotations
@@ -18,11 +25,15 @@ from collections.abc import Mapping
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt, model_validator
+
+from conduit.core.settings import KIND_PATTERN
 
 TOOL_NAME_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]{0,63}$"
 #: Request fields that identify a call rather than describe it; not part of the digest.
 CALL_CONTEXT_FIELDS = frozenset({"run_id", "correlation_id", "task_class"})
+#: A provider-state type: a short name without spaces (``thinking``, ``thought_signature``).
+STATE_TYPE_PATTERN = r"^[A-Za-z][A-Za-z0-9_.:-]{0,63}$"
 
 
 class _Frozen(BaseModel):
@@ -69,12 +80,38 @@ class ToolResultBlock(_Frozen):
     is_error: bool = False
 
 
+class ProviderStateBlock(_Frozen):
+    """Opaque state a provider needs back unchanged: never text, never read by conduit.
+
+    ``provider_kind`` is the adapter kind that made it (``anthropic``, ``gemini``);
+    only that adapter is expected to send it back, and every other adapter to ignore
+    it. The payload
+    is left out of ``repr`` and ``str``, so it is never rendered.
+    """
+
+    type: Literal["provider_state"] = "provider_state"
+    provider_kind: str = Field(pattern=KIND_PATTERN)
+    state_type: str = Field(pattern=STATE_TYPE_PATTERN)
+    payload: bytes = Field(repr=False)
+
+
 ContentBlock = Annotated[
-    TextBlock | ImageBlock | CacheBreakpoint | ToolUseBlock | ToolResultBlock,
+    TextBlock | ImageBlock | CacheBreakpoint | ToolUseBlock | ToolResultBlock | ProviderStateBlock,
     Field(discriminator="type"),
 ]
 SystemBlock = Annotated[TextBlock | CacheBreakpoint, Field(discriminator="type")]
-ResponseBlock = Annotated[TextBlock | ToolUseBlock, Field(discriminator="type")]
+ResponseBlock = Annotated[
+    TextBlock | ToolUseBlock | ProviderStateBlock, Field(discriminator="type")
+]
+
+
+def _state_of(blocks: tuple[Any, ...], kind: str | None) -> tuple[ProviderStateBlock, ...]:
+    return tuple(
+        b
+        for b in blocks
+        if isinstance(b, ProviderStateBlock) and (kind is None or b.provider_kind == kind)
+    )
+
 
 Role = Literal["user", "assistant"]
 
@@ -82,6 +119,16 @@ Role = Literal["user", "assistant"]
 class Message(_Frozen):
     role: Role
     content: tuple[ContentBlock, ...]
+
+    @model_validator(mode="after")
+    def _state_only_from_the_assistant(self) -> Message:
+        if self.role != "assistant" and _state_of(self.content, None):
+            raise ValueError("only an assistant message may carry provider state")
+        return self
+
+    def provider_state(self, kind: str) -> tuple[ProviderStateBlock, ...]:
+        """The provider-state blocks ``kind`` made, in order; every other kind's are left out."""
+        return _state_of(self.content, kind)
 
     @classmethod
     def user(cls, text: str) -> Message:
@@ -182,6 +229,11 @@ class ModelResponse(_Frozen):
     @property
     def tool_uses(self) -> tuple[ToolUseBlock, ...]:
         return tuple(b for b in self.content if isinstance(b, ToolUseBlock))
+
+    @property
+    def provider_state(self) -> tuple[ProviderStateBlock, ...]:
+        """Every provider-state block, in order. Send them back in the assistant message."""
+        return _state_of(self.content, None)
 
 
 def usage_from_mapping(values: Mapping[str, int]) -> Usage:

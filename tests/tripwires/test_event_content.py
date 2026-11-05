@@ -7,13 +7,16 @@ Two halves, never skipped or weakened:
   ``CapturedContent``, whose text the policy controls. No ``dict``, ``Any``, ``bytes``
   or plain ``str`` field.
 - Behaviour: a marker planted in every place content can be (system prompt, messages,
-  tool results, tool arguments, model output) never reaches a sink with capture off,
-  and does reach it with capture on (so the check is not vacuous). Tool content an
-  emitter mislabels as prompt content stays out when only prompts are captured.
+  tool results, tool arguments, model output, opaque provider state sent and received)
+  never reaches a sink with capture off, and does reach it with capture on (so the
+  check is not vacuous). Tool content an emitter mislabels as prompt content stays out
+  when only prompts are captured. Provider state is prompt content: it is captured with
+  prompts, and never under the tool-content setting alone.
 """
 
 from __future__ import annotations
 
+import base64
 import enum
 import importlib
 import pkgutil
@@ -40,9 +43,11 @@ from conduit.core.events import (
 from conduit.core.identifiers import IDENTIFIER_MARK
 from conduit.core.registry import ProviderRegistry
 from conduit.core.secrets import LiteralSecretResolver
+from conduit.core.streaming import ProviderStateReported
 from conduit.core.types import (
     Message,
     ModelRequest,
+    ProviderStateBlock,
     TextBlock,
     ToolResultBlock,
     ToolSpec,
@@ -52,6 +57,19 @@ from conduit.providers.stub import StubFactory, StubToolCall, StubTurn, scripted
 from tests.tripwires.importscan import OPTIONAL_LIBRARIES
 
 MARKER = "zz synthetic content marker 4417 zz"
+#: Provider state is opaque bytes, carried as base64 wherever it is serialised.
+STATE_MARKER = b"zz synthetic provider state 5521 zz"
+STATE_SEEN = base64.b64encode(STATE_MARKER).decode("ascii")
+
+
+def _leaks(text: str) -> bool:
+    return MARKER in text or STATE_SEEN in text or STATE_MARKER.decode("ascii") in text
+
+
+def _state() -> ProviderStateBlock:
+    return ProviderStateBlock(provider_kind="stub", state_type="thinking", payload=STATE_MARKER)
+
+
 _SCALARS = (int, float, bool, datetime, type(None))
 _OPTIONAL_ROOTS = {name.split(".")[0] for name in OPTIONAL_LIBRARIES}
 
@@ -129,7 +147,10 @@ class TestStructure:
         problems = [p for cls in _event_classes() for p in _model_problems(cls, cls.__name__)]
         assert not problems, "\n".join(problems)
 
-    @pytest.mark.parametrize("annotation", [str, dict[str, Any], Any, bytes, list[str]])
+    @pytest.mark.parametrize(
+        "annotation",
+        [str, dict[str, Any], Any, bytes, list[str], ProviderStateBlock, ProviderStateReported],
+    )
     def test_the_check_refuses_content_bearing_types(self, annotation: Any) -> None:
         assert _problems(annotation, [], "synthetic")
 
@@ -142,7 +163,10 @@ def _request() -> ModelRequest:
             Message.user(f"User: {MARKER}"),
             Message(
                 role="assistant",
-                content=(ToolUseBlock(id="toolu_1", name="lookup", input={"q": MARKER}),),
+                content=(
+                    _state(),
+                    ToolUseBlock(id="toolu_1", name="lookup", input={"q": MARKER}),
+                ),
             ),
             Message(
                 role="user",
@@ -163,6 +187,7 @@ async def _events(capture: CapturePolicy) -> list[Event]:
             StubTurn(
                 text=f"Answer: {MARKER}",
                 tool_calls=(StubToolCall(name="lookup", input={"q": MARKER}),),
+                state=(_state(),),
             )
         ]
     )
@@ -207,7 +232,7 @@ class TestBehaviour:
     async def test_no_content_reaches_a_sink_with_capture_off(self) -> None:
         events = await _events(CapturePolicy())
         assert len(events) == 4
-        leaks = [e.type for e in events if MARKER in e.model_dump_json()]
+        leaks = [e.type for e in events if _leaks(e.model_dump_json()) or _leaks(repr(e))]
         assert not leaks, leaks
 
     async def test_tool_content_stays_out_when_only_prompts_are_captured(self) -> None:
@@ -220,6 +245,14 @@ class TestBehaviour:
         assert started.request.text is not None
         assert '"q":"' + MARKER not in started.request.text  # tool arguments omitted
         assert MARKER in started.request.text  # the prompt itself is captured
+        assert STATE_SEEN in started.request.text  # provider state is prompt content
+
+    async def test_provider_state_stays_out_when_only_tool_content_is_captured(self) -> None:
+        events = await _events(CapturePolicy(tool_content=True))
+        started = events[0]
+        assert isinstance(started, ModelCallStartedEvent)
+        assert STATE_SEEN not in started.model_dump_json()
+        assert all(not _leaks(e.model_dump_json()) for e in events[:2])
 
     async def test_content_reaches_a_sink_when_the_product_opts_in(self) -> None:
         events = await _events(CapturePolicy(prompts=True, tool_content=True))

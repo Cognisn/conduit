@@ -106,10 +106,9 @@ class ToolRegistry:
         return sorted(self._tools)
 
     def resolve(self, name: str) -> Any:
-        try:
-            return self._tools[name]
-        except KeyError:
-            raise UnknownTool(f"no tool of that name for task class {self.task_class}") from None
+        if name not in self._tools:
+            raise UnknownTool(f"no tool of that name for task class {self.task_class}")
+        return self._tools[name]
 
     def specs(self) -> tuple[ToolSpec, ...]:
         return tuple(tool_spec(self._tools[name]) for name in self.names())

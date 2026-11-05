@@ -13,6 +13,7 @@ from conduit.core.types import (
     ImageBlock,
     Message,
     ModelRequest,
+    ProviderStateBlock,
     StopReason,
     TextBlock,
     ToolResultBlock,
@@ -501,3 +502,25 @@ class TestConverseResponse:
             )
         assert raised.value.failure is ProviderFailure.PROTOCOL
         assert raised.value.__cause__ is None and raised.value.__context__ is None
+
+
+class TestProviderState:
+    """Until the adapter round-trips its own state, every kind's state is left out."""
+
+    @pytest.mark.parametrize("kind", ["gemini", "bedrock"])
+    def test_provider_state_is_not_sent(self, kind: str) -> None:
+        state = ProviderStateBlock(
+            provider_kind=kind, state_type="reasoning", payload=b"zz-state-marker-zz"
+        )
+        params = build_converse_request(
+            request(
+                messages=(
+                    Message.user("Hello"),
+                    Message(role="assistant", content=(state, TextBlock(text="Hi."))),
+                    Message.user("Again"),
+                )
+            ),
+            prompt_caching=False,
+        )
+        assert params["messages"][1]["content"] == [{"text": "Hi."}]
+        assert "zz-state-marker-zz" not in repr(params)

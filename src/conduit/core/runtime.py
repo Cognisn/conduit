@@ -69,29 +69,43 @@ class TaskBinding:
         tools: Iterable[ToolSpec] = (),
         **fields: Any,
     ) -> ModelRequest:
-        """A request on this task's model, within its output budget.
-
-        ``max_output_tokens`` defaults to the assignment's budget. One given explicitly
-        is checked again against the model's output limit, as the budget was at
-        start-up, and a ``ConfigurationError`` is raised above it.
-        """
-        fields.setdefault("max_output_tokens", self.assignment.max_output_tokens)
-        request = ModelRequest(
-            model=self.assignment.model,
-            system=tuple(system),
-            messages=tuple(messages),
-            tools=tuple(tools),
-            task_class=self.assignment.task_class.name,
-            **fields,
+        """A request on this task's model, within its output budget (``task_request``)."""
+        return task_request(
+            self.assignment, messages=messages, system=system, tools=tools, **fields
         )
-        limit = self.assignment.entry.output_limit
-        if limit is not None and request.max_output_tokens > limit:
-            raise ConfigurationError(
-                f"{self.assignment.task_class.name}: max_output_tokens "
-                f"{request.max_output_tokens} exceeds model {self.assignment.model!r}'s "
-                f"output limit of {limit}"
-            )
-        return request
+
+
+def task_request(
+    assignment: ResolvedAssignment,
+    *,
+    messages: Iterable[Message],
+    system: Iterable[SystemBlock] = (),
+    tools: Iterable[ToolSpec] = (),
+    **fields: Any,
+) -> ModelRequest:
+    """A request on ``assignment``'s model, within its output budget.
+
+    ``max_output_tokens`` defaults to the assignment's budget. One given explicitly is
+    checked again against the model's output limit, as the budget was at start-up, and
+    a ``ConfigurationError`` is raised above it.
+    """
+    fields.setdefault("max_output_tokens", assignment.max_output_tokens)
+    request = ModelRequest(
+        model=assignment.model,
+        system=tuple(system),
+        messages=tuple(messages),
+        tools=tuple(tools),
+        task_class=assignment.task_class.name,
+        **fields,
+    )
+    limit = assignment.entry.output_limit
+    if limit is not None and request.max_output_tokens > limit:
+        raise ConfigurationError(
+            f"{assignment.task_class.name}: max_output_tokens "
+            f"{request.max_output_tokens} exceeds model {assignment.model!r}'s "
+            f"output limit of {limit}"
+        )
+    return request
 
 
 class Runtime:

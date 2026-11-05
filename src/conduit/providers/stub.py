@@ -10,7 +10,13 @@ Usage is computed deterministically and carries all four counts. A request with 
 cache breakpoint writes its prefix to the stub's cache the first time and reads it on
 every later call with the same prefix, so cache accounting can be tested end to end.
 
-A stub keeps every request it is sent (``requests``) and every cached prefix for its
+A turn may carry opaque provider state (``StubTurn.state``), streamed before its text.
+Like every adapter, the stub takes back only its own kind's state: each request's
+``stub`` state blocks, from its assistant messages in order, are kept in
+``state_received``, and every other kind's are ignored.
+
+A stub keeps every request it is sent (``requests``), the state it was sent back
+(``state_received``) and every cached prefix for its
 whole life: both grow without bound, which suits a test but not a long-running process.
 
 Constructing a stub needs ``not_for_production=True``, in code and in settings.
@@ -27,10 +33,12 @@ from typing import Any, Literal, Self
 
 from pydantic import PositiveInt, SecretStr, model_validator
 
+from conduit.core.catalogue import Catalogue
 from conduit.core.errors import ConfigurationError, ProviderError
 from conduit.core.provider import BaseProvider, Provider
 from conduit.core.settings import ProviderSettings
 from conduit.core.streaming import (
+    ProviderStateReported,
     StreamEvent,
     StreamStopped,
     TextDelta,
@@ -41,6 +49,7 @@ from conduit.core.streaming import (
 from conduit.core.types import (
     CacheBreakpoint,
     ModelRequest,
+    ProviderStateBlock,
     StopReason,
     TextBlock,
     ToolResultBlock,
@@ -69,6 +78,7 @@ class StubTurn:
     tool_calls: tuple[StubToolCall, ...] = ()
     stop_reason: StopReason | None = None
     usage: Usage | None = None
+    state: tuple[ProviderStateBlock, ...] = ()
 
 
 StubScript = Callable[[ModelRequest, int], StubTurn]
@@ -154,6 +164,7 @@ class StubProvider(BaseProvider):
         self._chunk = max(1, chunk_size)
         self._cache: set[str] = set()
         self.requests: list[ModelRequest] = []
+        self.state_received: list[tuple[ProviderStateBlock, ...]] = []
 
     def _usage(self, request: ModelRequest, turn: StubTurn, calls: list[ToolUseBlock]) -> Usage:
         segments = _segments(request)
@@ -179,12 +190,22 @@ class StubProvider(BaseProvider):
     async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
         index = len(self.requests)
         self.requests.append(request)
+        self.state_received.append(
+            tuple(
+                block
+                for message in request.messages
+                if message.role == "assistant"
+                for block in message.provider_state(self.kind)
+            )
+        )
         turn = self._script(request, index)
         calls = [c.block(f"toolu_stub_{index}_{i}") for i, c in enumerate(turn.tool_calls)]
         usage = turn.usage or self._usage(request, turn, calls)
         yield UsageReported(
             usage=usage.model_copy(update={"output_tokens": 0}),
         )
+        for state in turn.state:
+            yield ProviderStateReported(state=state)
         for start in range(0, len(turn.text), self._chunk):
             yield TextDelta(text=turn.text[start : start + self._chunk])
         for call in calls:
@@ -221,15 +242,21 @@ class StubFactory:
     def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
         return None  # the stub has no client
 
-    def create_provider(self, name: str, settings: ProviderSettings, client: Any) -> Provider:
+    def create_provider(
+        self,
+        name: str,
+        settings: ProviderSettings,
+        client: Any,
+        *,
+        catalogue: Catalogue | None = None,
+    ) -> Provider:
+        """The stub for one configured name. The stub consults no catalogue."""
         if not isinstance(settings, StubSettings):
             raise ConfigurationError("stub settings expected")
-        try:
-            script = self._scripts[settings.script]
-        except KeyError:
-            raise ConfigurationError(f"no stub script named {settings.script!r}") from None
+        if settings.script not in self._scripts:
+            raise ConfigurationError(f"no stub script named {settings.script!r}")
         return StubProvider(
-            script,
+            self._scripts[settings.script],
             not_for_production=settings.not_for_production,
             chunk_size=settings.chunk_size,
         )

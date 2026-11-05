@@ -95,6 +95,7 @@ REEXPORTS: dict[str, tuple[str, ...]] = {
         "Message",
         "ModelRequest",
         "ModelResponse",
+        "ProviderStateBlock",
         "StopReason",
         "TextBlock",
         "ToolResultBlock",
@@ -103,6 +104,7 @@ REEXPORTS: dict[str, tuple[str, ...]] = {
         "Usage",
     ),
     "conduit.core.streaming": (
+        "ProviderStateReported",
         "StreamStopped",
         "TextDelta",
         "ToolCallFinished",
@@ -120,6 +122,7 @@ REEXPORTS: dict[str, tuple[str, ...]] = {
         "ProviderError",
         "ProviderFailure",
         "ResidencyRefused",
+        "SettingsRefused",
         "UndeclaredModel",
     ),
     "conduit.core.registry": ("MeteredProvider", "ProviderFactory", "ProviderRegistry"),
@@ -151,7 +154,14 @@ REEXPORTS: dict[str, tuple[str, ...]] = {
     "conduit.core.transcript": ("Transcript", "TranscriptStore"),
     "conduit.core.backends": ("ApprovalHandler", "SkillSource", "TokenStore"),
     "conduit.core.tools": ("Tool", "ToolCatalogue", "ToolRegistry"),
-    "conduit.core.facade": ("SyncFacade", "sync"),
+    "conduit.core.facade": (
+        "SyncFacade",
+        "SyncProvider",
+        "SyncRuntime",
+        "SyncTaskBinding",
+        "start_sync",
+        "sync",
+    ),
 }
 
 

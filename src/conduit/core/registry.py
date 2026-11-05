@@ -6,6 +6,18 @@ secrets, and a ``create_provider`` that wraps the client. The registry validates
 settings, resolves every secret reference, calls ``create_client`` (nothing else in
 conduit may; a tripwire checks this) and wraps the result in a ``MeteredProvider``.
 
+``create_provider`` receives the registry's catalogue as the keyword ``catalogue``: the
+catalogue ``start`` applied the product's overlays to, so an adapter's capability checks
+(structured output, prompt caching, context windows) follow the overlays. A factory
+written against the Wave 2 signature, without ``catalogue``, is still called the old
+way for this release, with a ``DeprecationWarning`` when it is registered; the next
+release requires the keyword.
+
+``validate`` re-validates every settings instance it is given against its adapter's
+own model, so one made with ``model_construct`` or changed with ``model_copy(update=...)``
+is held to its validators. Settings that fail raise ``SettingsRefused``, which names the
+provider and the failing fields only: never pydantic's text, never a value.
+
 ``MeteredProvider`` is the single funnel every model call passes through. Before any
 client call it refuses a model the catalogue does not declare for the provider, and
 refuses a request whose ``max_output_tokens`` is above the model's output limit, and
@@ -30,10 +42,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
+import os
 import re
 import time
+import warnings
 from collections.abc import AsyncGenerator, AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
@@ -46,6 +61,7 @@ from conduit.core.errors import (
     ModelNotAssigned,
     ProviderError,
     ProviderFailure,
+    SettingsRefused,
 )
 from conduit.core.events import (
     CapturedContent,
@@ -60,7 +76,7 @@ from conduit.core.identifiers import new_id
 from conduit.core.provider import Provider
 from conduit.core.residency import ResidencyPolicy
 from conduit.core.secrets import SecretResolver, resolve_secret_fields
-from conduit.core.settings import KIND_PATTERN, ProviderSettings
+from conduit.core.settings import KIND_PATTERN, ProviderSettings, refusals
 from conduit.core.streaming import (
     StreamEvent,
     StreamStopped,
@@ -72,6 +88,20 @@ from conduit.core.streaming import (
 from conduit.core.types import ModelRequest, ModelResponse, ToolResultBlock, ToolUseBlock, Usage
 
 logger = logging.getLogger("conduit.registry")
+
+
+def _source_prefixes() -> tuple[str, ...]:
+    """conduit's source tree, as imported and as resolved, each ending in a separator
+    so a sibling directory (``conduit_x``) does not match."""
+    imported = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    resolved = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    return tuple(dict.fromkeys(path.rstrip(os.sep) + os.sep for path in (imported, resolved)))
+
+
+#: conduit's own source tree: a deprecation warning names the first frame outside it.
+#: Frame filenames keep the form the code was imported under (a short name, a mapped
+#: drive, a junction), so the unresolved form is used, with the resolved one beside it.
+_CONDUIT_SOURCES = _source_prefixes()
 
 _UNSET: Any = object()
 
@@ -106,8 +136,27 @@ class ProviderFactory(Protocol):
         ...
 
     def create_provider(self, name: str, settings: ProviderSettings, client: Any) -> Provider:
-        """The provider for one configured name, around ``client``."""
+        """The provider for one configured name, around ``client``.
+
+        The registry also passes ``catalogue=`` (its applied catalogue) to a factory whose
+        ``create_provider`` accepts that keyword; declare it as
+        ``*, catalogue: Catalogue | None = None`` for this release. The Wave 2 form
+        without it is deprecated and is called without the catalogue.
+        """
         ...
+
+
+def _takes_catalogue(factory: ProviderFactory) -> bool:
+    """Whether ``factory.create_provider`` accepts the ``catalogue`` keyword."""
+    try:
+        parameters = inspect.signature(factory.create_provider).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    named = (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    return any(
+        p.kind is inspect.Parameter.VAR_KEYWORD or (p.name == "catalogue" and p.kind in named)
+        for p in parameters
+    )
 
 
 def _has_tool_content(request: ModelRequest) -> bool:
@@ -309,7 +358,21 @@ class MeteredProvider:
             return await collect(events, model=request.model)
 
     async def aclose(self) -> None:
-        await self._inner.aclose()
+        """Close the adapter. A close that raises is logged (the adapter's class and the
+        exception's class only) and never raised, so it cannot replace or chain another
+        failure. Cancellation propagates unchanged."""
+        failed: str | None = None
+        try:
+            await self._inner.aclose()
+        except Exception as error:
+            failed = type(error).__name__
+        if failed is not None:
+            logger.warning(
+                "closing provider %s (%s) failed: %s",
+                self.name,
+                type(self._inner).__name__,
+                failed,
+            )
 
     def __repr__(self) -> str:
         return f"MeteredProvider(name={self.name!r}, kind={self.kind!r})"
@@ -334,6 +397,7 @@ class ProviderRegistry:
         self.residency = residency if residency is not None else ResidencyPolicy()
         self._events = FanOutSink([events] if events is not None else [], policy=capture)
         self._factories: dict[str, ProviderFactory] = {}
+        self._with_catalogue: dict[str, bool] = {}
         self._built: list[MeteredProvider] = []
         for factory in factories:
             self.register(factory)
@@ -347,26 +411,56 @@ class ProviderRegistry:
             raise ConfigurationError(f"provider kind {factory.kind!r} is not a valid kind")
         if factory.kind in self._factories:
             raise ConfigurationError(f"provider kind {factory.kind!r} is registered twice")
+        takes = _takes_catalogue(factory)
+        if not takes:
+            warnings.warn(
+                f"provider factory for kind {factory.kind!r}: create_provider without the "
+                "catalogue keyword is deprecated and will be refused in the next release",
+                DeprecationWarning,
+                skip_file_prefixes=_CONDUIT_SOURCES,
+            )
         self._factories[factory.kind] = factory
+        self._with_catalogue[factory.kind] = takes
 
     def _factory(self, kind: str) -> ProviderFactory:
-        try:
-            return self._factories[kind]
-        except KeyError:
-            raise ConfigurationError(f"no provider adapter for kind {kind!r}") from None
+        if kind not in self._factories:
+            # The kind may come from an unvalidated mapping: name it only if it is a kind.
+            named = f"kind {kind!r}" if re.fullmatch(KIND_PATTERN, kind) else "that kind"
+            raise ConfigurationError(f"no provider adapter for {named}")
+        return self._factories[kind]
 
     def validate(
         self, name: str, settings: ProviderSettings | Mapping[str, Any]
     ) -> ProviderSettings:
-        """``settings`` re-validated against its adapter's own model."""
-        data = settings.model_dump() if isinstance(settings, BaseModel) else dict(settings)
+        """``settings`` re-validated against its adapter's own model.
+
+        Every instance is validated afresh from its fields, whoever built it, so its
+        validators always hold. An instance of a subclass of the adapter's model is
+        validated against that subclass. Raises ``SettingsRefused`` naming the failing
+        fields, or ``ConfigurationError`` for an instance whose fields cannot be read;
+        neither keeps the exception it was raised for.
+        """
+        data: dict[str, Any] | None = None
+        if isinstance(settings, BaseModel):
+            try:
+                # warnings=False: a serialiser warning would quote the offending value.
+                data = settings.model_dump(round_trip=True, warnings=False)
+            except Exception:
+                data = None  # refused below, after the handler
+            if data is None:
+                raise ConfigurationError(f"provider {name!r}: settings cannot be read")
+        else:
+            data = dict(settings)
         factory = self._factory(str(data.get("kind")))
-        if isinstance(settings, factory.settings_model):
-            return settings
+        model = factory.settings_model
+        if isinstance(settings, model):
+            model = type(settings)
+        found: tuple[list[str], list[str]] = ([], [])
         try:
-            return factory.settings_model.model_validate(data)
+            return model.model_validate(data)
         except ValidationError as error:
-            raise ConfigurationError(f"provider {name!r}: {error}") from None
+            found = refusals(error, data)
+        raise SettingsRefused(name, tuple(found[0]), tuple(found[1]))
 
     async def build(
         self,
@@ -394,7 +488,15 @@ class ProviderRegistry:
         if client is _UNSET:
             secrets = await resolve_secret_fields(validated, self._secrets)
             client = factory.create_client(validated, secrets)
-        inner = factory.create_provider(name, validated, client)
+        if self._with_catalogue.get(factory.kind, False):
+            inner = factory.create_provider(
+                name,
+                validated,
+                client,
+                catalogue=self.catalogue,  # type: ignore[call-arg]
+            )
+        else:
+            inner = factory.create_provider(name, validated, client)
         provider = MeteredProvider(
             inner,
             name=name,

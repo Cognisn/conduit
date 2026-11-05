@@ -35,6 +35,7 @@ from conduit.core.types import (
     ImageBlock,
     Message,
     ModelRequest,
+    ProviderStateBlock,
     StopReason,
     TextBlock,
     ToolResultBlock,
@@ -102,6 +103,8 @@ def _content(block: Any, points: _CachePoints) -> list[dict[str, Any]]:
         return [_image(block)]
     if isinstance(block, CacheBreakpoint):
         return points.take()
+    if isinstance(block, ProviderStateBlock):
+        return []  # not sent back until the adapter round-trips its own state
     if isinstance(block, ToolUseBlock):
         return [{"toolUse": {"toolUseId": block.id, "name": block.name, "input": block.input}}]
     if isinstance(block, ToolResultBlock):
