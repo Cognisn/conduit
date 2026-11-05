@@ -15,7 +15,13 @@ import pytest
 
 from conduit.core.registry import MeteredProvider, ProviderRegistry
 from conduit.core.secrets import LiteralSecretResolver
-from conduit.core.streaming import StreamStopped, TextDelta, ToolCallFinished, ToolCallStarted
+from conduit.core.streaming import (
+    ProviderStateReported,
+    StreamStopped,
+    TextDelta,
+    ToolCallFinished,
+    ToolCallStarted,
+)
 from conduit.core.types import Message, ModelRequest, StopReason, ToolResultBlock
 from conduit.providers.gemini import GeminiFactory
 from tests.unit.providers.gemini import recordings
@@ -123,7 +129,11 @@ async def test_a_streamed_call_goes_to_the_gemini_api_with_the_resolved_key() ->
     assert body["contents"] == [{"role": "user", "parts": [{"text": "Is a.example.com up?"}]}]
     assert body["generationConfig"]["maxOutputTokens"] == 64
 
-    assert events[:3] == [
+    # Re-pointed for the provider-state block: the signature is reported before its call.
+    signed = events[1]
+    assert isinstance(signed, ProviderStateReported)
+    assert json.loads(signed.state.payload) == {"call_id": "fc_1", "signature": SIGNATURE}
+    assert [events[0], *events[2:4]] == [
         TextDelta(text="Checking."),
         ToolCallStarted(id="fc_1", name="lookup_host"),
         ToolCallFinished(id="fc_1", name="lookup_host", input={"host": "a.example.com"}),

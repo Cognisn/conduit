@@ -9,8 +9,8 @@ The catalogue (the registry's, passed through the factory) decides structured ou
 a schema for a model it does not mark ``structured_output`` is refused as
 ``REJECTED`` before any call.
 
-Thought signatures (see ``conduit.providers.gemini.mapping``) are remembered by call
-id, the most recent ``signature_memory`` of them, and sent back with their calls.
+Thought signatures travel as provider state in the response and the assistant message
+(see ``conduit.providers.gemini.mapping``); the provider itself remembers nothing.
 
 Every error becomes ``ProviderError(failure)``, raised after the handler that caught
 the SDK's error, so that error is neither its cause nor its context: provider text
@@ -22,9 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections import OrderedDict
 from collections.abc import AsyncIterator, Mapping
-from types import MappingProxyType
 from typing import Any
 
 from conduit.core.catalogue import Catalogue
@@ -35,9 +33,6 @@ from conduit.core.types import ModelRequest
 from conduit.providers.gemini.errors import classify
 from conduit.providers.gemini.mapping import StreamMapper, build_request
 from conduit.providers.gemini.settings import GeminiSettings
-
-#: How many thought signatures a provider remembers, most recent first kept.
-DEFAULT_SIGNATURE_MEMORY = 4096
 
 
 def _as_json(chunk: Any) -> Mapping[str, Any] | None:
@@ -105,36 +100,21 @@ class GeminiProvider(BaseProvider):
         client: Any,
         *,
         catalogue: Catalogue,
-        signature_memory: int = DEFAULT_SIGNATURE_MEMORY,
     ) -> None:
         self.name = name
         self.settings = settings
         self.client = client
         self._catalogue = catalogue
-        self._memory = max(1, signature_memory)
-        self._signatures: OrderedDict[str, bytes] = OrderedDict()
 
     def structured_output(self, model: str) -> bool:
         """Whether the catalogue says ``model`` supports structured output."""
         entry = self._catalogue.get(self.settings.catalogue_provider, model)
         return entry is not None and entry.capabilities.structured_output
 
-    @property
-    def signatures(self) -> Mapping[str, bytes]:
-        """The thought signatures remembered, by call id (read-only)."""
-        return MappingProxyType(self._signatures)
-
-    def _remember(self, found: Mapping[str, bytes]) -> None:
-        for call_id, signature in found.items():
-            self._signatures[call_id] = signature
-            self._signatures.move_to_end(call_id)
-        while len(self._signatures) > self._memory:
-            self._signatures.popitem(last=False)
-
     async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
         if request.output_schema is not None and not self.structured_output(request.model):
             raise ProviderError(ProviderFailure.REJECTED)  # refused before any call
-        params = build_request(request, signatures=self._signatures)
+        params = build_request(request)
         timeout = request.timeout_s
         chunks, failure = await self._open(params, timeout)
         if failure is not None:
@@ -150,7 +130,6 @@ class GeminiProvider(BaseProvider):
                 events, failure = _feed(mapper, chunk)
                 if failure is not None:
                     raise ProviderError(failure)
-                self._remember(mapper.signatures)
                 for event in events:
                     yield event
         finally:

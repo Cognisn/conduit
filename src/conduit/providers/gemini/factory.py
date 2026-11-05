@@ -17,7 +17,7 @@ the host would: proxy variables and ``.netrc`` (its HTTP clients use ``trust_env
 bounded by ``max_attempts``.
 
 ``async_client_args`` are passed to the SDK's async HTTP client (a test gives a mock
-transport). ``signature_memory`` bounds the thought signatures each provider keeps.
+transport).
 
 Providers take capability checks from the catalogue the registry passes to
 ``create_provider``: the one it applied the product's overlays to. Called without one,
@@ -36,7 +36,7 @@ from conduit.core.catalogue import Catalogue, default_catalogue
 from conduit.core.errors import ConfigurationError
 from conduit.core.provider import Provider
 from conduit.core.settings import ProviderSettings
-from conduit.providers.gemini.provider import DEFAULT_SIGNATURE_MEMORY, GeminiProvider
+from conduit.providers.gemini.provider import GeminiProvider
 from conduit.providers.gemini.settings import GeminiSettings
 
 
@@ -52,14 +52,8 @@ class GeminiFactory:
     kind = "gemini"
     settings_model = GeminiSettings
 
-    def __init__(
-        self,
-        *,
-        async_client_args: Mapping[str, Any] | None = None,
-        signature_memory: int = DEFAULT_SIGNATURE_MEMORY,
-    ) -> None:
+    def __init__(self, *, async_client_args: Mapping[str, Any] | None = None) -> None:
         self._async_client_args = dict(async_client_args or {})
-        self._signature_memory = signature_memory
 
     def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
         """A ``google.genai.Client`` for ``settings``. Imports the SDK here only."""
@@ -95,5 +89,4 @@ class GeminiFactory:
             _gemini(settings),
             client,
             catalogue=catalogue if catalogue is not None else default_catalogue(),
-            signature_memory=self._signature_memory,
         )

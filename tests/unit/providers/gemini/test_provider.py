@@ -165,11 +165,12 @@ class TestSignatures:
         parts = client.aio.models.calls[0]["contents"][1]["parts"]
         assert parts[0]["thought_signature"] == SKIP_SIGNATURE
 
-    async def test_signature_memory_is_bounded(self) -> None:
+    async def test_the_signature_travels_in_the_response_not_in_the_provider(self) -> None:
+        # Replaces D0029's per-call memory: a provider that saw a signature does not
+        # supply it again; only the state block in the assistant message does.
         def handle(params: dict[str, Any]) -> list[dict[str, Any]]:
-            n = len(client.aio.models.calls)
             part = {
-                "function_call": {"id": f"fc_{n}", "name": "lookup_host", "args": {}},
+                "function_call": {"id": "fc_1", "name": "lookup_host", "args": {}},
                 "thought_signature": "c2ln",
             }
             return [
@@ -182,13 +183,27 @@ class TestSignatures:
             ]
 
         client = FakeClient(handle)
-        factory = GeminiFactory(signature_memory=2)
-        settings = factory.settings_model.model_validate(SETTINGS)
-        provider = factory.create_provider("gemini", settings, client)
-        assert isinstance(provider, GeminiProvider)
-        for _ in range(3):
-            await provider.complete(_request())
-        assert dict(provider.signatures) == {"fc_2": b"sig", "fc_3": b"sig"}
+        provider = await _build(client)
+        response = await provider.complete(_request())
+        (state,) = response.provider_state
+        assert state.provider_kind == "gemini"
+        assert state.state_type == "thought_signature"
+        (call,) = response.tool_uses
+        result = Message(role="user", content=(ToolResultBlock(tool_use_id="fc_1", content=()),))
+
+        with_state = Message(role="assistant", content=response.content)
+        without_state = Message(role="assistant", content=(call,))
+        await provider.complete(_request(Message.user("Go"), with_state, result))
+        await provider.complete(_request(Message.user("Go"), without_state, result))
+        sent = [
+            c["contents"][1]["parts"][0]["thought_signature"] for c in client.aio.models.calls[1:]
+        ]
+        assert sent == [b"sig", SKIP_SIGNATURE]
+
+    def test_the_factory_takes_no_signature_memory(self) -> None:
+        with pytest.raises(TypeError):
+            GeminiFactory(signature_memory=2)  # type: ignore[call-arg]
+        assert not hasattr(GeminiProvider, "signatures")
 
 
 class _Slow:
