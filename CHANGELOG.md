@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a12] - 2026-11-05
+
+Wave 4, third merge: SKILL.md skills (`feat/0.1.0-skills`).
+
+### Added
+
+- SKILL.md skills (`conduit.skills`):
+  - the SKILL.md format, read with the standard library: name, description and optional version, licence, compatibility, allowed tools and metadata. Validation refuses anything outside the format, including control and line-separator characters in single-line fields, with a fixed reason and line, never the file's text;
+  - a filesystem skill source over a product-given directory, with every resource path confined to its skill's folder. Traversal, absolute paths, trailing-dot aliases, and links or junctions outside it are refused. Each file is checked again on its open handle, and every read is bounded by the source's limits on file sizes, counts and depth. There is also an in-memory source;
+  - progressive disclosure: skill summaries listed for the model, and a `use_skill` tool for a tool catalogue that loads a skill's instructions on demand and its resources on further request. Limits on the loaded skills and the listing count the request prefix as it is rendered;
+  - loaded skills placed in the stable request prefix before a cache breakpoint, so they are cached with the system prompt and tools;
+  - skill-use transcript markers (loaded, used, unloaded), and skill events carrying names, versions and sizes only.
+- A skill source conformance suite (`conduit.testing.conformance.SkillSourceSuite`).
+
+## [0.1.0a11] - 2026-11-05
+
+Wave 4, second merge: the agent runner (`feat/0.1.0-agent-runner`).
+
+### Added
+
+- The agent runner (`conduit.agent`): drives a task on its task class's resolved assignment through model calls and tool calls, as an async stream of typed run events, to a typed result. It can be used from sync code through the facade.
+- Run budgets:
+  - model calls, tool calls, tokens (the product chooses which of the four counts are charged) and wall time, each stopping the run cleanly with a budget event and a typed failure;
+  - budgets hold across hand-offs, and the wall-time budget also bounds the hooks;
+  - when output tokens are charged, no call asks for more output than the budget has left.
+- Hand-off to another task class the task allows, only through the runtime's resolved assignments, by a `hand_off` tool offered to the model, with hand-off events.
+- Output contracts: a pydantic model the final answer must satisfy, retried once with the validation errors (fields and types only), then a typed failure.
+- Untrusted-content framing for tool results and other external text, with escaped delimiters, visible invisible characters and a fresh nonce per block. A tool can declare that its executor frames its own results (`preframed`).
+- Approvals: tools a product marks go through the approval handler first, and a refusal is a tool result.
+- An output filter hook, applied to every assistant message.
+- Run events carrying identifiers, sizes, hashes and outcomes, with content only under the capture policy.
+- Run transcripts appended through a supplied transcript store, keeping provider state. A run abandoned, cancelled or failing part-way still answers every tool use it left open, so the stored conversation stays loadable.
+- Hooks: compaction before each model call, and a per-run system hook and tool-executor wrapper, which the skills layer uses.
+
 ## [0.1.0a10] - 2026-11-05
 
 Wave 4, first merge: the providers follow-up (`fix/0.1.0-providers-follow-up`).
