@@ -225,6 +225,10 @@ class OAuthAuth(SettingsModel):
     Without ``client_id`` the client registers itself dynamically with the
     authorisation server. With it, the client is pre-registered; ``client_secret``
     is then its secret, if it has one.
+
+    ``issuer`` pins the authorisation server: discovery that names any other is
+    refused before a request goes to it. A client secret needs the pin, so it can only
+    ever be sent to the server it was issued by.
     """
 
     type: Literal["oauth"] = "oauth"
@@ -232,6 +236,7 @@ class OAuthAuth(SettingsModel):
     client_id: str | None = Field(default=None, min_length=1, max_length=256)
     client_secret: SecretRef | None = None
     client_name: str = Field(default="conduit", min_length=1, max_length=128)
+    issuer: str | None = Field(default=None, min_length=1, max_length=2048)
     #: Seconds before an access token's expiry at which it is refreshed.
     refresh_margin: float = Field(default=60.0, ge=0, le=_TIMEOUT_LIMIT)
 
@@ -242,10 +247,21 @@ class OAuthAuth(SettingsModel):
             raise ValueError("a scope must be a non-empty token without spaces or quotes")
         return value
 
+    @field_validator("issuer")
+    @classmethod
+    def _issuer(cls, value: str | None) -> str | None:
+        if value is not None:
+            reason = check_endpoint_url(value)
+            if reason is not None:
+                raise ValueError(f"the pinned issuer was refused: {reason}")
+        return value
+
     @model_validator(mode="after")
     def _secret_needs_id(self) -> Self:
         if self.client_secret is not None and self.client_id is None:
             raise ValueError("a client secret needs a pre-registered client id")
+        if self.client_secret is not None and self.issuer is None:
+            raise FieldsRefused("a client secret needs a pinned issuer", ["issuer"])
         return self
 
 

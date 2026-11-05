@@ -40,6 +40,9 @@ class OAuthFailure(StrEnum):
     SIGN_IN_REQUIRED = "sign_in_required"  # no usable tokens and no interactive sign-in
     SIGN_IN_FAILED = "sign_in_failed"  # the sign-in hook failed or timed out
     STORE = "store"  # the token store could not read or write
+    # Stored tokens or a registration belong to another authorisation server than
+    # the one discovered now; both were dropped, and a new sign-in is needed.
+    ISSUER_CHANGED = "issuer_changed"
     # The server refused a freshly issued token.
     TOKEN_REJECTED = "token_rejected"  # noqa: S105 - a failure class, not a secret
 

@@ -171,6 +171,7 @@ class TestSignIn:
             server,
             client_id="pre-registered",
             client_secret="secret://docs_client",
+            issuer=ISSUER,
             secrets={"docs_client": "zz-pre-registered-secret-zz"},
         )
         await oauth.access_token()

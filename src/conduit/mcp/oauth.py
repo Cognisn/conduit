@@ -6,12 +6,15 @@ What it does, in order, for a server with no usable tokens:
    server's origin, at the well-known path with the server's path appended, then
    at the root. Its ``resource`` must be the server's own URL, or a parent of it
    on the same origin (the audience check), and it must name an authorisation
-   server. That server's metadata (RFC 8414, then OpenID Connect discovery) must
+   server; with ``OAuthAuth.issuer`` set, it must be that one, checked before any
+   request goes to it. That server's metadata (RFC 8414, then OpenID Connect discovery) must
    name the same issuer exactly (the issuer check), must offer PKCE with ``S256``,
    and every endpoint must be https (or http on loopback).
 2. Registration. A pre-registered ``client_id`` is used as given; otherwise the
    client registers itself dynamically (RFC 7591) for the hook's redirect URI, and
-   keeps the registration in the token store under ``mcp:<server>:client``.
+   keeps the registration in the token store under ``mcp:<server>:client``, with
+   the issuer it was registered with. A registration is only ever used with that
+   issuer.
 3. Authorisation code with PKCE. A fresh ``state`` (256 bits) and verifier (512
    bits, 86 characters) for every sign-in; the challenge is the verifier's SHA-256.
    The request names the resource (RFC 8707). The sign-in hook takes the person
@@ -19,11 +22,18 @@ What it does, in order, for a server with no usable tokens:
    redirect URI (scheme, host, port and path), carry exactly the ``state`` sent
    (compared in constant time), and name the issuer when the server sends one or
    promises to (RFC 9207). Only then is the code exchanged, with the verifier.
-4. Tokens are held only in the product's ``TokenStore``, under ``mcp:<server>``.
+4. Tokens are held only in the product's ``TokenStore``, under ``mcp:<server>``,
+   with the issuer that granted them (in ``token_type``, as ``Bearer;iss=<issuer>``).
+   A refresh token is only ever sent to that issuer: if discovery now names another
+   one, the tokens and the registration are dropped and the call fails with
+   ``ISSUER_CHANGED``, so the person signs in again with the server now named.
    An access token near its expiry (``refresh_margin``) is refreshed with the
    refresh grant; a new refresh token replaces the old one (rotation), and a
-   refused one (``invalid_grant``) drops the tokens so the person signs in again.
-   Concurrent callers share one refresh.
+   refused one (``invalid_grant``) drops the tokens so the person signs in again,
+   unless the store by then holds a different refresh token (another client of the
+   store rotated it), which is used instead. Every client of one store in the
+   process shares one lock per server, so concurrent callers share one refresh.
+   No OAuth request follows a redirect.
 
 Failures raise ``McpAuthError`` with the step's ``OAuthFailure``, unchained, and
 never carry a token, a code, a verifier, a state, a client secret, a URL or the
@@ -39,6 +49,7 @@ import hashlib
 import hmac
 import logging
 import secrets
+import weakref
 from collections.abc import AsyncGenerator, Callable, Generator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -64,6 +75,42 @@ _OIDC_PATH = "/.well-known/openid-configuration"
 _REGISTRATION_TYPE = "registration:"
 _DEAD_GRANT_ERRORS = frozenset({"invalid_grant", "invalid_client", "unauthorized_client"})
 _SECRET_METHODS = frozenset({"client_secret_post", "client_secret_basic"})
+_BEARER = "Bearer"
+_ISSUER_MARK = ";iss="
+
+#: One lock per (store, event loop, key), shared by every OAuthClient of that store in
+#: the process, so clients of one store never refresh the same token twice at once.
+_SHARED_LOCKS: weakref.WeakKeyDictionary[
+    Any, weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]
+] = weakref.WeakKeyDictionary()
+
+
+def _shared_lock(store: Any, key: str) -> asyncio.Lock | None:
+    """The process-wide lock for ``key`` in ``store``, or ``None`` if ``store`` cannot
+    be weakly referenced (the client's own lock is used then)."""
+    try:
+        loops = _SHARED_LOCKS.get(store)
+        if loops is None:
+            loops = weakref.WeakKeyDictionary()
+            _SHARED_LOCKS[store] = loops
+    except TypeError:
+        return None
+    keys = loops.setdefault(asyncio.get_running_loop(), {})
+    return keys.setdefault(key, asyncio.Lock())
+
+
+def _bound(kind: str, issuer: str) -> str:
+    """A stored entry's type naming the issuer that granted it."""
+    return f"{kind}{_ISSUER_MARK}{issuer}"
+
+
+def _split_bound(token_type: str) -> tuple[str, str | None]:
+    kind, mark, issuer = token_type.partition(_ISSUER_MARK)
+    return kind, (issuer if mark and issuer else None)
+
+
+def _same_issuer(a: str | None, b: str) -> bool:
+    return a is not None and a.rstrip("/") == b.rstrip("/")
 
 
 def pkce_pair() -> tuple[str, str]:
@@ -153,10 +200,13 @@ class OAuthClient:
         self._http_transport = http_transport
         self._clock = clock or (lambda: datetime.now(UTC))
         self._metadata_cache: _Metadata | None = None
-        self._lock = asyncio.Lock()
+        self._own_lock = asyncio.Lock()
 
     def __repr__(self) -> str:
         return f"OAuthClient({self._server!r})"
+
+    def _lock(self) -> asyncio.Lock:
+        return _shared_lock(self._store, self._settings.token_key) or self._own_lock
 
     def _fail(self, reason: OAuthFailure) -> McpAuthError:
         logger.warning("MCP server %s: OAuth failed: %s", self._server, reason.value)
@@ -256,6 +306,8 @@ class OAuthClient:
         issuer: str = servers[0]
         if check_endpoint_url(issuer) is not None:
             raise self._fail(OAuthFailure.INSECURE_ENDPOINT)
+        if self._auth.issuer is not None and not _same_issuer(issuer, self._auth.issuer):
+            raise self._fail(OAuthFailure.ISSUER_MISMATCH)
 
         issuer_origin = _origin(issuer)
         issuer_path = urlsplit(issuer).path.rstrip("/")
@@ -304,26 +356,26 @@ class OAuthClient:
         return _Client(self._auth.client_id, secret, "client_secret_post" if secret else "none")
 
     @staticmethod
-    def _from_registration(stored: TokenSet) -> _Client | None:
-        if not stored.token_type.startswith(_REGISTRATION_TYPE):
+    def _from_registration(stored: TokenSet, issuer: str) -> _Client | None:
+        """The stored registration's client, if it was registered with ``issuer``."""
+        kind, registered_with = _split_bound(stored.token_type)
+        if not kind.startswith(_REGISTRATION_TYPE) or not _same_issuer(registered_with, issuer):
             return None
         secret = stored.refresh_token.get_secret_value() if stored.refresh_token else None
         return _Client(
-            stored.access_token.get_secret_value(),
-            secret,
-            stored.token_type[len(_REGISTRATION_TYPE) :],
+            stored.access_token.get_secret_value(), secret, kind[len(_REGISTRATION_TYPE) :]
         )
 
-    async def _stored_client(self, redirect_uri: str | None = None) -> _Client | None:
-        """The client to use: pre-registered, or the stored registration (for
-        ``redirect_uri``, when one is named)."""
+    async def _stored_client(self, issuer: str, redirect_uri: str | None = None) -> _Client | None:
+        """The client to use with ``issuer``: pre-registered, or the registration stored
+        for that issuer (and for ``redirect_uri``, when one is named)."""
         configured = await self._configured_client()
         if configured is not None:
             return configured
         stored = await self._get(self._settings.registration_key)
         if stored is None or (redirect_uri is not None and stored.scope != redirect_uri):
             return None
-        return self._from_registration(stored)
+        return self._from_registration(stored, issuer)
 
     async def _register(self, metadata: _Metadata, redirect_uri: str) -> _Client:
         if metadata.registration_endpoint is None:
@@ -358,7 +410,7 @@ class OAuthClient:
         registration = TokenSet(
             access_token=SecretStr(client_id),
             refresh_token=SecretStr(secret) if secret else None,
-            token_type=f"{_REGISTRATION_TYPE}{method}",
+            token_type=_bound(f"{_REGISTRATION_TYPE}{method}", metadata.issuer),
             scope=redirect_uri,
         )
         await self._put(self._settings.registration_key, registration)
@@ -389,7 +441,11 @@ class OAuthClient:
         )
 
     def _token_set(
-        self, data: Mapping[str, Any], step: OAuthFailure, previous: SecretStr | None = None
+        self,
+        data: Mapping[str, Any],
+        step: OAuthFailure,
+        issuer: str,
+        previous: SecretStr | None = None,
     ) -> TokenSet:
         access = data.get("access_token")
         token_type = data.get("token_type")
@@ -412,7 +468,7 @@ class OAuthClient:
             access_token=SecretStr(access),
             # Rotation: a new refresh token replaces the old; without one, the old stays.
             refresh_token=SecretStr(refresh) if isinstance(refresh, str) and refresh else previous,
-            token_type="Bearer",  # noqa: S106 - the OAuth token type, not a secret
+            token_type=_bound(_BEARER, issuer),
             expires_at=expires_at,
             scope=scope if isinstance(scope, str) else None,
         )
@@ -421,27 +477,42 @@ class OAuthClient:
         """New tokens by the refresh grant, or ``None`` (tokens dropped) if refused."""
         if tokens.refresh_token is None:
             return None
-        client = await self._stored_client()
+        metadata = await self._metadata()
+        _, granted_by = _split_bound(tokens.token_type)
+        if not _same_issuer(granted_by, metadata.issuer):
+            # Never send a refresh token, or a registration, to another server.
+            await self._delete(self._settings.token_key)
+            await self._delete(self._settings.registration_key)
+            raise self._fail(OAuthFailure.ISSUER_CHANGED)
+        client = await self._stored_client(metadata.issuer)
         if client is None:
             await self._delete(self._settings.token_key)
             return None
-        metadata = await self._metadata()
-        form = {
-            "grant_type": "refresh_token",
-            "refresh_token": tokens.refresh_token.get_secret_value(),
-            "resource": self._resource,
-        }
+        sent = tokens.refresh_token.get_secret_value()
+        form = {"grant_type": "refresh_token", "refresh_token": sent, "resource": self._resource}
         status, data = await self._token_request(metadata, client, form, OAuthFailure.REFRESH)
         if status != 200 or data is None:
             error = data.get("error") if data else None
             if status in (400, 401) and error in _DEAD_GRANT_ERRORS:
+                # Another client of this store (another process, perhaps) may have
+                # rotated the token meanwhile: keep its tokens, drop only what was sent.
+                held = await self._get(self._settings.token_key)
+                held_refresh = held.refresh_token if held is not None else None
+                if (
+                    held is not None
+                    and held_refresh is not None
+                    and (held_refresh.get_secret_value() != sent)
+                ):
+                    return held
                 await self._delete(self._settings.token_key)
                 if error == "invalid_client":
                     await self._delete(self._settings.registration_key)
                 logger.info("MCP server %s: refresh refused; sign-in needed", self._server)
                 return None
             raise self._fail(OAuthFailure.REFRESH)
-        fresh = self._token_set(data, OAuthFailure.REFRESH, previous=tokens.refresh_token)
+        fresh = self._token_set(
+            data, OAuthFailure.REFRESH, metadata.issuer, previous=tokens.refresh_token
+        )
         await self._put(self._settings.token_key, fresh)
         logger.info("MCP server %s: access token refreshed", self._server)
         return fresh
@@ -498,7 +569,7 @@ class OAuthClient:
         if not isinstance(redirect_uri, str) or check_endpoint_url(redirect_uri) is not None:
             raise self._fail(OAuthFailure.REDIRECT_MISMATCH)
         metadata = await self._metadata()
-        client = await self._stored_client(redirect_uri)
+        client = await self._stored_client(metadata.issuer, redirect_uri)
         if client is None:
             client = await self._register(metadata, redirect_uri)
         verifier, challenge = pkce_pair()
@@ -528,7 +599,7 @@ class OAuthClient:
         )
         if status != 200 or data is None:
             raise self._fail(OAuthFailure.TOKEN_EXCHANGE)
-        tokens = self._token_set(data, OAuthFailure.TOKEN_EXCHANGE)
+        tokens = self._token_set(data, OAuthFailure.TOKEN_EXCHANGE, metadata.issuer)
         await self._put(self._settings.token_key, tokens)
         logger.info("MCP server %s: signed in", self._server)
         return tokens
@@ -537,7 +608,7 @@ class OAuthClient:
 
     async def access_token(self, *, interactive: bool = True) -> SecretStr:
         """A usable access token: stored, refreshed, or (if ``interactive``) new."""
-        async with self._lock:
+        async with self._lock():
             tokens = await self._get(self._settings.token_key)
             if tokens is not None and self._fresh(tokens):
                 return tokens.access_token
@@ -557,7 +628,7 @@ class OAuthClient:
         If another caller has already replaced it, that token is returned, so
         concurrent callers share one refresh.
         """
-        async with self._lock:
+        async with self._lock():
             tokens = await self._get(self._settings.token_key)
             if tokens is not None:
                 current = tokens.access_token.get_secret_value()
@@ -566,11 +637,13 @@ class OAuthClient:
                 refreshed = await self._refresh(tokens)
                 if refreshed is not None:
                     return refreshed.access_token
+                if tokens.refresh_token is None:
+                    await self._delete(self._settings.token_key)
             raise self._fail(OAuthFailure.SIGN_IN_REQUIRED)
 
     async def sign_out(self) -> None:
         """Drop this server's tokens (the client registration is kept)."""
-        async with self._lock:
+        async with self._lock():
             await self._delete(self._settings.token_key)
 
     def httpx_auth(self) -> httpx.Auth:

@@ -207,7 +207,14 @@ class TestRefusals:
             )
         assert SYNTHETIC_SECRET not in str(caught.value)
         ok = McpServerSettings.model_validate(
-            _http(auth={"type": "oauth", "client_id": "cid", "client_secret": "secret://cs"})
+            _http(
+                auth={
+                    "type": "oauth",
+                    "client_id": "cid",
+                    "client_secret": "secret://cs",
+                    "issuer": "https://auth.example.com",
+                }
+            )
         )
         assert isinstance(ok.auth, OAuthAuth)
         assert ok.auth.client_secret == SecretRef("cs")

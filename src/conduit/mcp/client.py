@@ -20,7 +20,9 @@ Environment and logging (D0037):
 - An HTTP server is reached with an httpx client conduit builds, with
   ``trust_env`` off unless ``use_environment_proxies`` is set, so ``HTTP_PROXY``,
   ``SSL_CERT_FILE`` and ``.netrc`` cannot reroute requests or add credentials.
-  Redirects are followed only within the server's origin, as the SDK does.
+  conduit's httpx client never follows a redirect. The SDK's streamable HTTP
+  transport follows one itself only when it keeps the method and stays on the
+  server's origin; the SSE transport and the OAuth requests follow none.
 - A stdio server gets the SDK's small default environment (``PATH`` and the user's
   profile variables), not the parent's whole environment, plus the configured
   ``env`` and ``secret_env``.
