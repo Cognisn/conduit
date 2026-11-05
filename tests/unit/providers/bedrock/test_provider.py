@@ -532,6 +532,31 @@ class TestStalledConsumer:
         assert runtime.closed_streams >= 1
         await events.aclose()
 
+    async def test_the_stream_closes_at_the_give_up_even_if_the_model_then_pauses(self) -> None:
+        # After the event that fills the queue the model goes quiet. The worker must
+        # close the stream as it gives up, not wait for another upstream event.
+        paused = threading.Event()
+
+        def stream() -> Iterator[Any]:
+            for _ in range(STREAM_BUFFER + 2):
+                yield {"contentBlockDelta": {"delta": {"text": "x"}, "contentBlockIndex": 0}}
+            paused.wait(10)
+            yield from STOP
+
+        runtime = ScriptedRuntime(stream())
+        provider, _ = await built(runtime)
+        events = provider.stream(REQUEST.model_copy(update={"timeout_s": 0.3}))
+        try:
+            assert await anext(events) == TextDelta(text="x")
+            started = time.monotonic()
+            while runtime.closed_streams == 0 and time.monotonic() - started < 3:
+                await asyncio.sleep(0.05)
+            assert runtime.closed_streams >= 1
+            assert time.monotonic() - started < 2  # about the timeout, not the pause
+        finally:
+            paused.set()
+            await events.aclose()
+
     async def test_a_consumer_that_comes_back_after_the_give_up_times_out(self) -> None:
         runtime = ScriptedRuntime(self._endless())
         provider, _ = await built(runtime)

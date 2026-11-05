@@ -157,6 +157,8 @@ class BedrockProvider(BaseProvider):
                     if abandoned.is_set():
                         break
                     hand(_EVENT, raw)
+                    if abandoned.is_set():
+                        break  # given up: close now, not after another upstream event
                 hand(_END, None)
             except Exception as error:
                 hand(_ERROR, error)
