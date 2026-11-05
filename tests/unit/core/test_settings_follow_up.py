@@ -42,6 +42,21 @@ class TestPlaintextInExtraFields:
             ({"note": f"Bearer {PLAINTEXT}"}, "note"),
             ({"note": f"basic {PLAINTEXT}"}, "note"),
             ({"api_key": PLAINTEXT}, "api_key"),
+            # A credential-like name carries into what it holds.
+            ({"api_key": {"value": PLAINTEXT}}, "api_key.value"),
+            ({"credentials": {"client": PLAINTEXT}}, "credentials.client"),
+            ({"secret": [PLAINTEXT]}, "secret.0"),
+            ({"token": {"inner": {"deeper": PLAINTEXT}}}, "token.inner.deeper"),
+            # "auth" does not carry, but a password under any short name is still refused.
+            ({"auth": {"user": "u", "pass": PLAINTEXT}}, "auth.pass"),
+            # Plural names.
+            ({"api_keys": [PLAINTEXT]}, "api_keys.0"),
+            ({"tokens": {"primary": PLAINTEXT}}, "tokens.primary"),
+            ({"secrets": PLAINTEXT}, "secrets"),
+            ({"passwords": [PLAINTEXT]}, "passwords.0"),
+            ({"apikeys": PLAINTEXT}, "apikeys"),
+            ({"note": f"Token {PLAINTEXT}"}, "note"),
+            ({"credentials": [{"client": PLAINTEXT}]}, "credentials.0.client"),
         ],
     )
     def test_a_plaintext_credential_is_refused_naming_the_field(
@@ -49,6 +64,23 @@ class TestPlaintextInExtraFields:
     ) -> None:
         error = _refused(fields)
         assert refusals(error)[0] == [path]
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "bearer",
+            "auth",
+            "authorization",
+            "authorisation",
+            "pass",
+            "pwd",
+            "passwd",
+            "jwt",
+            "cookie",
+        ],
+    )
+    def test_every_further_name_is_credential_like(self, name: str) -> None:
+        assert refusals(_refused({name: PLAINTEXT}))[0] == [name]
 
     def test_every_offending_field_is_named(self) -> None:
         error = _refused({"bearer": PLAINTEXT, "auth": {"token": PLAINTEXT}})
@@ -63,6 +95,11 @@ class TestPlaintextInExtraFields:
             {"allow_long_term_api_keys": False, "endpoint": "direct", "max_retries": 2},
             {"note": "a bearer of good news"},
             {"auth": {"mode": "credential_chain", "profile": "default"}},
+            {"notes": "Token budget is high"},
+            {"notes": "Bearer of the news"},
+            {"notes": "basic setup"},
+            {"api_key": {"ref": "secret://tenant/key"}},
+            {"allow_long_term_api_keys": True, "rotate_keys": None},
         ],
     )
     def test_references_and_ordinary_fields_are_kept(self, fields: dict[str, Any]) -> None:

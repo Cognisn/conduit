@@ -108,12 +108,22 @@ def failed_fields(error: ValidationError) -> list[str]:
     return refusals(error)[0]
 
 
-#: Further name segments that mark an unknown (extra) field as a credential.
-EXTRA_CREDENTIAL_SEGMENTS = CREDENTIAL_SEGMENTS | frozenset(
-    {"bearer", "auth", "authorization", "authorisation", "pwd", "passwd", "jwt", "cookie"}
+#: Name segments of an unknown (extra) field that make everything it holds, at any
+#: depth, a credential: the declared-field segments and their plurals.
+STRONG_CREDENTIAL_SEGMENTS = CREDENTIAL_SEGMENTS | frozenset(
+    {"keys", "apikeys", "secrets", "tokens", "passwords", "passphrases"}
+)
+#: Further segments that mark an unknown field's own value as a credential, without
+#: carrying into a mapping it holds (``auth`` often holds a mode and a profile).
+EXTRA_CREDENTIAL_SEGMENTS = STRONG_CREDENTIAL_SEGMENTS | frozenset(
+    {"bearer", "auth", "authorization", "authorisation", "pass", "pwd", "passwd", "jwt", "cookie"}
 )
 #: A value that reads as an HTTP authorisation header value: refused under any name.
-_AUTHORISATION_VALUE = re.compile(r"^\s*(bearer|basic|digest|token)\s+\S", re.IGNORECASE)
+#: Bearer, Basic and Token need a token-shaped tail (one run of 8 or more non-space
+#: characters and nothing after it); Digest needs its key="value" parameters.
+_AUTHORISATION_VALUE = re.compile(
+    r"^\s*(?:(?:bearer|basic|token)\s+\S{8,}|digest\s+\w+\s*=.*)\s*$", re.IGNORECASE
+)
 _SEGMENT = re.compile(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])")
 
 
@@ -121,11 +131,19 @@ def is_credential_name(name: str) -> bool:
     return any(segment in CREDENTIAL_SEGMENTS for segment in name.lower().split("_"))
 
 
+def _name_segments(name: str) -> set[str]:
+    compact = re.sub(r"[^a-z0-9]", "", name.lower())
+    return {s.lower() for s in _SEGMENT.findall(name)} | {compact}
+
+
 def _is_extra_credential_name(name: str) -> bool:
     """A broader test for unknown fields: any separator, camelCase, and more segments."""
-    compact = re.sub(r"[^a-z0-9]", "", name.lower())
-    segments = {s.lower() for s in _SEGMENT.findall(name)} | {compact}
-    return bool(segments & EXTRA_CREDENTIAL_SEGMENTS)
+    return bool(_name_segments(name) & EXTRA_CREDENTIAL_SEGMENTS)
+
+
+def _carries_credential(name: str) -> bool:
+    """Whether everything under an unknown field of this name is a credential."""
+    return bool(_name_segments(name) & STRONG_CREDENTIAL_SEGMENTS)
 
 
 def _is_reference(value: Any) -> bool:
@@ -138,17 +156,29 @@ def _is_reference(value: Any) -> bool:
     return True
 
 
-def _plaintext_credentials(value: Any, path: str, credential: bool) -> Iterator[str]:
-    """The paths under ``value`` holding a credential that is not a reference."""
+def _plaintext_credentials(
+    value: Any, path: str, credential: bool, carried: bool = False
+) -> Iterator[str]:
+    """The paths under ``value`` holding a credential that is not a reference.
+
+    ``credential`` marks ``value`` itself as a credential; ``carried`` marks everything
+    under it too, because an enclosing name (``api_key``, ``credentials``) said so.
+    """
     if isinstance(value, Mapping):
         for key, item in value.items():
             name = str(key)
+            inherited = carried or _carries_credential(name)
             yield from _plaintext_credentials(
-                item, f"{path}.{name}" if path else name, _is_extra_credential_name(name)
+                item,
+                f"{path}.{name}" if path else name,
+                inherited or _is_extra_credential_name(name),
+                inherited,
             )
     elif isinstance(value, list | tuple):
         for index, item in enumerate(value):
-            yield from _plaintext_credentials(item, f"{path}.{index}", credential)
+            yield from _plaintext_credentials(item, f"{path}.{index}", credential, carried)
+    elif isinstance(value, bool) or value is None:
+        return  # a flag or an absence is never a credential (allow_long_term_api_keys)
     elif (credential and not _is_reference(value)) or (
         isinstance(value, str) and _AUTHORISATION_VALUE.match(value)
     ):

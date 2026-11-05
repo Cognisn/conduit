@@ -8,6 +8,7 @@ every call runs on the loop that built the providers.
 from __future__ import annotations
 
 import inspect
+import logging
 import threading
 from collections.abc import Iterator, Mapping
 from typing import Any
@@ -15,7 +16,12 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
-from conduit.core.errors import FacadeError, ModelNotAssigned, UndeclaredModel
+from conduit.core.errors import (
+    ConfigurationError,
+    FacadeError,
+    ModelNotAssigned,
+    UndeclaredModel,
+)
 from conduit.core.facade import (
     LoopThread,
     SyncProvider,
@@ -175,3 +181,37 @@ class TestStartSync:
             quick = runtime.with_timeout(5)
             assert quick.timeout == 5
             assert quick.for_task("chat").provider.timeout == 5
+
+
+def _failing_close(loop: LoopThread, monkeypatch: pytest.MonkeyPatch) -> SyncRuntime:
+    runtime = _start(loop)
+
+    async def fail() -> None:
+        raise ConfigurationError("closing failed")
+
+    monkeypatch.setattr(runtime._runtime, "aclose", fail)
+    return runtime
+
+
+class TestLeavingTheBlock:
+    def test_a_close_failure_never_replaces_the_body_error(
+        self, loop: LoopThread, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        runtime = _failing_close(loop, monkeypatch)
+        with (
+            caplog.at_level(logging.WARNING, logger="conduit"),
+            pytest.raises(KeyError) as caught,
+            runtime,
+        ):
+            raise KeyError("the body's own error")
+        assert caught.value.__context__ is None
+        assert "ConfigurationError" in caplog.text
+        assert "closing failed" not in caplog.text
+
+    def test_a_close_failure_alone_is_raised_with_a_clean_chain(
+        self, loop: LoopThread, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runtime = _failing_close(loop, monkeypatch)
+        with pytest.raises(ConfigurationError) as caught, runtime:
+            pass
+        assert caught.value.__cause__ is None and caught.value.__context__ is None

@@ -45,6 +45,7 @@ import asyncio
 import atexit
 import concurrent.futures
 import inspect
+import logging
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Iterator
 from types import MappingProxyType, TracebackType
@@ -59,6 +60,8 @@ from conduit.core.secrets import SecretResolver
 from conduit.core.streaming import StreamEvent
 from conduit.core.tasks import Assignments, ResolvedAssignment, TaskClass
 from conduit.core.types import Message, ModelRequest, ModelResponse, SystemBlock, ToolSpec
+
+logger = logging.getLogger("conduit.facade")
 
 DEFAULT_TIMEOUT_S: float = 300.0
 #: How long a timed-out call may take to unwind before its caller is released anyway.
@@ -438,7 +441,19 @@ class SyncRuntime:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        self.close()
+        """Close. While the block is raising, a close that fails is logged by class name
+        only and the block's exception propagates; otherwise the close failure is raised
+        with neither cause nor context."""
+        if exc is None:
+            self.close()
+            return
+        failed: str | None = None
+        try:
+            self.close()
+        except Exception as error:
+            failed = type(error).__name__
+        if failed is not None:
+            logger.warning("closing the sync runtime failed: %s", failed)
 
     def __repr__(self) -> str:
         return f"SyncRuntime(providers={sorted(self._runtime.providers)})"

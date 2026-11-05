@@ -13,8 +13,9 @@ never be read as zero by mistake.
 ``ProviderStateBlock`` carries state a provider needs back unchanged on a later
 request (a model's signed reasoning, for example): the provider kind that made it,
 its type and an opaque payload. conduit never reads, renders or edits the payload.
-Each adapter sends back its own kind's blocks and ignores every other kind's, so a
-conversation can move between providers. Only an assistant message may carry one.
+Each adapter is expected to send back its own kind's blocks and ignore every other
+kind's, so a conversation can move between providers; the providers follow-up brings
+every adapter into line. Only an assistant message may carry one.
 """
 
 from __future__ import annotations
@@ -83,7 +84,8 @@ class ProviderStateBlock(_Frozen):
     """Opaque state a provider needs back unchanged: never text, never read by conduit.
 
     ``provider_kind`` is the adapter kind that made it (``anthropic``, ``gemini``);
-    only that adapter sends it back, and every other adapter ignores it. The payload
+    only that adapter is expected to send it back, and every other adapter to ignore
+    it. The payload
     is left out of ``repr`` and ``str``, so it is never rendered.
     """
 

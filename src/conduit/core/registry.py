@@ -50,6 +50,7 @@ import time
 import warnings
 from collections.abc import AsyncGenerator, AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, SecretStr, ValidationError
@@ -87,6 +88,9 @@ from conduit.core.streaming import (
 from conduit.core.types import ModelRequest, ModelResponse, ToolResultBlock, ToolUseBlock, Usage
 
 logger = logging.getLogger("conduit.registry")
+
+#: conduit's own source tree: a deprecation warning names the first frame outside it.
+_CONDUIT_SOURCE = str(Path(__file__).resolve().parents[1])
 
 _UNSET: Any = object()
 
@@ -402,14 +406,16 @@ class ProviderRegistry:
                 f"provider factory for kind {factory.kind!r}: create_provider without the "
                 "catalogue keyword is deprecated and will be refused in the next release",
                 DeprecationWarning,
-                stacklevel=2,
+                skip_file_prefixes=(_CONDUIT_SOURCE,),
             )
         self._factories[factory.kind] = factory
         self._with_catalogue[factory.kind] = takes
 
     def _factory(self, kind: str) -> ProviderFactory:
         if kind not in self._factories:
-            raise ConfigurationError(f"no provider adapter for kind {kind!r}")
+            # The kind may come from an unvalidated mapping: name it only if it is a kind.
+            named = f"kind {kind!r}" if re.fullmatch(KIND_PATTERN, kind) else "that kind"
+            raise ConfigurationError(f"no provider adapter for {named}")
         return self._factories[kind]
 
     def validate(

@@ -18,6 +18,7 @@ import asyncio
 import logging
 import warnings
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -265,3 +266,34 @@ class TestNoWarningEchoes:
             with pytest.raises(SettingsRefused):
                 await registry.build("p", forged.model_copy(update={"behaviour": 3}))
         assert not [w for w in seen if PLAINTEXT in str(w.message)]
+
+
+class TestDeprecationAttribution:
+    """The warning names the product's code, not conduit's, so default filters show it."""
+
+    def test_registered_through_the_constructor(self) -> None:
+        with pytest.warns(DeprecationWarning) as seen:
+            ProviderRegistry(secrets=SECRETS, catalogue=CATALOGUE, factories=[_Legacy()])
+        assert [Path(w.filename).resolve() for w in seen] == [Path(__file__).resolve()]
+
+    async def test_registered_through_start(self) -> None:
+        settings = ConduitSettings()
+        with pytest.warns(DeprecationWarning) as seen:
+            runtime = await start(settings, task_classes=[], factories=[_Legacy()], secrets=SECRETS)
+        await runtime.aclose()
+        assert [Path(w.filename).resolve() for w in seen] == [Path(__file__).resolve()]
+
+
+class TestUnvalidatedKind:
+    @pytest.mark.parametrize("kind", [PLAINTEXT + " with spaces", "Upper", 42])
+    async def test_a_kind_that_is_not_a_kind_is_not_quoted(self, kind: object) -> None:
+        registry, _ = _registry()
+        with pytest.raises(ConfigurationError) as caught:
+            await registry.build("p", {"kind": kind})
+        assert str(kind) not in str(caught.value)
+        assert caught.value.__cause__ is None and caught.value.__context__ is None
+
+    async def test_a_well_formed_kind_is_named(self) -> None:
+        registry, _ = _registry()
+        with pytest.raises(ConfigurationError, match="'absent'"):
+            await registry.build("p", {"kind": "absent"})
