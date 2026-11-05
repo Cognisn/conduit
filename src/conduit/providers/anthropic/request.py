@@ -24,6 +24,7 @@ from conduit.core.types import (
     CacheBreakpoint,
     ImageBlock,
     ModelRequest,
+    ProviderStateBlock,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
@@ -117,6 +118,8 @@ def build_params(request: ModelRequest, *, structured_output: bool) -> dict[str,
     for message in request.messages:
         content: list[Block] = []
         for block in message.content:
+            if isinstance(block, ProviderStateBlock):
+                continue  # not sent back until the adapter round-trips its own state
             if isinstance(block, CacheBreakpoint):
                 marks.breakpoint()
             else:
