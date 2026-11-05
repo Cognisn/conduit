@@ -6,8 +6,14 @@ call is reported once it is known to be whole, with its input assembled from the
 deltas: when another block starts after it, or at ``message_delta``. The last tool call
 of a response that stops on ``max_tokens`` is dropped, since it may have been cut off,
 even before any input arrived. A tool call whose input is not a JSON object is a
-protocol failure unless it is that dropped call. Thinking, server-tool and unknown
-blocks are not streamed.
+protocol failure unless it is that dropped call. Server-tool and unknown blocks are
+not streamed.
+
+Thinking: a ``thinking`` block (its text from ``thinking_delta`` and its signature from
+``signature_delta``) or a ``redacted_thinking`` block is reported when it stops, whole
+and in its place, as one ``ProviderStateReported``: an ``anthropic`` state block whose
+type is the block's type and whose payload is the block as JSON. It is never streamed
+as text. The request mapping sends it back unchanged.
 
 Usage: ``message_start`` carries the input counts (uncached input, cache reads and
 cache writes) and ``message_delta`` the final, cumulative counts. Each count the final
@@ -25,6 +31,7 @@ from typing import Any
 
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.streaming import (
+    ProviderStateReported,
     StreamEvent,
     StreamStopped,
     TextDelta,
@@ -32,8 +39,9 @@ from conduit.core.streaming import (
     ToolCallStarted,
     UsageReported,
 )
-from conduit.core.types import StopReason, Usage
+from conduit.core.types import ProviderStateBlock, StopReason, Usage
 from conduit.providers.anthropic.errors import failure_for_stream_error
+from conduit.providers.anthropic.request import KIND, THINKING_FIELDS
 
 _STOP_REASONS = {
     "end_turn": StopReason.END_TURN,
@@ -100,6 +108,20 @@ class _Block:
     name: str = ""
     json: list[str] = field(default_factory=list)
     stopped: bool = False
+    #: A thinking block's string fields, each assembled from its pieces.
+    parts: dict[str, list[str]] = field(default_factory=dict)
+
+    def state(self) -> ProviderStateBlock:
+        """This thinking block, whole, as Anthropic provider state."""
+        whole = {"type": self.kind, **{name: "".join(p) for name, p in self.parts.items()}}
+        payload = json.dumps(whole, ensure_ascii=False, separators=(",", ":"))
+        return ProviderStateBlock(
+            provider_kind=KIND, state_type=self.kind, payload=payload.encode("utf-8")
+        )
+
+
+#: Thinking deltas and the field each extends.
+_THINKING_DELTAS = {"thinking_delta": "thinking", "signature_delta": "signature"}
 
 
 class _Translator:
@@ -184,6 +206,16 @@ class _Translator:
                 raise _broken()
             self.blocks[index] = _Block("tool_use", id=call_id, name=name)
             return released
+        fields = THINKING_FIELDS.get(kind)  # type: ignore[arg-type]
+        if fields is not None:
+            parts: dict[str, list[str]] = {}
+            for name in sorted(fields - {"type"}):
+                value = block.get(name, "")
+                if not isinstance(value, str):
+                    raise _broken()
+                parts[name] = [value]
+            self.blocks[index] = _Block(str(kind), parts=parts)
+            return released
         self.blocks[index] = _Block(str(kind))
         if kind == "text" and block.get("text"):
             return [*released, TextDelta(text=str(block["text"]))]
@@ -200,11 +232,19 @@ class _Translator:
             return [TextDelta(text=text)] if isinstance(text, str) and text else []
         if kind == "input_json_delta" and block.kind == "tool_use":
             block.json.append(str(delta.get("partial_json") or ""))
+        field_name = _THINKING_DELTAS.get(kind)  # type: ignore[arg-type]
+        if field_name is not None and block.kind == "thinking":
+            value = delta.get(field_name)
+            if not isinstance(value, str):
+                raise _broken()
+            block.parts[field_name].append(value)
         return []
 
     def _stop(self, event: Mapping[str, Any]) -> list[StreamEvent]:
         block = self._block(event)
         block.stopped = True
+        if block.kind in THINKING_FIELDS:
+            return [ProviderStateReported(state=block.state())]
         if block.kind != "tool_use":
             return []
         released = self._release()  # an earlier call is whole once a later one stops

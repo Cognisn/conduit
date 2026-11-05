@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from conduit.core.errors import ConfigurationError
+from conduit.core.catalogue import CatalogueOverlay, default_catalogue
+from conduit.core.errors import ConfigurationError, ProviderError, ProviderFailure
 from conduit.core.events import MemoryEventSink, ModelCallFinishedEvent
 from conduit.core.registry import ProviderFactory, ProviderRegistry
 from conduit.core.secrets import LiteralSecretResolver, SecretRef
@@ -21,6 +23,7 @@ from conduit.providers.anthropic import (
     AnthropicProvider,
     AnthropicSettings,
 )
+from conduit.providers.openai_compat.settings import FoundryEntraId
 
 from .fakes import message_end, message_start, scripted_client, text_block, usage
 
@@ -106,6 +109,51 @@ class TestSettings:
         with pytest.raises(ValidationError):
             AnthropicSettings.model_validate(
                 {"kind": "anthropic", "api_key": "secret://K", "temperature": 0.1}
+            )
+
+    def test_foundry_takes_entra_id_in_openai_compat_s_shape(self) -> None:
+        settings = AnthropicSettings.model_validate(
+            {
+                "kind": "anthropic",
+                "endpoint": "foundry",
+                "base_url": FOUNDRY_URL,
+                "entra_id": {"managed_identity_client_id": "example-client"},
+            }
+        )
+        assert isinstance(settings.entra_id, FoundryEntraId)
+        assert settings.entra_id.scope == "https://ai.azure.com/.default"
+        assert settings.entra_id.managed_identity_client_id == "example-client"
+        assert settings.api_key is None
+
+    @pytest.mark.parametrize(
+        "credentials",
+        [
+            {},
+            {"api_key": "secret://K", "entra_id": {}},
+        ],
+        ids=["neither", "both"],
+    )
+    def test_foundry_takes_exactly_one_credential(self, credentials: dict[str, Any]) -> None:
+        with pytest.raises(ValidationError, match="exactly one of api_key and entra_id"):
+            AnthropicSettings.model_validate(
+                {"kind": "anthropic", "endpoint": "foundry", "base_url": FOUNDRY_URL, **credentials}
+            )
+
+    def test_the_direct_api_takes_no_entra_id(self) -> None:
+        with pytest.raises(ValidationError, match="entra_id is only for endpoint foundry"):
+            AnthropicSettings.model_validate(
+                {"kind": "anthropic", "api_key": "secret://K", "entra_id": {}}
+            )
+
+    def test_entra_id_settings_refuse_unknown_fields(self) -> None:
+        with pytest.raises(ValidationError):
+            AnthropicSettings.model_validate(
+                {
+                    "kind": "anthropic",
+                    "endpoint": "foundry",
+                    "base_url": FOUNDRY_URL,
+                    "entra_id": {"client_secret": "secret://X"},
+                }
             )
 
     @pytest.mark.parametrize("retries", [-1, 11])
@@ -306,6 +354,37 @@ class TestThroughTheRegistry:
         assert provider.kind == "anthropic"
         await registry.aclose()
 
+    async def test_structured_output_follows_the_registry_catalogue(self) -> None:
+        # A product overlay that withdraws structured output reaches the adapter.
+        model = "claude-haiku-5-5"
+        entry = default_catalogue().require("anthropic", model)
+        withdrawn = entry.model_copy(
+            update={
+                "capabilities": entry.capabilities.model_copy(update={"structured_output": False})
+            }
+        )
+        registry = ProviderRegistry(
+            secrets=LiteralSecretResolver({}),
+            catalogue=default_catalogue().apply(
+                CatalogueOverlay(name="no-structured", override=(withdrawn,))
+            ),
+            factories=[AnthropicFactory()],
+        )
+        client = scripted_client()
+        provider = await registry.build(
+            "claude", {"kind": "anthropic", "api_key": "secret://ANTHROPIC_KEY"}, client=client
+        )
+        request = ModelRequest(
+            model=model,
+            messages=(Message.user("x"),),
+            max_output_tokens=8,
+            output_schema={"type": "object"},
+        )
+        with pytest.raises(ProviderError) as caught:
+            await provider.complete(request)
+        assert caught.value.failure is ProviderFailure.REJECTED
+        assert client.messages.calls == []
+
 
 class TestWithTheRealSdk:
     """Runs only where the anthropic extra is installed; never reaches the network."""
@@ -389,3 +468,186 @@ class TestWithTheRealSdk:
 def _http_request() -> Any:
     httpx2 = pytest.importorskip("httpx2")
     return httpx2.Request("POST", "https://api.example.com/v1/messages")
+
+
+ENTRA_SETTINGS = {
+    "kind": "anthropic",
+    "endpoint": "foundry",
+    "base_url": FOUNDRY_URL,
+    "entra_id": {"managed_identity_client_id": "example-client"},
+}
+
+
+class _Token:
+    token = "example-entra-token"
+    expires_on = 4102444800
+
+
+class _StandInCredential:
+    """Stands in for azure.identity.aio.DefaultAzureCredential; never reaches Azure."""
+
+    made: ClassVar[list[_StandInCredential]] = []
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        self.scopes: list[tuple[str, ...]] = []
+        self.closed = False
+        _StandInCredential.made.append(self)
+
+    async def get_token(self, *scopes: str, **kwargs: Any) -> _Token:
+        self.scopes.append(scopes)
+        return _Token()
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture
+def credential(monkeypatch: pytest.MonkeyPatch) -> type[_StandInCredential]:
+    identity = pytest.importorskip("azure.identity.aio")
+    _StandInCredential.made = []
+    monkeypatch.setattr(identity, "DefaultAzureCredential", _StandInCredential)
+    return _StandInCredential
+
+
+async def _auth_headers(client: Any) -> dict[str, str]:
+    """The headers the SDK attaches for one request, as it would send them."""
+    models = pytest.importorskip("anthropic._models")
+    sdk_client = getattr(client, "sdk", client)
+    options = await sdk_client._prepare_options(
+        models.FinalRequestOptions(method="post", url="/v1/messages")
+    )
+    return {k.lower(): v for k, v in dict(options.headers or {}).items()}
+
+
+class TestFoundryEntraId:
+    """Q0011: Claude in Foundry with Microsoft Entra ID, sharing openai-compat's approach."""
+
+    async def test_the_client_signs_each_request_with_an_entra_token(
+        self, credential: type[_StandInCredential]
+    ) -> None:
+        sdk = pytest.importorskip("anthropic")
+        settings = AnthropicSettings.model_validate(ENTRA_SETTINGS)
+        client = AnthropicFactory().create_client(settings, {})
+        assert isinstance(client.sdk, sdk.AsyncAnthropicFoundry)
+        (made,) = credential.made
+        assert made.kwargs == {"managed_identity_client_id": "example-client"}
+        headers = await _auth_headers(client)
+        assert headers["authorization"] == "Bearer example-entra-token"
+        assert "x-api-key" not in headers and "api-key" not in headers
+        assert made.scopes == [("https://ai.azure.com/.default",)]
+        await client.close()
+        assert made.closed
+
+    async def test_an_environment_key_is_neither_held_nor_sent(
+        self, credential: type[_StandInCredential], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pytest.importorskip("anthropic")
+        monkeypatch.setenv("ANTHROPIC_FOUNDRY_API_KEY", "env-synthetic-key")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "env-synthetic-key")
+        client = AnthropicFactory().create_client(
+            AnthropicSettings.model_validate(ENTRA_SETTINGS), {}
+        )
+        assert client.sdk.api_key is None
+        headers = await _auth_headers(client)
+        assert "env-synthetic-key" not in repr(headers)
+        await client.close()
+
+    async def test_without_a_client_id_the_credential_takes_no_options(
+        self, credential: type[_StandInCredential]
+    ) -> None:
+        pytest.importorskip("anthropic")
+        settings = AnthropicSettings.model_validate({**ENTRA_SETTINGS, "entra_id": {}})
+        await AnthropicFactory().create_client(settings, {}).close()
+        assert [c.kwargs for c in credential.made] == [{}]
+
+    async def test_the_credential_is_closed_when_the_sdk_client_cannot_be_built(
+        self, credential: type[_StandInCredential], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sdk = pytest.importorskip("anthropic")
+
+        def refuse(**kwargs: Any) -> None:
+            raise RuntimeError("cannot build the client")
+
+        monkeypatch.setattr(sdk, "AsyncAnthropicFoundry", refuse)
+        with pytest.raises(RuntimeError):
+            AnthropicFactory().create_client(AnthropicSettings.model_validate(ENTRA_SETTINGS), {})
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert [c.closed for c in credential.made] == [True]
+
+    def test_the_credential_is_closed_without_a_running_loop(
+        self, credential: type[_StandInCredential], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sdk = pytest.importorskip("anthropic")
+
+        def refuse(**kwargs: Any) -> None:
+            raise RuntimeError("cannot build the client")
+
+        monkeypatch.setattr(sdk, "AsyncAnthropicFoundry", refuse)
+        with pytest.raises(RuntimeError):
+            AnthropicFactory().create_client(AnthropicSettings.model_validate(ENTRA_SETTINGS), {})
+        assert [c.closed for c in credential.made] == [True]
+
+    async def test_the_credential_is_closed_even_when_the_sdk_close_fails(
+        self, credential: type[_StandInCredential], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pytest.importorskip("anthropic")
+        client = AnthropicFactory().create_client(
+            AnthropicSettings.model_validate(ENTRA_SETTINGS), {}
+        )
+
+        async def fail() -> None:
+            raise RuntimeError("zz-close-marker-zz")
+
+        monkeypatch.setattr(client.sdk, "close", fail)
+        with pytest.raises(RuntimeError):
+            await client.close()
+        assert credential.made[0].closed
+
+    async def test_when_both_closes_fail_the_sdk_failure_is_what_surfaces(
+        self,
+        credential: type[_StandInCredential],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        pytest.importorskip("anthropic")
+        client = AnthropicFactory().create_client(
+            AnthropicSettings.model_validate(ENTRA_SETTINGS), {}
+        )
+        sdk_failure = RuntimeError("zz-sdk-close-zz")
+
+        async def fail_sdk() -> None:
+            raise sdk_failure
+
+        async def fail_credential() -> None:
+            raise ValueError("zz-credential-close-zz")
+
+        monkeypatch.setattr(client.sdk, "close", fail_sdk)
+        monkeypatch.setattr(credential.made[0], "close", fail_credential)
+        with pytest.raises(RuntimeError) as raised:
+            await client.close()
+        assert raised.value is sdk_failure
+        assert raised.value.__cause__ is None and raised.value.__context__ is None
+        assert any("ValueError" in r.getMessage() for r in caplog.records)
+        assert all("zz-credential-close-zz" not in r.getMessage() for r in caplog.records)
+
+    async def test_the_provider_closes_the_credential_quietly(
+        self, credential: type[_StandInCredential], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        pytest.importorskip("anthropic")
+        registry = ProviderRegistry(
+            secrets=LiteralSecretResolver({}), factories=[AnthropicFactory()]
+        )
+        provider = await registry.build("claude", ENTRA_SETTINGS)
+        await registry.aclose()
+        assert credential.made[0].closed
+        assert provider.kind == "anthropic"
+
+    async def test_the_client_offers_messages(self, credential: type[_StandInCredential]) -> None:
+        pytest.importorskip("anthropic")
+        client = AnthropicFactory().create_client(
+            AnthropicSettings.model_validate(ENTRA_SETTINGS), {}
+        )
+        assert client.messages is client.sdk.messages
+        await client.close()

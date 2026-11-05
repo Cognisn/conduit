@@ -14,9 +14,9 @@ the configured region and authentication mode, and returns it:
 The process environment (``AWS_BEARER_TOKEN_BEDROCK``) is never read or written: two
 providers in one process can use different keys.
 
-The factory takes the catalogue its providers consult for prompt-caching support. It
-defaults to conduit's default catalogue; a product that overlays the catalogue passes
-the applied catalogue here (see the Skuld question on passing it from the registry).
+Providers read prompt-caching support from the catalogue the registry passes to
+``create_provider``: the one it applied the product's overlays to. Called without one,
+outside a registry, the factory uses conduit's default catalogue.
 """
 
 from __future__ import annotations
@@ -68,13 +68,7 @@ class BedrockFactory:
     kind = "bedrock"
     settings_model = BedrockSettings
 
-    def __init__(
-        self,
-        *,
-        catalogue: Catalogue | None = None,
-        clock: Callable[[], float] = time.time,
-    ) -> None:
-        self._catalogue = catalogue
+    def __init__(self, *, clock: Callable[[], float] = time.time) -> None:
         self._clock = clock
 
     def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
@@ -188,6 +182,17 @@ class BedrockFactory:
             client.meta.events.register(f"before-send.{SERVICE}", add_bearer)
         return client
 
-    def create_provider(self, name: str, settings: ProviderSettings, client: Any) -> Provider:
-        catalogue = self._catalogue if self._catalogue is not None else default_catalogue()
-        return BedrockProvider(name, _bedrock(settings), client, catalogue=catalogue)
+    def create_provider(
+        self,
+        name: str,
+        settings: ProviderSettings,
+        client: Any,
+        *,
+        catalogue: Catalogue | None = None,
+    ) -> Provider:
+        return BedrockProvider(
+            name,
+            _bedrock(settings),
+            client,
+            catalogue=catalogue if catalogue is not None else default_catalogue(),
+        )

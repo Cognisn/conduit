@@ -81,11 +81,16 @@ def cached_conversation() -> Recording:
 
 
 def tool_round_trip() -> Recording:
-    """A tool call assembled from JSON deltas, then an answer from the tool's result."""
+    """A tool call assembled from JSON deltas, then an answer from the tool's result.
+
+    The first response's thinking block goes back unchanged, before the call, as the
+    API requires for tool use with thinking.
+    """
     ask = _user("Which network is host-a.example.com on?")
     call = {
         "role": "assistant",
         "content": [
+            {"type": "thinking", "thinking": "", "signature": "c2lnbmF0dXJl"},
             {"type": "text", "text": "Checking."},
             {
                 "type": "tool_use",
