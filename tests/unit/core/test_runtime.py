@@ -193,3 +193,18 @@ async def test_the_runtime_registry_holds_the_settings_residency_policy() -> Non
     )
     assert runtime.registry.residency == settings.residency
     await runtime.aclose()
+
+
+async def test_a_binding_refuses_an_explicit_budget_above_the_model_limit() -> None:
+    runtime = await start(
+        _settings(),
+        task_classes=[CHAT, SUMMARY],
+        factories=[FakeFactory()],
+        secrets=SECRETS,
+        catalogue=CATALOGUE,
+    )
+    binding = runtime.for_task("summary")  # fake-small: an output limit of 1,000
+    assert binding.request(messages=(Message.user("hi"),), max_output_tokens=1_000)
+    with pytest.raises(ConfigurationError, match="output limit"):
+        binding.request(messages=(Message.user("hi"),), max_output_tokens=1_001)
+    await runtime.aclose()

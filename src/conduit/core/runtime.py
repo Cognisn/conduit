@@ -22,6 +22,7 @@ from typing import Any
 from pydantic import Field, field_validator
 
 from conduit.core.catalogue import Catalogue, CatalogueOverlay, default_catalogue
+from conduit.core.errors import ConfigurationError
 from conduit.core.events import CapturePolicy, EventSink
 from conduit.core.identifiers import IDENTIFIER_PATTERN
 from conduit.core.registry import MeteredProvider, ProviderFactory, ProviderRegistry
@@ -68,8 +69,20 @@ class TaskBinding:
         tools: Iterable[ToolSpec] = (),
         **fields: Any,
     ) -> ModelRequest:
-        """A request on this task's model, within its output budget."""
+        """A request on this task's model, within its output budget.
+
+        ``max_output_tokens`` defaults to the assignment's budget. One given explicitly
+        is checked again against the model's output limit, as the budget was at
+        start-up, and a ``ConfigurationError`` is raised above it.
+        """
         fields.setdefault("max_output_tokens", self.assignment.max_output_tokens)
+        limit = self.assignment.entry.output_limit
+        if limit is not None and fields["max_output_tokens"] > limit:
+            raise ConfigurationError(
+                f"{self.assignment.task_class.name}: max_output_tokens "
+                f"{fields['max_output_tokens']} exceeds model {self.assignment.model!r}'s "
+                f"output limit of {limit}"
+            )
         return ModelRequest(
             model=self.assignment.model,
             system=tuple(system),
