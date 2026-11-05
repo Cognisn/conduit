@@ -9,7 +9,8 @@ from typing import Any
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from conduit.core.errors import ConfigurationError
+from conduit.core.catalogue import CatalogueOverlay, default_catalogue
+from conduit.core.errors import ConfigurationError, ProviderError, ProviderFailure
 from conduit.core.events import MemoryEventSink, ModelCallFinishedEvent
 from conduit.core.registry import ProviderFactory, ProviderRegistry
 from conduit.core.secrets import LiteralSecretResolver, SecretRef
@@ -305,6 +306,37 @@ class TestThroughTheRegistry:
         assert finished[-1].usage.output_tokens == 3
         assert provider.kind == "anthropic"
         await registry.aclose()
+
+    async def test_structured_output_follows_the_registry_catalogue(self) -> None:
+        # A product overlay that withdraws structured output reaches the adapter.
+        model = "claude-haiku-5-5"
+        entry = default_catalogue().require("anthropic", model)
+        withdrawn = entry.model_copy(
+            update={
+                "capabilities": entry.capabilities.model_copy(update={"structured_output": False})
+            }
+        )
+        registry = ProviderRegistry(
+            secrets=LiteralSecretResolver({}),
+            catalogue=default_catalogue().apply(
+                CatalogueOverlay(name="no-structured", override=(withdrawn,))
+            ),
+            factories=[AnthropicFactory()],
+        )
+        client = scripted_client()
+        provider = await registry.build(
+            "claude", {"kind": "anthropic", "api_key": "secret://ANTHROPIC_KEY"}, client=client
+        )
+        request = ModelRequest(
+            model=model,
+            messages=(Message.user("x"),),
+            max_output_tokens=8,
+            output_schema={"type": "object"},
+        )
+        with pytest.raises(ProviderError) as caught:
+            await provider.complete(request)
+        assert caught.value.failure is ProviderFailure.REJECTED
+        assert client.messages.calls == []
 
 
 class TestWithTheRealSdk:

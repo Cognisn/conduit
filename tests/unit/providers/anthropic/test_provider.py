@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from conduit.core.catalogue import Catalogue, CatalogueOverlay, default_catalogue
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.streaming import (
     StreamEvent,
@@ -50,7 +51,19 @@ def _request(**fields: Any) -> ModelRequest:
 
 
 def _provider(client: Any, **kwargs: Any) -> AnthropicProvider:
+    kwargs.setdefault("catalogue", default_catalogue())
     return AnthropicProvider(client, name="claude", **kwargs)
+
+
+def _structured(supported: bool, model: str = "claude-sonnet-5-5") -> Catalogue:
+    """The default catalogue with ``model``'s structured output set to ``supported``."""
+    entry = default_catalogue().require("anthropic", model)
+    changed = entry.model_copy(
+        update={
+            "capabilities": entry.capabilities.model_copy(update={"structured_output": supported})
+        }
+    )
+    return default_catalogue().apply(CatalogueOverlay(name="structured", override=(changed,)))
 
 
 async def _events(provider: AnthropicProvider, request: ModelRequest | None = None) -> list[Any]:
@@ -536,7 +549,7 @@ class TestErrors:
 class TestStructuredOutput:
     async def test_schema_is_sent_where_the_model_supports_it(self) -> None:
         client = scripted_client(_simple(*text_block(0, '{"answer": "x"}')))
-        provider = _provider(client, structured_output=lambda model: True)
+        provider = _provider(client, catalogue=_structured(True))
         await _events(provider, _request(output_schema=SCHEMA))
         assert client.messages.calls[0]["output_config"] == {
             "format": {"type": "json_schema", "schema": SCHEMA}
@@ -544,7 +557,7 @@ class TestStructuredOutput:
 
     async def test_schema_is_refused_where_the_model_does_not(self) -> None:
         client = scripted_client()
-        provider = _provider(client, structured_output=lambda model: False)
+        provider = _provider(client, catalogue=_structured(False))
         with pytest.raises(ProviderError) as caught:
             await _events(provider, _request(output_schema=SCHEMA))
         assert caught.value.failure is ProviderFailure.REJECTED
@@ -552,16 +565,19 @@ class TestStructuredOutput:
 
     async def test_no_schema_needs_no_support(self) -> None:
         client = scripted_client(_simple(*text_block(0, "x")))
-        provider = _provider(client, structured_output=lambda model: False)
+        provider = _provider(client, catalogue=_structured(False))
         await _events(provider)
         assert "output_config" not in client.messages.calls[0]
 
-    async def test_by_default_support_comes_from_the_default_catalogue(self) -> None:
-        client = scripted_client(_simple(*text_block(0, "{}")))
-        await _events(_provider(client), _request(output_schema=SCHEMA))
-        assert "output_config" in client.messages.calls[0]
+    async def test_support_is_looked_up_under_the_catalogue_provider(self) -> None:
+        # Under another catalogue provider the anthropic entries do not apply.
+        client = scripted_client()
+        provider = _provider(client, catalogue_provider="example_gateway")
+        with pytest.raises(ProviderError) as caught:
+            await _events(provider, _request(output_schema=SCHEMA))
+        assert caught.value.failure is ProviderFailure.REJECTED
 
-    async def test_a_model_the_default_catalogue_does_not_hold_is_refused(self) -> None:
+    async def test_a_model_the_catalogue_does_not_hold_is_refused(self) -> None:
         client = scripted_client()
         request = ModelRequest(
             model="claude-unknown-9",

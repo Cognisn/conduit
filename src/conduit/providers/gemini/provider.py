@@ -5,6 +5,10 @@ module never imports the SDK. ``request.timeout_s`` bounds the wait for the stre
 open and for each next chunk, so a stalled call fails with ``TIMEOUT``. If the
 consumer stops early, the SDK stream is closed.
 
+The catalogue (the registry's, passed through the factory) decides structured output:
+a schema for a model it does not mark ``structured_output`` is refused as
+``REJECTED`` before any call.
+
 Thought signatures (see ``conduit.providers.gemini.mapping``) are remembered by call
 id, the most recent ``signature_memory`` of them, and sent back with their calls.
 
@@ -23,6 +27,7 @@ from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
 from typing import Any
 
+from conduit.core.catalogue import Catalogue
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.provider import BaseProvider
 from conduit.core.streaming import StreamEvent
@@ -99,13 +104,20 @@ class GeminiProvider(BaseProvider):
         settings: GeminiSettings,
         client: Any,
         *,
+        catalogue: Catalogue,
         signature_memory: int = DEFAULT_SIGNATURE_MEMORY,
     ) -> None:
         self.name = name
         self.settings = settings
         self.client = client
+        self._catalogue = catalogue
         self._memory = max(1, signature_memory)
         self._signatures: OrderedDict[str, bytes] = OrderedDict()
+
+    def structured_output(self, model: str) -> bool:
+        """Whether the catalogue says ``model`` supports structured output."""
+        entry = self._catalogue.get(self.settings.catalogue_provider, model)
+        return entry is not None and entry.capabilities.structured_output
 
     @property
     def signatures(self) -> Mapping[str, bytes]:
@@ -120,6 +132,8 @@ class GeminiProvider(BaseProvider):
             self._signatures.popitem(last=False)
 
     async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
+        if request.output_schema is not None and not self.structured_output(request.model):
+            raise ProviderError(ProviderFailure.REJECTED)  # refused before any call
         params = build_request(request, signatures=self._signatures)
         timeout = request.timeout_s
         chunks, failure = await self._open(params, timeout)

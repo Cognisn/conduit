@@ -19,6 +19,10 @@ sets the ``anthropic`` logger to DEBUG itself takes on the same exposure.
 
 The SDK is imported only inside ``create_client``. Errors name the variable, never its
 value.
+
+Capability checks (structured output) read the catalogue the registry passes to
+``create_provider``: the one it applied the product's overlays to. A factory called
+without one, outside a registry, uses conduit's default catalogue.
 """
 
 from __future__ import annotations
@@ -28,12 +32,12 @@ import importlib
 import inspect
 import logging
 import os
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 from pydantic import SecretStr
 
-from conduit.core.catalogue import default_catalogue
+from conduit.core.catalogue import Catalogue, default_catalogue
 from conduit.core.errors import ConfigurationError, ProviderError, ProviderFailure
 from conduit.core.provider import BaseProvider, Provider
 from conduit.core.settings import ProviderSettings
@@ -45,14 +49,6 @@ from conduit.providers.anthropic.settings import DEFAULT_BASE_URL, AnthropicSett
 from conduit.providers.anthropic.stream import translate
 
 logger = logging.getLogger("conduit.providers.anthropic")
-
-StructuredOutputCheck = Callable[[str], bool]
-
-
-def default_structured_output(model: str) -> bool:
-    """Whether the default catalogue says ``model`` supports structured output."""
-    entry = default_catalogue().get("anthropic", model)
-    return entry is not None and entry.capabilities.structured_output
 
 
 async def _close(resource: Any) -> None:
@@ -79,7 +75,11 @@ async def _close_quietly(resource: Any, what: str) -> None:
 
 
 class AnthropicProvider(BaseProvider):
-    """Claude through the Messages API, streaming."""
+    """Claude through the Messages API, streaming.
+
+    ``catalogue`` answers capability checks, looked up under ``catalogue_provider``
+    (``anthropic`` unless the settings name another).
+    """
 
     kind = "anthropic"
 
@@ -88,14 +88,21 @@ class AnthropicProvider(BaseProvider):
         client: Any,
         *,
         name: str,
-        structured_output: StructuredOutputCheck = default_structured_output,
+        catalogue: Catalogue,
+        catalogue_provider: str = "anthropic",
     ) -> None:
         self.name = name
         self._client = client
-        self._structured_output = structured_output
+        self._catalogue = catalogue
+        self._catalogue_provider = catalogue_provider
+
+    def structured_output(self, model: str) -> bool:
+        """Whether the catalogue says ``model`` supports structured output."""
+        entry = self._catalogue.get(self._catalogue_provider, model)
+        return entry is not None and entry.capabilities.structured_output
 
     async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
-        supported = self._structured_output(request.model)
+        supported = self.structured_output(request.model)
         if request.output_schema is not None and not supported:
             raise ProviderError(ProviderFailure.REJECTED)
         params = build_params(request, structured_output=supported)
@@ -182,6 +189,18 @@ class AnthropicFactory:
             open_telemetry=False,
         )
 
-    def create_provider(self, name: str, settings: ProviderSettings, client: Any) -> Provider:
-        _settings(settings)
-        return AnthropicProvider(client, name=name)
+    def create_provider(
+        self,
+        name: str,
+        settings: ProviderSettings,
+        client: Any,
+        *,
+        catalogue: Catalogue | None = None,
+    ) -> Provider:
+        validated = _settings(settings)
+        return AnthropicProvider(
+            client,
+            name=name,
+            catalogue=catalogue if catalogue is not None else default_catalogue(),
+            catalogue_provider=validated.catalogue_provider,
+        )

@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from conduit.core.catalogue import CatalogueOverlay, default_catalogue
+from conduit.core.catalogue import Catalogue, CatalogueOverlay, default_catalogue
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.events import MemoryEventSink, ModelCallFinishedEvent
 from conduit.core.registry import ProviderRegistry
@@ -91,11 +91,19 @@ def settings(region: str = "eu-west-2", **fields: Any) -> BedrockSettings:
 
 
 async def built(
-    runtime: Any, *, region: str = "eu-west-2", factory: BedrockFactory | None = None, **fields: Any
+    runtime: Any,
+    *,
+    region: str = "eu-west-2",
+    factory: BedrockFactory | None = None,
+    catalogue: Catalogue | None = None,
+    **fields: Any,
 ) -> tuple[Any, MemoryEventSink]:
     sink = MemoryEventSink()
     registry = ProviderRegistry(
-        secrets=LiteralSecretResolver({}), events=sink, factories=[factory or BedrockFactory()]
+        secrets=LiteralSecretResolver({}),
+        catalogue=catalogue,
+        events=sink,
+        factories=[factory or BedrockFactory()],
     )
     provider = await registry.build("bedrock_main", settings(region, **fields), client=runtime)
     return provider, sink
@@ -171,10 +179,28 @@ class TestCacheGating:
         )
         recording = load_recording(recordings.path(recordings.uncached_profile()))
         runtime = RecordedRuntime(recording, region="eu-west-2")
-        provider, _ = await built(runtime, factory=BedrockFactory(catalogue=catalogue))
+        provider, _ = await built(runtime, catalogue=catalogue)
         response = await provider.complete(turn_one(model))
         assert response.stop_reason is StopReason.TOOL_USE
         runtime.replay.assert_exhausted()
+
+    def test_without_the_registry_the_factory_uses_the_default_catalogue(self) -> None:
+        provider = BedrockFactory().create_provider("b", settings(), object())
+        assert isinstance(provider, BedrockProvider)
+        assert provider.prompt_caching("anthropic.claude-opus-5-5") is True
+
+    def test_the_factory_hands_its_provider_the_catalogue_it_is_given(self) -> None:
+        model = "anthropic.claude-opus-5-5"
+        entry = default_catalogue().require("bedrock", model)
+        uncached = entry.model_copy(
+            update={"capabilities": entry.capabilities.model_copy(update={"prompt_caching": False})}
+        )
+        catalogue = default_catalogue().apply(
+            CatalogueOverlay(name="no-cache", override=(uncached,))
+        )
+        provider = BedrockFactory().create_provider("b", settings(), object(), catalogue=catalogue)
+        assert isinstance(provider, BedrockProvider)
+        assert provider.prompt_caching(model) is False
 
     def test_the_provider_reads_prompt_caching_from_its_catalogue(self) -> None:
         provider = BedrockProvider("b", settings(), object(), catalogue=default_catalogue())

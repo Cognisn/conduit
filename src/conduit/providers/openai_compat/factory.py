@@ -37,7 +37,7 @@ from typing import Any
 
 from pydantic import SecretStr
 
-from conduit.core.catalogue import Catalogue
+from conduit.core.catalogue import Catalogue, default_catalogue
 from conduit.core.errors import ConfigurationError
 from conduit.core.provider import Provider
 from conduit.core.settings import ProviderSettings
@@ -104,16 +104,13 @@ def _secret(secrets: Mapping[str, SecretStr], path: str) -> str:
 class OpenAICompatFactory:
     """The OpenAI-compatible adapter (OpenAI, X.AI, Microsoft Foundry) for the registry.
 
-    ``catalogue`` decides which models get structured output; it defaults to conduit's
-    default catalogue. Pass the applied catalogue when a product's overlays change
-    ``structured_output`` (until the registry passes it to ``create_provider``).
+    The catalogue the registry passes to ``create_provider`` (the one it applied the
+    product's overlays to) decides which models get structured output. Called without
+    one, outside a registry, the factory uses conduit's default catalogue.
     """
 
     kind = "openai_compat"
     settings_model = OpenAICompatSettings
-
-    def __init__(self, catalogue: Catalogue | None = None) -> None:
-        self._catalogue = catalogue
 
     def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
         if not isinstance(settings, OpenAICompatSettings):
@@ -165,9 +162,18 @@ class OpenAICompatFactory:
         sdk.webhook_secret = None
         return OpenAICompatClient(sdk=sdk, credential=credential, token_provider=token_provider)
 
-    def create_provider(self, name: str, settings: ProviderSettings, client: Any) -> Provider:
+    def create_provider(
+        self,
+        name: str,
+        settings: ProviderSettings,
+        client: Any,
+        *,
+        catalogue: Catalogue | None = None,
+    ) -> Provider:
         if not isinstance(settings, OpenAICompatSettings):
             raise ConfigurationError("openai_compat settings expected")
         return OpenAICompatProvider(
-            client, catalogue_provider=settings.catalogue_provider, catalogue=self._catalogue
+            client,
+            catalogue_provider=settings.catalogue_provider,
+            catalogue=catalogue if catalogue is not None else default_catalogue(),
         )

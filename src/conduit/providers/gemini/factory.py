@@ -18,6 +18,10 @@ bounded by ``max_attempts``.
 
 ``async_client_args`` are passed to the SDK's async HTTP client (a test gives a mock
 transport). ``signature_memory`` bounds the thought signatures each provider keeps.
+
+Providers take capability checks from the catalogue the registry passes to
+``create_provider``: the one it applied the product's overlays to. Called without one,
+outside a registry, the factory uses conduit's default catalogue.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from typing import Any
 
 from pydantic import SecretStr
 
+from conduit.core.catalogue import Catalogue, default_catalogue
 from conduit.core.errors import ConfigurationError
 from conduit.core.provider import Provider
 from conduit.core.settings import ProviderSettings
@@ -77,7 +82,18 @@ class GeminiFactory:
             http_options=types.HttpOptions(**options),
         )
 
-    def create_provider(self, name: str, settings: ProviderSettings, client: Any) -> Provider:
+    def create_provider(
+        self,
+        name: str,
+        settings: ProviderSettings,
+        client: Any,
+        *,
+        catalogue: Catalogue | None = None,
+    ) -> Provider:
         return GeminiProvider(
-            name, _gemini(settings), client, signature_memory=self._signature_memory
+            name,
+            _gemini(settings),
+            client,
+            catalogue=catalogue if catalogue is not None else default_catalogue(),
+            signature_memory=self._signature_memory,
         )

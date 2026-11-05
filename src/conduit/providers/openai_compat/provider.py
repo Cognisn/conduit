@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Any
 
-from conduit.core.catalogue import Catalogue, default_catalogue
+from conduit.core.catalogue import Catalogue
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.provider import BaseProvider
 from conduit.core.streaming import StreamEvent
@@ -78,12 +78,10 @@ class OpenAICompatProvider(BaseProvider):
 
     kind = "openai_compat"
 
-    def __init__(
-        self, client: Any, *, catalogue_provider: str, catalogue: Catalogue | None = None
-    ) -> None:
+    def __init__(self, client: Any, *, catalogue_provider: str, catalogue: Catalogue) -> None:
         self._client = client
         self._catalogue_provider = catalogue_provider
-        self._catalogue = catalogue if catalogue is not None else default_catalogue()
+        self._catalogue = catalogue
 
     def _structured_output(self, model: str) -> bool:
         entry = self._catalogue.get(self._catalogue_provider, model)

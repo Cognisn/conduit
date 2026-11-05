@@ -5,10 +5,10 @@ URL. The client ignores the environment (``trust_env=False``): a proxy variable 
 ``.netrc`` entry must not route prompts to another host or attach credentials, and it
 never follows redirects. Each call sets its own timeout from the request.
 
-The factory takes the catalogue its providers read the context window from. It
-defaults to conduit's default catalogue; a product that overlays the catalogue passes
-the applied catalogue here until the registry passes it (Q0010, Q0012). ``transport``
-replaces httpx's network transport, for tests.
+Providers read the context window and structured-output support from the catalogue
+the registry passes to ``create_provider``: the one it applied the product's overlays
+to. Called without one, outside a registry, the factory uses conduit's default
+catalogue. ``transport`` replaces httpx's network transport, for tests.
 """
 
 from __future__ import annotations
@@ -42,8 +42,7 @@ class OllamaFactory:
     kind = "ollama"
     settings_model = OllamaSettings
 
-    def __init__(self, *, catalogue: Catalogue | None = None, transport: Any = None) -> None:
-        self._catalogue = catalogue
+    def __init__(self, *, transport: Any = None) -> None:
         self._transport = transport
 
     def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
@@ -58,6 +57,17 @@ class OllamaFactory:
             transport=self._transport,
         )
 
-    def create_provider(self, name: str, settings: ProviderSettings, client: Any) -> Provider:
-        catalogue = self._catalogue if self._catalogue is not None else default_catalogue()
-        return OllamaProvider(name, _ollama(settings), client, catalogue=catalogue)
+    def create_provider(
+        self,
+        name: str,
+        settings: ProviderSettings,
+        client: Any,
+        *,
+        catalogue: Catalogue | None = None,
+    ) -> Provider:
+        return OllamaProvider(
+            name,
+            _ollama(settings),
+            client,
+            catalogue=catalogue if catalogue is not None else default_catalogue(),
+        )

@@ -9,10 +9,11 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
+from conduit.core.catalogue import Catalogue, CatalogueOverlay, default_catalogue
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.registry import MeteredProvider, ProviderRegistry
 from conduit.core.secrets import LiteralSecretResolver
@@ -42,11 +43,23 @@ TOOL = ToolSpec(
 )
 
 
-async def _build(client: Any, **factory: Any) -> MeteredProvider:
+async def _build(
+    client: Any, *, catalogue: Catalogue | None = None, **factory: Any
+) -> MeteredProvider:
     registry = ProviderRegistry(
-        secrets=LiteralSecretResolver({}), factories=[GeminiFactory(**factory)]
+        secrets=LiteralSecretResolver({}), catalogue=catalogue, factories=[GeminiFactory(**factory)]
     )
     return await registry.build("gemini", SETTINGS, client=client)
+
+
+def _structured(supported: bool) -> Catalogue:
+    entry = default_catalogue().require("gemini", recordings.MODEL)
+    changed = entry.model_copy(
+        update={
+            "capabilities": entry.capabilities.model_copy(update={"structured_output": supported})
+        }
+    )
+    return default_catalogue().apply(CatalogueOverlay(name="structured", override=(changed,)))
 
 
 def _request(*messages: Message, **fields: Any) -> ModelRequest:
@@ -193,6 +206,41 @@ class _Slow:
             yield {}
 
         return stream()
+
+
+class TestCatalogue:
+    SCHEMA: ClassVar[dict[str, Any]] = {"type": "object", "properties": {"a": {"type": "string"}}}
+
+    async def test_structured_output_is_sent_where_the_catalogue_allows_it(self) -> None:
+        seen: list[dict[str, Any]] = []
+
+        def handle(params: dict[str, Any]) -> Any:
+            seen.append(params)
+            return _done("{}")
+
+        provider = await _build(FakeClient(handle), catalogue=_structured(True))
+        await provider.complete(_request(output_schema=self.SCHEMA))
+        assert seen[0]["config"]["response_json_schema"] == self.SCHEMA
+
+    async def test_structured_output_is_refused_where_the_catalogue_says_no(self) -> None:
+        seen: list[dict[str, Any]] = []
+
+        def handle(params: dict[str, Any]) -> Any:
+            seen.append(params)
+            return _done("{}")
+
+        provider = await _build(FakeClient(handle), catalogue=_structured(False))
+        with pytest.raises(ProviderError) as caught:
+            await provider.complete(_request(output_schema=self.SCHEMA))
+        assert caught.value.failure is ProviderFailure.REJECTED
+        assert seen == []  # refused before any call
+
+    def test_without_the_registry_the_factory_uses_the_default_catalogue(self) -> None:
+        factory = GeminiFactory()
+        settings = factory.settings_model.model_validate(SETTINGS)
+        provider = factory.create_provider("gemini", settings, FakeClient(lambda p: _done()))
+        assert isinstance(provider, GeminiProvider)
+        assert provider.structured_output(recordings.MODEL) is True
 
 
 class TestFailures:

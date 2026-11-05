@@ -95,7 +95,7 @@ async def _build(
         secrets=LiteralSecretResolver({}),
         catalogue=catalogue,
         events=events,
-        factories=[OpenAICompatFactory(catalogue=catalogue)],
+        factories=[OpenAICompatFactory()],
     )
     return await registry.build("test", settings, client=client)
 
@@ -276,7 +276,9 @@ class TestErrors:
     async def test_a_stream_left_early_is_closed(self) -> None:
         client = FakeClient(recordings.load("openai-text-cached"))
         # The adapter's own stream; the metered wrapper leaves closing to the loop.
-        provider = OpenAICompatProvider(client, catalogue_provider="openai")
+        provider = OpenAICompatProvider(
+            client, catalogue_provider="openai", catalogue=default_catalogue()
+        )
         stream = cast(
             AsyncGenerator[StreamEvent, None],
             provider.stream(_request("gpt-5", Message.user("Say hello."))),
@@ -304,7 +306,9 @@ class TestLifecycle:
         assert client.closed
 
     async def test_a_client_without_close_is_fine(self) -> None:
-        provider = OpenAICompatProvider(object(), catalogue_provider="openai")
+        provider = OpenAICompatProvider(
+            object(), catalogue_provider="openai", catalogue=default_catalogue()
+        )
         await provider.aclose()
 
     def test_the_factory_is_built_in(self) -> None:
