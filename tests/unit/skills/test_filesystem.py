@@ -526,9 +526,14 @@ class TestOpenAfterCheck:
         folder = _skill(tmp_path, "s")
         _write(folder / "note.md", MARKER)
         original = filesystem._fstat
+        calls: list[int] = []
 
         def as_directory(fd: int) -> os.stat_result:
-            fields = list(original(fd))
+            calls.append(fd)
+            found = original(fd)
+            if len(calls) == 1:  # SKILL.md, read first, is left as it is
+                return found
+            fields = list(found)
             fields[0] = stat_module.S_IFDIR | 0o755
             return os.stat_result(fields)
 
