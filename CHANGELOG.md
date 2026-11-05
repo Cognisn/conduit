@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a10] - 2026-11-05
+
+Wave 4, first merge: the providers follow-up (`fix/0.1.0-providers-follow-up`).
+
+### Added
+
+- Anthropic, Gemini and Bedrock round-trip their own provider state: Anthropic thinking and redacted thinking blocks, Gemini thought signatures and Bedrock reasoning content are reported as provider-state blocks in stream order and sent back unchanged in their assistant messages, as tool loops with reasoning need. Malformed own state, including state nested past the decoder's limit, is refused before any call. Every adapter ignores other providers' state, so a conversation can move between providers.
+- Claude in Microsoft Foundry takes Microsoft Entra ID as well as an API key (`entra_id`, the same settings as the OpenAI-compatible adapter's Foundry service); the anthropic extra adds azure-identity.
+
+### Changed
+
+- Every adapter takes its capability checks from the catalogue the registry passes to `create_provider`, so product overlays apply; the Bedrock, Ollama and OpenAI-compatible factories no longer take a catalogue, and registering a shipped factory no longer warns. Gemini and Ollama refuse an output schema for a model the catalogue does not mark for structured output.
+- Gemini keeps no memory of thought signatures; the `signature_memory` settings are removed.
+- X.AI usage counts reasoning tokens as output when `total_tokens` shows they are outside `completion_tokens`.
+- Bedrock Converse calls run on their own thread, so a timed-out call holds no executor thread. A ConverseStream worker whose consumer stops taking events gives up after the request's timeout and closes the stream at once.
+- Closing a Foundry client that uses Entra ID logs a failing credential close by class name, and that failure never replaces the SDK client's own.
+
 ## [0.1.0a9] - 2026-11-05
 
 Wave 3: the core follow-up (`fix/0.1.0-core-follow-up`).

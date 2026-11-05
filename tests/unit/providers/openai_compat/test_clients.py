@@ -250,3 +250,40 @@ class TestWithTheSdk:
         client = self._client(settings, {"service.api_key": SecretStr("test-openai-value")})
         assert client.chat is client.sdk.chat
         await client.close()
+
+
+class _Closing:
+    def __init__(self, error: BaseException | None = None) -> None:
+        self.error = error
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+        if self.error is not None:
+            raise self.error
+
+
+async def test_when_both_closes_fail_the_sdk_failure_is_what_surfaces(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sdk_failure = RuntimeError("zz-sdk-close-zz")
+    sdk = _Closing(sdk_failure)
+    credential = _Closing(ValueError("zz-credential-close-zz"))
+    client = OpenAICompatClient(sdk=sdk, credential=credential)
+    with pytest.raises(RuntimeError) as raised:
+        await client.close()
+    assert raised.value is sdk_failure
+    assert raised.value.__cause__ is None and raised.value.__context__ is None
+    assert credential.closed
+    assert any("ValueError" in r.getMessage() for r in caplog.records)
+    assert all("zz-credential-close-zz" not in r.getMessage() for r in caplog.records)
+
+
+async def test_a_failing_credential_close_alone_is_logged_not_raised(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    credential = _Closing(ValueError("zz-credential-close-zz"))
+    client = OpenAICompatClient(sdk=_Closing(), credential=credential)
+    await client.close()
+    assert credential.closed
+    assert any("ValueError" in r.getMessage() for r in caplog.records)

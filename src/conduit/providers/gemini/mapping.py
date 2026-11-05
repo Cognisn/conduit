@@ -19,12 +19,17 @@ bytes as base64) before ``StreamMapper`` reads them.
   sent back with the call and its response; where the API gives none, a conduit id
   marked ``GENERATED_PREFIX`` is made and never sent.
 - **Thought signatures.** Gemini 3 models return a ``thought_signature`` with function
-  calls and expect it back with the call on the next request. conduit's core types
-  cannot carry it yet (Q0009), so the mapper reports each signature by call id and
-  the provider remembers it. A call whose signature was never seen (history from
-  another provider, a restarted process) carries Google's documented
+  calls and expect it back with the call on the next request. The mapper reports each
+  one, just before its call, as a ``gemini`` provider-state block of type
+  ``thought_signature`` whose payload is ``{"call_id": ..., "signature": <base64>}``,
+  so it travels in the assistant message and survives a restart or a stored
+  transcript; the provider remembers nothing. Sending back, a call takes the signature
+  its own message's state gives it. A call with none (history from another provider,
+  or state the product did not keep) carries Google's documented
   ``skip_thought_signature_validator`` value on the first call of its turn, a last
-  resort that costs answer quality but keeps the conversation going.
+  resort that costs answer quality but keeps the conversation going. Gemini state that
+  is not a whole signature is refused as ``REJECTED`` before any call, with nothing of
+  the payload in the error; other kinds' state is ignored.
 - Thought parts (``thought: true``) are not streamed.
 """
 
@@ -33,6 +38,7 @@ from __future__ import annotations
 import base64
 import binascii
 import contextlib
+import json
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -41,6 +47,7 @@ from pydantic import ValidationError
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.identifiers import new_id
 from conduit.core.streaming import (
+    ProviderStateReported,
     StreamEvent,
     StreamStopped,
     TextDelta,
@@ -52,6 +59,7 @@ from conduit.core.types import (
     ImageBlock,
     Message,
     ModelRequest,
+    ProviderStateBlock,
     StopReason,
     TextBlock,
     ToolResultBlock,
@@ -63,6 +71,9 @@ from conduit.core.types import (
 GENERATED_PREFIX = "conduit_gemini_"
 #: Google's documented value for a function call whose real signature is unavailable.
 SKIP_SIGNATURE = b"skip_thought_signature_validator"
+#: The provider kind and state type of a thought signature's state block.
+KIND = "gemini"
+SIGNATURE_STATE = "thought_signature"
 
 _PARAGRAPH = "\n\n"
 _REFUSALS = frozenset(
@@ -96,9 +107,45 @@ def _tool_names(request: ModelRequest) -> dict[str, str]:
     }
 
 
-def _parts(
-    message: Message, names: Mapping[str, str], signatures: Mapping[str, bytes]
-) -> list[dict[str, Any]]:
+def signature_state(call_id: str, signature: bytes) -> ProviderStateBlock:
+    """The state block carrying ``call_id``'s thought signature."""
+    payload = {"call_id": call_id, "signature": base64.b64encode(signature).decode("ascii")}
+    return ProviderStateBlock(
+        provider_kind=KIND,
+        state_type=SIGNATURE_STATE,
+        payload=json.dumps(payload).encode("utf-8"),
+    )
+
+
+def _from_state(state: ProviderStateBlock) -> tuple[str, bytes]:
+    """The call id and signature a ``gemini`` state block holds, or REJECTED."""
+    data: Any = None
+    # UnicodeDecodeError and JSONDecodeError; RecursionError for deep nesting.
+    with contextlib.suppress(ValueError, RecursionError):
+        data = json.loads(state.payload.decode("utf-8"))
+    signature: bytes | None = None
+    if (
+        state.state_type == SIGNATURE_STATE
+        and isinstance(data, dict)
+        and set(data) == {"call_id", "signature"}
+        and isinstance(data["call_id"], str)
+        and isinstance(data["signature"], str)
+    ):
+        with contextlib.suppress(ValueError):  # binascii.Error
+            signature = base64.b64decode(data["signature"], validate=True)
+    # Raised here, after the handlers: their errors quote the payload.
+    if signature is None:
+        raise ProviderError(ProviderFailure.REJECTED)
+    return data["call_id"], signature
+
+
+def _signatures(message: Message) -> dict[str, bytes]:
+    """The thought signatures this message's own state gives, by call id."""
+    return dict(_from_state(state) for state in message.provider_state(KIND))
+
+
+def _parts(message: Message, names: Mapping[str, str]) -> list[dict[str, Any]]:
+    signatures = _signatures(message)
     parts: list[dict[str, Any]] = []
     first_call = True
     for block in message.content:
@@ -133,16 +180,16 @@ def _parts(
                 }
             )
             parts += [_image(b) for b in block.content if isinstance(b, ImageBlock)]
-        # CacheBreakpoint: ignored (module docstring).
+        # CacheBreakpoint and provider state: never parts (module docstring).
     return parts
 
 
-def build_request(request: ModelRequest, *, signatures: Mapping[str, bytes]) -> dict[str, Any]:
+def build_request(request: ModelRequest) -> dict[str, Any]:
     """``generate_content_stream`` keyword arguments for ``request``."""
     names = _tool_names(request)
     contents: list[dict[str, Any]] = []
     for message in request.messages:
-        parts = _parts(message, names, signatures)
+        parts = _parts(message, names)
         if parts:
             role = "model" if message.role == "assistant" else "user"
             contents.append({"role": role, "parts": parts})
@@ -215,8 +262,6 @@ class StreamMapper:
         self._finish: str | None = None
         self._blocked = False
         self._usage: Mapping[str, Any] | None = None
-        #: Thought signatures seen in this stream, by call id.
-        self.signatures: dict[str, bytes] = {}
 
     def _call(self, part: Mapping[str, Any]) -> list[StreamEvent]:
         call = part["function_call"]
@@ -226,11 +271,14 @@ class StreamMapper:
         if not isinstance(name, str):
             raise _protocol()
         call_id = given if isinstance(given, str) and given else self._new_call_id()
+        signed: list[StreamEvent] = []
         if "thought_signature" in part:
-            self.signatures[call_id] = _signature(part["thought_signature"])
+            state = signature_state(call_id, _signature(part["thought_signature"]))
+            signed.append(ProviderStateReported(state=state))
         events: list[StreamEvent] | None = None
         with contextlib.suppress(ValidationError):
             events = [
+                *signed,
                 ToolCallStarted(id=call_id, name=name),
                 ToolCallFinished(id=call_id, name=name, input=args),
             ]

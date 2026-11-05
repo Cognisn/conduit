@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import base64
+import json
 from typing import Any, ClassVar
 
 import pytest
 
+from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.types import (
     CacheBreakpoint,
     ImageBlock,
@@ -310,22 +312,124 @@ class TestCacheControl:
         assert names == ["a", "sys", "m0", "m4"]
 
 
-class TestProviderState:
-    """Until the adapter round-trips its own state, every kind's state is left out."""
+THINKING = {"type": "thinking", "thinking": "Weighing it up.", "signature": "c2lnLTAx"}
+REDACTED = {"type": "redacted_thinking", "data": "ZW5jcnlwdGVk"}
 
-    @pytest.mark.parametrize("kind", ["gemini", "anthropic"])
-    def test_provider_state_is_not_sent(self, kind: str) -> None:
+
+def _state(block: dict[str, Any], *, kind: str = "anthropic") -> ProviderStateBlock:
+    return ProviderStateBlock(
+        provider_kind=kind,
+        state_type=block["type"],
+        payload=json.dumps(block).encode("utf-8"),
+    )
+
+
+def _assistant(*content: Any) -> dict[str, Any]:
+    params = build_params(
+        _request(
+            Message.user("hello"),
+            Message(role="assistant", content=content),
+            Message.user("again"),
+        ),
+        structured_output=False,
+    )
+    message: dict[str, Any] = params["messages"][1]
+    return message
+
+
+class TestProviderState:
+    """Anthropic's own thinking blocks go back unchanged, in place; other kinds' do not."""
+
+    @pytest.mark.parametrize("block", [THINKING, REDACTED], ids=["thinking", "redacted"])
+    def test_own_thinking_is_sent_back_unchanged_in_place(self, block: dict[str, Any]) -> None:
+        call = ToolUseBlock(id="toolu_01", name="lookup", input={"host": "a.example.com"})
+        message = _assistant(_state(block), TextBlock(text="Hi."), call)
+        assert message["content"] == [
+            block,
+            {"type": "text", "text": "Hi."},
+            {
+                "type": "tool_use",
+                "id": "toolu_01",
+                "name": "lookup",
+                "input": {"host": "a.example.com"},
+            },
+        ]
+
+    def test_several_thinking_blocks_keep_their_order(self) -> None:
+        second = {**THINKING, "thinking": "Second thought.", "signature": "c2lnLTAy"}
+        message = _assistant(_state(THINKING), _state(second), TextBlock(text="Hi."))
+        assert message["content"][:2] == [THINKING, second]
+
+    @pytest.mark.parametrize("kind", ["gemini", "bedrock", "stub"])
+    def test_other_kinds_state_is_left_out(self, kind: str) -> None:
         state = ProviderStateBlock(
             provider_kind=kind, state_type="thinking", payload=b"zz-state-marker-zz"
         )
+        message = _assistant(state, TextBlock(text="Hi."))
+        assert message["content"] == [{"type": "text", "text": "Hi."}]
+        assert "zz-state-marker-zz" not in repr(message)
+        assert base64.b64encode(b"zz-state-marker-zz").decode() not in repr(message)
+
+    def test_an_assistant_message_holding_only_thinking_keeps_it(self) -> None:
+        assert _assistant(_state(THINKING))["content"] == [THINKING]
+
+    def test_a_breakpoint_never_marks_a_thinking_block(self) -> None:
+        # The API refuses cache_control on thinking blocks: the block before it is marked.
         params = build_params(
             _request(
                 Message.user("hello"),
-                Message(role="assistant", content=(state, TextBlock(text="Hi."))),
-                Message.user("again"),
+                Message(role="assistant", content=(_state(THINKING), CacheBreakpoint())),
             ),
             structured_output=False,
         )
-        assert params["messages"][1]["content"] == [{"type": "text", "text": "Hi."}]
-        assert "zz-state-marker-zz" not in repr(params)
-        assert base64.b64encode(b"zz-state-marker-zz").decode() not in repr(params)
+        assert "cache_control" not in params["messages"][1]["content"][0]
+        assert params["messages"][0]["content"][0]["cache_control"] == EPHEMERAL
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            b"not json zz-state-marker-zz",
+            b"[" * 200_000,  # nested past the decoder's recursion limit
+            b"\xff\xfe zz-state-marker-zz",
+            b'["zz-state-marker-zz"]',
+            b'{"type": "thinking", "thinking": "zz-state-marker-zz"}',
+            b'{"type": "thinking", "thinking": 1, "signature": "s"}',
+            b'{"type": "thinking", "thinking": "t", "signature": "s", "extra": "zz-state-mark'
+            b'er-zz"}',
+            b'{"type": "redacted_thinking", "data": 7}',
+            b'{"type": "redacted_thinking", "thinking": "t", "signature": "s"}',
+            b'{"type": "text", "text": "zz-state-marker-zz"}',
+        ],
+    )
+    def test_own_state_that_is_not_a_thinking_block_is_refused_cleanly(
+        self, payload: bytes
+    ) -> None:
+        state_type = "redacted_thinking" if b"redacted" in payload else "thinking"
+        state = ProviderStateBlock(
+            provider_kind="anthropic", state_type=state_type, payload=payload
+        )
+        with pytest.raises(ProviderError) as caught:
+            _assistant(state)
+        assert caught.value.failure is ProviderFailure.REJECTED
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+        for text in (str(caught.value), repr(caught.value), *map(repr, caught.value.args)):
+            assert "zz-state-marker-zz" not in text
+
+    def test_own_state_whose_type_does_not_match_its_block_is_refused(self) -> None:
+        state = ProviderStateBlock(
+            provider_kind="anthropic",
+            state_type="redacted_thinking",
+            payload=json.dumps(THINKING).encode("utf-8"),
+        )
+        with pytest.raises(ProviderError) as caught:
+            _assistant(state)
+        assert caught.value.failure is ProviderFailure.REJECTED
+
+    def test_own_state_of_an_unknown_type_is_refused(self) -> None:
+        state = ProviderStateBlock(
+            provider_kind="anthropic", state_type="future_state", payload=b"{}"
+        )
+        with pytest.raises(ProviderError) as caught:
+            _assistant(state)
+        assert caught.value.failure is ProviderFailure.REJECTED
