@@ -174,8 +174,9 @@ def test_the_sql_drivers_are_owned_by_the_sql_store_only(tmp_path: Path, driver:
 
 
 def test_the_real_table_lists_httpx_for_ollama_and_mcp_only(tmp_path: Path) -> None:
-    # Q0006: httpx has two owners. Q0013: the bedrock-mantle adapter shares the
-    # anthropic SDK and botocore (tested below). Every other library keeps exactly one.
+    # Q0006: httpx has two owners. The bedrock-mantle adapter (the workstream Q0013
+    # added, which named this owner change) shares the anthropic SDK and botocore,
+    # tested below. Every other library keeps exactly one.
     assert OPTIONAL_LIBRARIES["httpx"] == ("conduit.providers.ollama", "conduit.mcp")
     shared = {name for name, owners in OPTIONAL_LIBRARIES.items() if len(owners) != 1}
     assert shared == {"httpx", "anthropic", "botocore"}
@@ -206,8 +207,9 @@ MANTLE = "conduit.providers.bedrock_mantle"
 def test_the_bedrock_mantle_adapter_shares_its_sdks_and_no_other_layer_does(
     tmp_path: Path, library: str, first_owner: str
 ) -> None:
-    # Q0013: the mantle adapter builds the anthropic SDK's mantle client and presigns
-    # short-term keys with botocore, so it owns both alongside their first adapter.
+    # The bedrock-mantle workstream (Q0013) builds the anthropic SDK's mantle client and
+    # presigns short-term keys with botocore, so it owns both alongside their first
+    # adapter.
     assert OPTIONAL_LIBRARIES[library] == (first_owner, MANTLE)
     first = first_owner.replace(".", "/")
     src = _tree(

@@ -8,8 +8,9 @@
   key of its own;
 - with the Region and base URL given explicitly, so ``AWS_REGION``,
   ``AWS_DEFAULT_REGION`` and ``ANTHROPIC_BEDROCK_MANTLE_BASE_URL`` are never read;
-- with the bearer middleware (``conduit.providers.bedrock_mantle.auth``), which sets
-  ``Authorization: Bearer <key>`` on every attempt, retries included;
+- as a subclass (``conduit.providers.bedrock_mantle.auth.bearer_client_class``) that
+  sets ``Authorization: Bearer <key>`` at send time on every attempt, retries included,
+  so the key is never in the request options the SDK logs at DEBUG;
 - with the SDK's OpenTelemetry spans off, since they can carry request content outside
   conduit's capture policy.
 
@@ -21,8 +22,10 @@ Short-term keys are presigned here with botocore's SigV4 query signer, exactly a
 bedrock adapter makes them (a ``CallWithBearerToken`` URL on ``bedrock.amazonaws.com``,
 encoded by ``conduit.providers.bedrock.auth.encode_short_term_key``), and refreshed by
 ``ShortTermKeySource`` before they expire. The first key is generated at once, so
-missing credentials are refused at start-up. Long-term keys are refused here unless
-``allow_long_term_api_keys`` is exactly ``True``, however the settings were made.
+missing credentials are refused at start-up. botocore's ``Signature:`` debug records are
+dropped, since a presigned key can be rebuilt from them. Long-term keys are refused here
+unless ``allow_long_term_api_keys`` is exactly ``True``, and the Region and any
+``endpoint_url`` are checked again, however the settings were made.
 
 Providers read capabilities from the catalogue the registry passes to
 ``create_provider``; called without one, outside a registry, the factory uses conduit's
@@ -34,6 +37,7 @@ from __future__ import annotations
 import contextlib
 import importlib
 import os
+import re
 import time
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -56,17 +60,19 @@ from conduit.providers.bedrock.auth import (
     encode_short_term_key,
 )
 from conduit.providers.bedrock.settings import (
+    REGION_PATTERN,
     AccessKeyAuth,
     CredentialChainAuth,
     LongTermApiKeyAuth,
     ShortTermApiKeyAuth,
 )
-from conduit.providers.bedrock_mantle.auth import bearer_middleware
+from conduit.providers.bedrock_mantle.auth import (
+    bearer_client_class,
+    keep_signatures_out_of_logs,
+)
 from conduit.providers.bedrock_mantle.provider import KIND, BedrockMantleProvider
 from conduit.providers.bedrock_mantle.settings import BedrockMantleSettings, mantle_base_url
 
-#: The module holding the SDK's mantle clients (not re-exported at the package top).
-SDK_MODULE = "anthropic.lib.bedrock"
 EXTRA = "pip install 'cognisn-conduit[bedrock-mantle]'"
 
 
@@ -85,14 +91,24 @@ def _check_environment() -> None:
         )
 
 
-def _import(name: str) -> Any:
-    """The module ``name``, or ``ConfigurationError`` naming the extra (nothing chained)."""
-    module: Any = None
-    with contextlib.suppress(ImportError):
-        module = importlib.import_module(name)
-    if module is None:
-        raise ConfigurationError(f"the bedrock-mantle provider needs its extra: {EXTRA}")
-    return module
+def _missing_extra() -> ConfigurationError:
+    return ConfigurationError(f"the bedrock-mantle provider needs its extra: {EXTRA}")
+
+
+def _check_destination(mantle: BedrockMantleSettings) -> None:
+    """Refuse a region or endpoint the settings validators would have refused.
+
+    Settings can be made without validation (``model_construct``); the key must never
+    go to a host they did not allow. The values are never echoed.
+    """
+    region = mantle.region
+    if not isinstance(region, str) or re.fullmatch(REGION_PATTERN, region) is None:
+        raise ConfigurationError("the bedrock-mantle region is not an AWS region")
+    endpoint = mantle.endpoint_url
+    if endpoint is not None and (
+        not isinstance(endpoint, str) or not endpoint.startswith("https://")
+    ):
+        raise ConfigurationError("the bedrock-mantle endpoint_url must be an https URL")
 
 
 class BedrockMantleFactory:
@@ -117,8 +133,14 @@ class BedrockMantleFactory:
             raise ConfigurationError(
                 "long-term Bedrock API keys are refused unless allow_long_term_api_keys is set"
             )
+        _check_destination(mantle)
         _check_environment()
-        sdk = _import(SDK_MODULE)
+        # Literal module names, so the client-construction tripwire can follow them.
+        sdk: Any = None
+        with contextlib.suppress(ImportError):
+            sdk = importlib.import_module("anthropic.lib.bedrock")
+        if sdk is None:  # raised after the handler, with nothing chained
+            raise _missing_extra()
         auth = mantle.auth
         region = mantle.region
         clock = self._clock
@@ -131,9 +153,16 @@ class BedrockMantleFactory:
 
         keys: KeySource
         if isinstance(auth, ShortTermApiKeyAuth):
-            botocore_session = _import("botocore.session")
-            botocore_auth = _import("botocore.auth")
-            awsrequest = _import("botocore.awsrequest")
+            botocore_session: Any = None
+            botocore_auth: Any = None
+            awsrequest: Any = None
+            with contextlib.suppress(ImportError):
+                botocore_session = importlib.import_module("botocore.session")
+                botocore_auth = importlib.import_module("botocore.auth")
+                awsrequest = importlib.import_module("botocore.awsrequest")
+            if awsrequest is None:
+                raise _missing_extra()
+            keep_signatures_out_of_logs()
             source = auth.source
 
             def signing_credentials() -> Any:
@@ -193,13 +222,13 @@ class BedrockMantleFactory:
         else:
             keys = StaticKeySource(secret("auth.api_key"))
 
-        return sdk.AsyncAnthropicBedrockMantle(
+        client_class = bearer_client_class(sdk.AsyncAnthropicBedrockMantle, keys)
+        return client_class(
             skip_auth=True,
             aws_region=region,
             base_url=mantle.endpoint_url or mantle_base_url(region),
             max_retries=mantle.max_retries,
             open_telemetry=False,
-            middleware=[bearer_middleware(keys)],
         )
 
     def create_provider(

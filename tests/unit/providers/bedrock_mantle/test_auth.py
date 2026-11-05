@@ -1,27 +1,31 @@
-"""The bearer middleware: a Bedrock API key on every attempt, read off the event loop."""
+"""Bearer keys set at send time, read off the event loop, and kept out of log records."""
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from typing import Any
 
 import pytest
 
 from conduit.core.errors import ProviderError, ProviderFailure
-from conduit.providers.bedrock_mantle.auth import bearer_middleware
+from conduit.providers.bedrock_mantle.auth import (
+    SIGNER_LOGGER,
+    SignatureRecordFilter,
+    bearer_client_class,
+    keep_signatures_out_of_logs,
+    set_bearer,
+)
 
 MARKER = "SECRET-MARKER-7f3a"
 
 
 class FakeRequest:
-    """Shaped like the SDK's APIRequest: read-only headers and a ``copy``."""
+    """Shaped like an httpx request: mutable headers."""
 
     def __init__(self, headers: dict[str, str]) -> None:
         self.headers = headers
-
-    def copy(self, *, headers: dict[str, str]) -> FakeRequest:
-        return FakeRequest(headers)
 
 
 class RotatingKeys:
@@ -42,76 +46,106 @@ class FailingKeys:
         raise ValueError(f"credentials expired for {MARKER}")
 
 
-class Sent:
-    def __init__(self) -> None:
-        self.requests: list[FakeRequest] = []
-
-    async def __call__(self, request: FakeRequest) -> str:
-        self.requests.append(request)
-        return "response"
-
-
-async def test_each_attempt_carries_the_current_key_as_a_bearer_token() -> None:
+async def test_each_call_sets_the_current_key_as_a_bearer_token() -> None:
     keys = RotatingKeys()
-    middleware = bearer_middleware(keys)
-    sent = Sent()
-    original = FakeRequest({"anthropic-version": "2023-06-01"})
-    assert await middleware(original, sent) == "response"
-    assert await middleware(original, sent) == "response"  # a retry: asked again
-    assert [r.headers["Authorization"] for r in sent.requests] == [
-        "Bearer bedrock-api-key-synthetic-1",
-        "Bearer bedrock-api-key-synthetic-2",
-    ]
-    assert all(r.headers["anthropic-version"] == "2023-06-01" for r in sent.requests)
-    assert original.headers == {"anthropic-version": "2023-06-01"}  # never mutated
+    first = FakeRequest({"anthropic-version": "2023-06-01"})
+    second = FakeRequest({})
+    await set_bearer(first, keys)
+    await set_bearer(second, keys)  # a retry: asked again
+    assert first.headers == {
+        "anthropic-version": "2023-06-01",
+        "Authorization": "Bearer bedrock-api-key-synthetic-1",
+    }
+    assert second.headers == {"Authorization": "Bearer bedrock-api-key-synthetic-2"}
 
 
 async def test_the_key_is_read_off_the_event_loop_thread() -> None:
     # Refreshing a short-term key can refresh AWS credentials, which may block.
     keys = RotatingKeys()
-    await bearer_middleware(keys)(FakeRequest({}), Sent())
+    await set_bearer(FakeRequest({}), keys)
     assert keys.threads
     assert threading.get_ident() not in keys.threads
 
 
 @pytest.mark.parametrize("name", ["Authorization", "authorization", "X-Api-Key", "x-api-key"])
 async def test_any_other_credential_header_is_replaced(name: str) -> None:
-    sent = Sent()
-    await bearer_middleware(RotatingKeys())(FakeRequest({name: MARKER, "other": "kept"}), sent)
-    headers = sent.requests[0].headers
-    assert MARKER not in headers.values()
-    assert headers["Authorization"] == "Bearer bedrock-api-key-synthetic-1"
-    assert headers["other"] == "kept"
-    assert {k.lower() for k in headers} == {"authorization", "other"}
+    request = FakeRequest({name: MARKER, "other": "kept"})
+    await set_bearer(request, RotatingKeys())
+    assert MARKER not in request.headers.values()
+    assert request.headers["Authorization"] == "Bearer bedrock-api-key-synthetic-1"
+    assert request.headers["other"] == "kept"
+    assert {k.lower() for k in request.headers} == {"authorization", "other"}
 
 
 async def test_a_key_that_cannot_be_had_is_rejected_with_nothing_chained() -> None:
-    sent = Sent()
+    request = FakeRequest({"other": "kept"})
     with pytest.raises(ProviderError) as caught:
-        await bearer_middleware(FailingKeys())(FakeRequest({}), sent)
+        await set_bearer(request, FailingKeys())
     error = caught.value
     assert error.failure is ProviderFailure.REJECTED
     assert error.__cause__ is None
     assert error.__context__ is None
     for text in (str(error), repr(error), *(repr(a) for a in error.args)):
         assert MARKER not in text
-    assert sent.requests == []  # nothing was sent
+    assert request.headers == {"other": "kept"}  # nothing set
 
 
 async def test_cancellation_propagates_unchanged() -> None:
-    async def cancelled(request: Any) -> Any:
-        raise asyncio.CancelledError
+    release = threading.Event()
 
-    with pytest.raises(asyncio.CancelledError):
-        await bearer_middleware(RotatingKeys())(FakeRequest({}), cancelled)
+    class Blocking:
+        def current(self) -> str:
+            release.wait(5)
+            return "bedrock-api-key-late"
+
+    task = asyncio.create_task(set_bearer(FakeRequest({}), Blocking()))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        release.set()
 
 
-async def test_a_failure_after_sending_is_not_touched() -> None:
-    class Boom(Exception):
-        pass
+class FakeClient:
+    """Stands in for the SDK client: its own hook runs first, and records that it did."""
 
-    async def failing(request: Any) -> Any:
-        raise Boom
+    def __init__(self, **options: Any) -> None:
+        self.options = options
+        self.prepared: list[Any] = []
 
-    with pytest.raises(Boom):
-        await bearer_middleware(RotatingKeys())(FakeRequest({}), failing)
+    async def _prepare_request(self, request: Any) -> None:
+        self.prepared.append(request)
+
+
+async def test_the_client_class_sets_the_key_in_its_send_time_hook() -> None:
+    cls = bearer_client_class(FakeClient, RotatingKeys())
+    assert issubclass(cls, FakeClient)
+    client = cls(skip_auth=True)
+    assert client.options == {"skip_auth": True}
+    request = FakeRequest({})
+    await client._prepare_request(request)
+    assert client.prepared == [request]  # the SDK's own hook still runs
+    assert request.headers == {"Authorization": "Bearer bedrock-api-key-synthetic-1"}
+
+
+def _record(msg: str, *args: Any) -> logging.LogRecord:
+    return logging.LogRecord(SIGNER_LOGGER, logging.DEBUG, __file__, 1, msg, args, None)
+
+
+def test_the_filter_drops_signature_records_only() -> None:
+    record_filter = SignatureRecordFilter()
+    assert not record_filter.filter(_record("Signature:\n%s", "abc123"))
+    assert record_filter.filter(_record("Calculating signature using v4 auth."))
+    assert record_filter.filter(_record("StringToSign:\n%s", "AWS4-HMAC-SHA256"))
+
+
+def test_the_filter_is_installed_on_the_signer_logger_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = logging.getLogger(SIGNER_LOGGER)
+    monkeypatch.setattr(logger, "filters", [])  # restored afterwards
+    keep_signatures_out_of_logs()
+    keep_signatures_out_of_logs()
+    assert sum(isinstance(f, SignatureRecordFilter) for f in logger.filters) == 1

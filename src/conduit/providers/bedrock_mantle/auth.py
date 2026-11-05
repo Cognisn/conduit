@@ -1,21 +1,30 @@
-"""The bearer middleware: the current Bedrock API key on every attempt the SDK makes.
+"""Bearer keys on the mantle client: set at send time, and kept out of every log record.
 
-The anthropic SDK runs client middleware once per HTTP attempt, inside its retry loop,
-so a key set here is set again on every retry. The key comes from a ``KeySource``
-(``conduit.providers.bedrock.auth``): a short-term key that is replaced before it
-expires, or a long-term key. Replacing a short-term key may refresh AWS credentials,
-which can block, so the source is read in a worker thread, never on the event loop.
+The key goes on the HTTP request in the SDK's ``_prepare_request`` hook, which the SDK
+calls on every attempt (retries included) after it has built, and logged, the request
+options. So the key is never in the options the SDK writes to the ``anthropic`` logger at
+DEBUG, which a product enables simply by setting its root logger to DEBUG. The hook is
+installed by ``bearer_client_class``, a subclass of the SDK's mantle client; the SDK's
+``copy`` and ``with_options`` keep the subclass.
 
-Any other credential header on the request is dropped, so only conduit's key is sent.
-A key that cannot be had is ``ProviderError(REJECTED)``, raised after the handler so
-nothing is chained to it: the underlying error can name a profile or carry
-credential text. Cancellation is never caught.
+The key comes from a ``KeySource`` (``conduit.providers.bedrock.auth``): a short-term key
+that is replaced before it expires, or a long-term key. Replacing a short-term key may
+refresh AWS credentials, which can block, so the source is read in a worker thread, never
+on the event loop. Any other credential header on the request is dropped, so only
+conduit's key is sent. A key that cannot be had is ``ProviderError(REJECTED)``, raised
+after the handler so nothing is chained to it (the underlying error can name a profile or
+carry credential text); the SDK passes it through unchanged and does not retry it.
+Cancellation is never caught.
+
+botocore's SigV4 signer logs each signature at DEBUG on the ``botocore.auth`` logger. For
+a presigned short-term key the signature, with the other values it logs, is the key, so
+``SignatureRecordFilter`` drops those records from that logger.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+import logging
 from typing import Any
 
 from conduit.core.errors import ProviderError, ProviderFailure
@@ -24,8 +33,8 @@ from conduit.providers.bedrock.auth import KeySource
 #: Header names that carry a credential, compared in lower case.
 CREDENTIAL_HEADERS = frozenset({"authorization", "x-api-key"})
 
-CallNext = Callable[[Any], Awaitable[Any]]
-Middleware = Callable[[Any, CallNext], Awaitable[Any]]
+#: The logger botocore's SigV4 signer writes its signatures to.
+SIGNER_LOGGER = "botocore.auth"
 
 
 async def current_key(keys: KeySource) -> str:
@@ -40,17 +49,33 @@ async def current_key(keys: KeySource) -> str:
     return key
 
 
-def bearer_middleware(keys: KeySource) -> Middleware:
-    """SDK middleware that sends ``Authorization: Bearer <key>`` on every attempt."""
+async def set_bearer(request: Any, keys: KeySource) -> None:
+    """Put the current key on the HTTP ``request`` as its only credential header."""
+    key = await current_key(keys)
+    for name in [n for n in request.headers if n.lower() in CREDENTIAL_HEADERS]:
+        del request.headers[name]
+    request.headers["Authorization"] = f"Bearer {key}"
 
-    async def bearer(request: Any, call_next: CallNext) -> Any:
-        key = await current_key(keys)
-        headers = {
-            name: value
-            for name, value in dict(request.headers).items()
-            if name.lower() not in CREDENTIAL_HEADERS
-        }
-        headers["Authorization"] = f"Bearer {key}"
-        return await call_next(request.copy(headers=headers))
 
-    return bearer
+def bearer_client_class(base: type[Any], keys: KeySource) -> type[Any]:
+    """A subclass of the SDK client ``base`` that sets the bearer key at send time."""
+
+    async def _prepare_request(self: Any, request: Any) -> None:
+        await base._prepare_request(self, request)  # a no-op with skip_auth
+        await set_bearer(request, keys)
+
+    return type("BearerMantleClient", (base,), {"_prepare_request": _prepare_request})
+
+
+class SignatureRecordFilter(logging.Filter):
+    """Drops botocore's ``Signature:`` debug records; every other record passes."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not (isinstance(record.msg, str) and record.msg.startswith("Signature:"))
+
+
+def keep_signatures_out_of_logs() -> None:
+    """Install ``SignatureRecordFilter`` on botocore's signer logger, once."""
+    logger = logging.getLogger(SIGNER_LOGGER)
+    if not any(isinstance(f, SignatureRecordFilter) for f in logger.filters):
+        logger.addFilter(SignatureRecordFilter())

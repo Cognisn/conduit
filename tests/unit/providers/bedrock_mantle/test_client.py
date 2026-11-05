@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import time
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -30,6 +32,7 @@ from conduit.providers.bedrock_mantle import (
     BedrockMantleProvider,
     BedrockMantleSettings,
 )
+from conduit.providers.bedrock_mantle.auth import SIGNER_LOGGER, SignatureRecordFilter
 
 from ..anthropic.fakes import message_end, message_start, text_block, usage
 
@@ -205,6 +208,42 @@ class TestShortTermKeys:
         assert len(server.requests) == 2
         assert all(bearer(r).startswith(SHORT_TERM_PREFIX) for r in server.requests)
 
+    async def test_a_key_is_replaced_before_its_credentials_expire(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Temporary credentials expiring in 700 s cap a 900 s key: it is replaced once
+        # within its 60 s margin of the credentials' expiry, not of its own lifetime.
+        botocore_session = pytest.importorskip("botocore.session")
+        read_only = pytest.importorskip("botocore.credentials").ReadOnlyCredentials
+        start = 1_000_000.0
+        now = [start]
+
+        class Expiring:
+            """Refreshes itself when read again, as botocore's temporary credentials do."""
+
+            def __init__(self) -> None:
+                self.reads = 0
+                self._expiry_time = datetime.fromtimestamp(start + 700, tz=UTC)
+
+            def get_frozen_credentials(self) -> Any:
+                self.reads += 1
+                if self.reads > 1:
+                    self._expiry_time = datetime.fromtimestamp(now[0] + 3_600, tz=UTC)
+                return read_only(ACCESS_KEY_ID, SECRET_ACCESS_KEY, "synthetic-session")
+
+        credentials = Expiring()
+        monkeypatch.setattr(botocore_session.Session, "get_credentials", lambda self: credentials)
+        settings = short_term(lifetime_s=900, refresh_before_s=60)
+        _, provider = wired(settings, ACCESS_KEY_SECRETS, Server(), clock=lambda: now[0])
+        assert credentials.reads == 1  # the first key, at creation
+        now[0] = start + 630  # 70 s before the credentials expire: still fresh
+        await provider.complete(REQUEST)
+        assert credentials.reads == 1
+        now[0] = start + 650  # inside the margin of the credentials' expiry
+        await provider.complete(REQUEST)
+        assert credentials.reads == 2  # replaced, though its own lifetime runs to 900 s
+        await provider.aclose()
+
     def test_missing_credentials_are_refused_at_creation(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
@@ -332,3 +371,49 @@ async def test_the_registry_builds_a_working_provider() -> None:
         assert isinstance(built._inner, BedrockMantleProvider)
     finally:
         await registry.aclose()
+
+
+class TestLogging:
+    """No key reaches a log record, even with every logger at DEBUG.
+
+    A product that runs ``logging.basicConfig(level=DEBUG)`` enables the anthropic
+    SDK's own debug logging (its request options among it) without ANTHROPIC_LOG.
+    """
+
+    @pytest.mark.parametrize("mode", ["short_term", "long_term"])
+    async def test_the_key_is_in_no_record_across_a_retry(
+        self, mode: str, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Start without the signature filter, whichever test installed it first, so
+        # only this client's creation can put it there.
+        signer = logging.getLogger(SIGNER_LOGGER)
+        monkeypatch.setattr(
+            signer,
+            "filters",
+            [f for f in signer.filters if not isinstance(f, SignatureRecordFilter)],
+        )
+        caplog.set_level(logging.DEBUG)
+        for name in ("anthropic", "httpx", "httpx2", "httpcore", "conduit", "botocore"):
+            caplog.set_level(logging.DEBUG, logger=name)
+        busy = (529, {"retry-after-ms": "5"}, b'{"type": "error"}')
+        server = Server(busy, (200, {}, HELLO))
+        if mode == "short_term":
+            settings = short_term().model_copy(update={"max_retries": 1})
+            secrets: Mapping[str, SecretStr] = ACCESS_KEY_SECRETS
+        else:
+            settings = long_term().model_copy(update={"max_retries": 1})
+            secrets = {"auth.api_key": SecretStr(LONG_TERM_KEY)}
+        _, provider = wired(settings, secrets, server)
+        await provider.complete(REQUEST)
+        await provider.aclose()
+        keys = {bearer(r) for r in server.requests}
+        assert len(server.requests) == 2  # the retry carried the key too
+        assert caplog.records  # the SDK did log at DEBUG
+        for record in caplog.records:
+            text = record.getMessage() + (record.exc_text or "")
+            for key in keys:
+                assert key not in text, record.name
+                # A presigned key's signature is enough to rebuild it.
+                if key.startswith(SHORT_TERM_PREFIX):
+                    signature = decoded(key)["X-Amz-Signature"][0]
+                    assert signature not in text, record.name

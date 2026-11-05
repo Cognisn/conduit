@@ -159,11 +159,14 @@ class TestClientOptions:
         calls: list[dict[str, Any]] = []
         module = types.ModuleType("anthropic.lib.bedrock")
 
-        def construct(**kwargs: Any) -> str:
-            calls.append(kwargs)
-            return "client"
+        class StandIn:
+            def __init__(self, **kwargs: Any) -> None:
+                calls.append(kwargs)
 
-        module.AsyncAnthropicBedrockMantle = construct  # type: ignore[attr-defined]
+            async def _prepare_request(self, request: Any) -> None:
+                return None
+
+        module.AsyncAnthropicBedrockMantle = StandIn  # type: ignore[attr-defined]
         monkeypatch.setitem(sys.modules, "anthropic.lib.bedrock", module)
         settings = BedrockMantleSettings(
             region="ap-southeast-4",
@@ -171,13 +174,15 @@ class TestClientOptions:
             allow_long_term_api_keys=True,
             **fields,
         )
-        assert BedrockMantleFactory().create_client(settings, LONG_TERM_SECRETS) == "client"
+        client = BedrockMantleFactory().create_client(settings, LONG_TERM_SECRETS)
+        # A subclass of the SDK's client, which sets the key at send time.
+        assert isinstance(client, StandIn)
+        assert type(client) is not StandIn
         (kwargs,) = calls
         return kwargs
 
     def test_every_option_comes_from_the_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         kwargs = self.made(monkeypatch)
-        middleware = kwargs.pop("middleware")
         assert kwargs == {
             # No SDK auth: no key from the environment, and no key held by the client.
             "skip_auth": True,
@@ -187,7 +192,6 @@ class TestClientOptions:
             # The SDK's spans can carry request content outside the capture policy.
             "open_telemetry": False,
         }
-        assert len(middleware) == 1
 
     def test_an_endpoint_override_and_retries(self, monkeypatch: pytest.MonkeyPatch) -> None:
         kwargs = self.made(
@@ -195,3 +199,35 @@ class TestClientOptions:
         )
         assert kwargs["base_url"] == "https://vpce.example.com/anthropic"
         assert kwargs["max_retries"] == 0
+
+
+class TestDestinationGate:
+    """create_client checks the Region and endpoint again, however the settings were
+    made, so a key is never sent to a host the validators would have refused."""
+
+    @pytest.mark.parametrize(
+        "region", ["evil.example.com#", "us-east-1.example.com/", "", "US-EAST-1"]
+    )
+    def test_a_region_that_is_not_an_aws_region_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch, region: str
+    ) -> None:
+        monkeypatch.setitem(sys.modules, "anthropic.lib.bedrock", None)
+        settings = BedrockMantleSettings(region="us-east-1").model_copy(update={"region": region})
+        with pytest.raises(ConfigurationError, match="region") as caught:
+            BedrockMantleFactory().create_client(settings, {})
+        if region:
+            assert region not in str(caught.value)
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+
+    @pytest.mark.parametrize(
+        "url", ["http://planted.example.com/anthropic", "planted.example.com", "ftp://x"]
+    )
+    def test_an_endpoint_that_is_not_https_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch, url: str
+    ) -> None:
+        monkeypatch.setitem(sys.modules, "anthropic.lib.bedrock", None)
+        settings = BedrockMantleSettings.model_construct(region="us-east-1", endpoint_url=url)
+        with pytest.raises(ConfigurationError, match="https") as caught:
+            BedrockMantleFactory().create_client(settings, {})
+        assert url not in str(caught.value)
