@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import aclosing
+
 import pytest
 
 from conduit.core.catalogue import Catalogue, ModelEntry
@@ -22,9 +25,9 @@ from conduit.core.events import (
 from conduit.core.registry import ModelNotAssigned, ProviderRegistry
 from conduit.core.residency import ResidencyPolicy, ResidencyScope
 from conduit.core.secrets import LiteralSecretResolver
-from conduit.core.streaming import StreamStopped
-from conduit.core.types import Message, ModelRequest
-from tests.unit.core.fakes import CATALOGUE, USAGE, FakeFactory, FakeSettings
+from conduit.core.streaming import StreamStopped, TextDelta
+from conduit.core.types import Message, ModelRequest, Usage
+from tests.unit.core.fakes import CATALOGUE, PARTIAL, USAGE, FakeFactory, FakeSettings
 
 SECRETS = LiteralSecretResolver({"fake/key": "not-a-real-key"})
 PROMPT = "Draft a note for the team at example.org"
@@ -287,3 +290,73 @@ class TestRegistryResidency:
         provider = await registry.build("p", FAKE)
         response = await provider.complete(_request("fake-global"))
         assert response.text == f"echo: {PROMPT}"
+
+
+def _finished(sink: MemoryEventSink) -> list[ModelCallFinishedEvent]:
+    return [e for e in sink.events if isinstance(e, ModelCallFinishedEvent)]
+
+
+class TestEndedEarly:
+    """Every call is metered once, however it ends, and its inner stream is closed."""
+
+    async def test_a_consumer_that_stops_early_is_metered_as_abandoned(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build("p", FAKE)
+        async with aclosing(provider.stream(_request())) as events:
+            async for event in events:
+                if isinstance(event, TextDelta):
+                    break
+        (finished,) = _finished(sink)
+        assert finished.outcome == "failed"
+        assert finished.error_type == "abandoned"
+        assert finished.usage == Usage.zero()
+        assert factory.providers[0].streams_closed == 1
+
+    async def test_a_cancelled_call_is_metered_with_the_last_usage_seen(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build("p", {**FAKE, "behaviour": "slow"})
+        call = asyncio.create_task(provider.complete(_request()))
+        await asyncio.wait_for(factory.providers[0].waiting.wait(), 5)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        (finished,) = _finished(sink)
+        assert finished.outcome == "failed"
+        assert finished.error_type == "cancelled"
+        assert finished.usage == PARTIAL
+        assert factory.providers[0].streams_closed == 1
+
+    async def test_collect_refusing_an_event_after_the_stop_still_meters_the_call(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build("p", {**FAKE, "behaviour": "after_stop"})
+        with pytest.raises(ProviderError) as raised:
+            await provider.complete(_request())
+        assert raised.value.failure is ProviderFailure.PROTOCOL
+        (finished,) = _finished(sink)
+        assert finished.outcome == "failed"
+        assert finished.error_type == "abandoned"
+        assert finished.usage == USAGE
+        assert factory.providers[0].streams_closed == 1
+
+    async def test_a_finished_stream_is_metered_once_and_closed(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build("p", FAKE)
+        await provider.complete(_request())
+        (finished,) = _finished(sink)
+        assert finished.outcome == "ok"
+        assert factory.providers[0].streams_closed == 1
+
+    async def test_a_provider_failure_after_usage_carries_that_usage(self) -> None:
+        sink = MemoryEventSink()
+        registry, factory = _registry(sink)
+        provider = await registry.build("p", {**FAKE, "behaviour": "no_stop"})
+        with pytest.raises(ProviderError):
+            await provider.complete(_request())
+        (finished,) = _finished(sink)
+        assert finished.failure is ProviderFailure.PROTOCOL
+        assert finished.usage == PARTIAL
+        assert factory.providers[0].streams_closed == 1

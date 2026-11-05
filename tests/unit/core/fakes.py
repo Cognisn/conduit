@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Mapping
 from typing import Any, Literal
 
@@ -16,12 +17,13 @@ from conduit.core.streaming import StreamEvent, StreamStopped, TextDelta, UsageR
 from conduit.core.types import ModelRequest, StopReason, Usage
 
 USAGE = Usage(input_tokens=11, output_tokens=7, cache_read_tokens=5, cache_write_tokens=3)
+PARTIAL = Usage(input_tokens=11, output_tokens=2, cache_read_tokens=5, cache_write_tokens=3)
 
 
 class FakeSettings(ProviderSettings):
     kind: Literal["fake"] = "fake"
     api_key: SecretRef
-    behaviour: Literal["ok", "fail", "no_stop"] = "ok"
+    behaviour: Literal["ok", "fail", "no_stop", "slow", "after_stop"] = "ok"
 
 
 class FakeClient:
@@ -39,17 +41,30 @@ class FakeProvider(BaseProvider):
         self.client = client
         self.closed = False
         self.requests: list[ModelRequest] = []
+        self.streams_closed = 0
+        self.waiting = asyncio.Event()
 
     async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
         self.requests.append(request)
-        if self.settings.behaviour == "fail":
-            raise ProviderError(ProviderFailure.UNAVAILABLE)
-        yield UsageReported(usage=Usage.zero())
-        yield TextDelta(text="echo: ")
-        yield TextDelta(text=request.messages[-1].content[0].text)  # type: ignore[union-attr]
-        if self.settings.behaviour == "no_stop":
-            return
-        yield StreamStopped(stop_reason=StopReason.END_TURN, usage=USAGE)
+        behaviour = self.settings.behaviour
+        try:
+            if behaviour == "fail":
+                raise ProviderError(ProviderFailure.UNAVAILABLE)
+            yield UsageReported(usage=Usage.zero())
+            yield TextDelta(text="echo: ")
+            yield UsageReported(usage=PARTIAL)
+            if behaviour == "slow":
+                self.waiting.set()
+                await asyncio.sleep(30)
+            yield TextDelta(text=request.messages[-1].content[0].text)  # type: ignore[union-attr]
+            if behaviour == "no_stop":
+                return
+            yield StreamStopped(stop_reason=StopReason.END_TURN, usage=USAGE)
+            if behaviour == "after_stop":
+                yield TextDelta(text="after the stop")
+        finally:
+            await asyncio.sleep(0)  # cleanup that awaits, as an SDK's does
+            self.streams_closed += 1
 
     async def aclose(self) -> None:
         self.closed = True

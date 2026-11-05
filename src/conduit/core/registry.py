@@ -25,11 +25,13 @@ final usage, all four counts) for every call, under the content-capture policy.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Iterable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -51,12 +53,30 @@ from conduit.core.provider import Provider
 from conduit.core.residency import ResidencyPolicy
 from conduit.core.secrets import SecretResolver, resolve_secret_fields
 from conduit.core.settings import KIND_PATTERN, ProviderSettings
-from conduit.core.streaming import StreamEvent, StreamStopped, TextDelta, ToolCallFinished, collect
-from conduit.core.types import ModelRequest, ModelResponse, ToolResultBlock, ToolUseBlock
+from conduit.core.streaming import (
+    StreamEvent,
+    StreamStopped,
+    TextDelta,
+    ToolCallFinished,
+    UsageReported,
+    collect,
+)
+from conduit.core.types import ModelRequest, ModelResponse, ToolResultBlock, ToolUseBlock, Usage
 
 logger = logging.getLogger("conduit.registry")
 
 _UNSET: Any = object()
+
+#: ``ModelCallFinishedEvent.error_type`` for a call cancelled part-way (a timeout, say).
+CANCELLED = "cancelled"
+#: ``ModelCallFinishedEvent.error_type`` for a stream its consumer closed before the end.
+ABANDONED = "abandoned"
+
+
+async def _aclose(stream: AsyncIterator[StreamEvent]) -> None:
+    closer = getattr(stream, "aclose", None)
+    if closer is not None:
+        await closer()
 
 
 class ModelNotAssigned(ConduitError, LookupError):
@@ -193,7 +213,7 @@ class MeteredProvider:
         elif request.model not in self._models:
             raise ModelNotAssigned(self.name, request.model, None)
 
-    async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
+    async def stream(self, request: ModelRequest) -> AsyncGenerator[StreamEvent, None]:
         self._admit(request)
         policy = self._events.policy
         context = _CallContext(
@@ -229,23 +249,42 @@ class MeteredProvider:
                 )
             )
 
+        # Every path out of the call is metered exactly once, with the last usage seen,
+        # and only after the inner stream has been closed.
+        usage: Usage | None = None
+        inner = self.inner.stream(request)
         try:
-            async for event in self.inner.stream(request):
-                if isinstance(event, TextDelta):
-                    text.append(event.text)
-                elif isinstance(event, ToolCallFinished):
-                    tool_calls += 1
-                elif isinstance(event, StreamStopped):
-                    stopped = event
-                yield event
+            try:
+                async for event in inner:
+                    if isinstance(event, TextDelta):
+                        text.append(event.text)
+                    elif isinstance(event, ToolCallFinished):
+                        tool_calls += 1
+                    elif isinstance(event, UsageReported):
+                        usage = event.usage
+                    elif isinstance(event, StreamStopped):
+                        stopped = event
+                        usage = event.usage
+                    yield event
+            finally:
+                await _aclose(inner)
         except ProviderError as error:
-            await finished(outcome="failed", failure=error.failure)
+            await finished(outcome="failed", failure=error.failure, usage=usage)
             raise
         except Exception as error:
-            await finished(outcome="failed", error_type=type(error).__name__)
+            await finished(outcome="failed", error_type=type(error).__name__, usage=usage)
+            raise
+        except asyncio.CancelledError:
+            await finished(outcome="failed", error_type=CANCELLED, usage=usage)
+            raise
+        except GeneratorExit:
+            await finished(outcome="failed", error_type=ABANDONED, usage=usage)
+            raise
+        except BaseException as error:
+            await finished(outcome="failed", error_type=type(error).__name__, usage=usage)
             raise
         if stopped is None:
-            await finished(outcome="failed", failure=ProviderFailure.PROTOCOL)
+            await finished(outcome="failed", failure=ProviderFailure.PROTOCOL, usage=usage)
             raise ProviderError(ProviderFailure.PROTOCOL)
         await finished(
             outcome="ok",
@@ -255,7 +294,9 @@ class MeteredProvider:
         )
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
-        return await collect(self.stream(request), model=request.model)
+        # Closed deterministically, so a call collect gives up on is metered at once.
+        async with contextlib.aclosing(self.stream(request)) as events:
+            return await collect(events, model=request.model)
 
     async def aclose(self) -> None:
         await self.inner.aclose()

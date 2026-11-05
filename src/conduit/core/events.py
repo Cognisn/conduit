@@ -102,7 +102,13 @@ class ModelCallStartedEvent(Event):
 
 
 class ModelCallFinishedEvent(Event):
-    """One model call's outcome, with its final usage (the single metering point)."""
+    """One model call's outcome, with its final usage (the single metering point).
+
+    Every call has exactly one, however it ends. A failed call carries the last usage
+    the provider reported, if any. ``error_type`` is the exception's class name, or
+    ``cancelled`` for a call cancelled part-way (a facade timeout, for example), or
+    ``abandoned`` for a stream its consumer closed before the end.
+    """
 
     type: Literal["model_call_finished"] = "model_call_finished"
     call_id: Identifier
