@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a3] - 2026-11-04
+
+Wave 2, second merge: JSON and SQL stores (`feat/0.1.0-stores`).
+
+### Added
+
+- JSON file transcript and token stores (`conduit.stores.json`): atomic LF writes, the directory synced on POSIX, per-record locks across tasks, event loops and threads, and refusal of path-like ids and keys.
+- The `sql` extra (`conduit.stores.sql`): Postgres and SQLite transcript and token stores, with conduit's own `conduit` schema on Postgres, its own reversible Alembic chain and version table, and `migrate` for products to call.
+- `StoreError` (`conduit.stores.errors`): store failures name the store, the operation and the error class, and never carry ids, keys, content or token values.
+- `TokenStoreSuite` in `conduit.testing.conformance`; the token and transcript suites pass on the memory, JSON, SQLite and Postgres stores.
+- A Postgres CI job, and a Postgres service and Compose template in the worktree recipe.
+
+### Changed
+
+- CI's types and test jobs install every runtime extra the package declares.
+
 ## [0.1.0a2] - 2026-11-04
 
 Wave 2, first merge: core hardening (`fix/0.1.0-core-hardening`).
