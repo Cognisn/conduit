@@ -518,6 +518,28 @@ class TestOpenAfterCheck:
                 await source.load_document("s")
         assert caught.value.reason == "path_link"
 
+    async def test_a_file_outside_is_never_opened(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Refused before the open, so an outside device or pipe is never even opened.
+        root = tmp_path / "root"
+        folder = _skill(root, "s")
+        _write(tmp_path / "outside.md", MARKER)
+        _link(folder / "escape.md", tmp_path / "outside.md")
+        opened: list[str] = []
+        original = filesystem._open_fd
+
+        def recording(path: str) -> int:
+            opened.append(os.path.normcase(path))
+            return original(path)
+
+        monkeypatch.setattr(filesystem, "_open_fd", recording)
+        with pytest.raises(SkillResourceRefused) as caught:
+            await FilesystemSkillSource(root).read_resource("s", "escape.md")
+        assert caught.value.reason == "path_link"
+        assert opened  # SKILL.md was opened, so the seam is in use
+        assert os.path.normcase(str((tmp_path / "outside.md").resolve())) not in opened
+
     async def test_something_other_than_a_regular_file_behind_the_handle_is_not_read(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
