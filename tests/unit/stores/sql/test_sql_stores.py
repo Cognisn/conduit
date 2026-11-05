@@ -319,7 +319,7 @@ async def test_a_compaction_replacing_later_entries_is_refused(engine: AsyncEngi
 async def test_a_session_id_the_transcript_refuses_is_refused(engine: AsyncEngine) -> None:
     await migrate(engine)
     store = SqlTranscriptStore(engine)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValueError, match="session id"):
         await store.append("x" * 257, [_message("one")])
     assert await store.list_sessions() == []
 
