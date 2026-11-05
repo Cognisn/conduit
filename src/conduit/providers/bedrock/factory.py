@@ -80,6 +80,16 @@ class BedrockFactory:
     def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
         """A ``bedrock-runtime`` client for ``settings``. Imports the SDK here only."""
         bedrock = _bedrock(settings)
+        # The settings validator refuses long-term keys too, but settings can be made
+        # without validation (model_copy, model_construct); refuse them here as well,
+        # before anything is imported or built.
+        if (
+            isinstance(bedrock.auth, LongTermApiKeyAuth)
+            and bedrock.allow_long_term_api_keys is not True
+        ):
+            raise ConfigurationError(
+                "long-term Bedrock API keys are refused unless allow_long_term_api_keys is set"
+            )
         boto3 = importlib.import_module("boto3")
         botocore = importlib.import_module("botocore")
         botocore_auth = importlib.import_module("botocore.auth")
