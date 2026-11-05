@@ -4,6 +4,8 @@ stand-in credential."""
 
 from __future__ import annotations
 
+import asyncio
+import importlib
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -126,8 +128,68 @@ class TestWithTheSdk:
         assert token_provider is not None
         assert await token_provider() == "example-entra-token"
         assert credential.scopes == [("https://ai.azure.com/.default",)]
+        # The SDK itself resolves the token for each request.
+        models = importlib.import_module("openai._models")
+        await client.sdk._prepare_options(models.FinalRequestOptions(method="post", url="/x"))
+        assert client.sdk.auth_headers == {"Authorization": "Bearer example-entra-token"}
         await client.close()
         assert credential.closed
+
+    async def test_the_credential_is_closed_when_the_sdk_client_cannot_be_built(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        identity = pytest.importorskip("azure.identity.aio")
+        openai = pytest.importorskip("openai")
+        made: list[Any] = []
+
+        class StandInCredential:
+            def __init__(self, **kwargs: Any) -> None:
+                self.closed = False
+                made.append(self)
+
+            async def close(self) -> None:
+                self.closed = True
+
+        def refuse(**kwargs: Any) -> None:
+            raise RuntimeError("cannot build the client")
+
+        monkeypatch.setattr(identity, "DefaultAzureCredential", StandInCredential)
+        monkeypatch.setattr(openai, "AsyncOpenAI", refuse)
+        settings = _settings(
+            {"name": "foundry", "endpoint": ENDPOINT, "auth": {"mode": "entra_id"}}
+        )
+        with pytest.raises(RuntimeError):
+            OpenAICompatFactory().create_client(settings, {})
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert [c.closed for c in made] == [True]
+
+    def test_the_credential_is_closed_without_a_running_loop(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        identity = pytest.importorskip("azure.identity.aio")
+        openai = pytest.importorskip("openai")
+        made: list[Any] = []
+
+        class StandInCredential:
+            def __init__(self, **kwargs: Any) -> None:
+                self.closed = False
+                made.append(self)
+
+            async def close(self) -> None:
+                self.closed = True
+
+        def refuse(**kwargs: Any) -> None:
+            raise RuntimeError("cannot build the client")
+
+        monkeypatch.setattr(identity, "DefaultAzureCredential", StandInCredential)
+        monkeypatch.setattr(openai, "AsyncOpenAI", refuse)
+        settings = _settings(
+            {"name": "foundry", "endpoint": ENDPOINT, "auth": {"mode": "entra_id"}}
+        )
+        with pytest.raises(RuntimeError):
+            OpenAICompatFactory().create_client(settings, {})
+        assert [c.closed for c in made] == [True]
 
     async def test_entra_id_without_a_client_id_passes_no_options(
         self, monkeypatch: pytest.MonkeyPatch
