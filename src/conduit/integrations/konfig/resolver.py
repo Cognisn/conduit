@@ -51,13 +51,17 @@ class KonfigSecretResolver:
         return cls(konfig.Secrets(service_name, settings=settings))
 
     async def resolve(self, ref: SecretRef) -> SecretStr:
+        failure: str | None = None
+        value: object = None
         try:
-            value: object = await asyncio.to_thread(self._secrets.get, ref.name)
+            value = await asyncio.to_thread(self._secrets.get, ref.name)
         except Exception as exc:
-            # The store's own message is not repeated: it is not ours to vouch for.
-            raise SecretUnavailable(
-                f"{ref} could not be read from konfig ({type(exc).__name__})"
-            ) from None
+            # Only the exception's type is kept: its message is the store's, not ours.
+            failure = type(exc).__name__
+        if failure is not None:
+            # Raised here, after the handler, so the store's exception is neither the
+            # cause nor the context.
+            raise SecretUnavailable(f"{ref} could not be read from konfig ({failure})")
         if value is None or value == "":
             raise SecretUnavailable(f"{ref} is not held in konfig's secrets store")
         if not isinstance(value, str):

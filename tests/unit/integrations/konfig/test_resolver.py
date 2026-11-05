@@ -14,6 +14,7 @@ from pydantic import SecretStr
 from conduit.core.errors import SecretUnavailable
 from conduit.core.secrets import SecretRef, SecretResolver
 from conduit.integrations.konfig import KONFIG_PLACEHOLDER, KonfigSecretResolver
+from tests.unit.integrations.konfig.chain import assert_carries_nothing
 
 #: Synthetic values only; none of these is a real credential.
 VALUE = "synthetic-secret-value-0001"
@@ -123,10 +124,8 @@ async def test_a_failing_store_names_the_reference_never_the_value() -> None:
     resolver = KonfigSecretResolver(FailingSecrets())
     with pytest.raises(SecretUnavailable, match="secret://k") as caught:
         await resolver.resolve(SecretRef("k"))
-    assert VALUE not in str(caught.value)
     assert "RuntimeError" in str(caught.value)
-    assert caught.value.__cause__ is None
-    assert caught.value.__suppress_context__
+    assert_carries_nothing(caught.value, VALUE)
 
 
 def test_repr_shows_no_values() -> None:

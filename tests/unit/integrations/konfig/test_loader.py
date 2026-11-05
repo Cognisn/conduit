@@ -15,6 +15,7 @@ from conduit.core.residency import ResidencyScope
 from conduit.core.runtime import ConduitSettings
 from conduit.core.secrets import SecretRef
 from conduit.integrations.konfig import DEFAULT_SECTION, load_settings
+from tests.unit.integrations.konfig.chain import assert_carries_nothing
 
 #: A plaintext value standing in for a credential written into a configuration by
 #: mistake. Synthetic; it must never appear in an error.
@@ -126,7 +127,7 @@ def test_invalid_settings_are_a_configuration_error_naming_the_field(
     section = {**SECTION, "capture": {"prompts": "perhaps"}}
     with pytest.raises(ConfigurationError, match=r"capture\.prompts") as caught:
         load_settings(_settings(konfig_module, section))
-    assert "perhaps" not in str(caught.value)
+    assert_carries_nothing(caught.value, "perhaps")
 
 
 def test_a_plaintext_credential_is_refused_without_echoing_it(
@@ -135,10 +136,7 @@ def test_a_plaintext_credential_is_refused_without_echoing_it(
     section = {**SECTION, "providers": {"primary": {"kind": "fake", "api_key": PLAINTEXT}}}
     with pytest.raises(ConfigurationError, match=r"providers\.primary") as caught:
         load_settings(_settings(konfig_module, section))
-    assert PLAINTEXT not in str(caught.value)
-    assert PLAINTEXT not in repr(caught.value)
-    assert caught.value.__cause__ is None
-    assert caught.value.__suppress_context__
+    assert_carries_nothing(caught.value, PLAINTEXT)
 
 
 def test_accepts_any_source_with_konfigs_section_interface() -> None:

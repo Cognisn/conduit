@@ -42,10 +42,14 @@ def load_settings(
     data = source.get_section(section)
     if not data:
         raise ConfigurationError(f"konfig has no {section!r} section of conduit settings")
+    problems: str
     try:
         return ConduitSettings.model_validate(data)
     except ValidationError as exc:
-        raise ConfigurationError(_describe(section, exc)) from None
+        problems = _describe(section, exc)
+    # Raised here, after the handler, so the validation error (which holds the input,
+    # a plaintext credential included) is neither the cause nor the context.
+    raise ConfigurationError(problems)
 
 
 def _describe(section: str, exc: ValidationError) -> str:
