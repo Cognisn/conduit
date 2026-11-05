@@ -166,3 +166,25 @@ def test_the_core_s_main_types_are_re_exported(module: str, name: str) -> None:
 def test_the_top_level_exports_nothing_unlisted() -> None:
     listed = {name for names in REEXPORTS.values() for name in names}
     assert set(conduit.__all__) == listed | {"__version__"}
+
+
+PROVIDER_EXTRAS = ("bedrock", "anthropic", "openai", "gemini", "ollama")
+
+
+def _extra_requirements(extra: str) -> set[str]:
+    found: set[str] = set()
+    for spec in metadata.requires("cognisn-conduit") or []:
+        requirement = Requirement(spec)
+        if requirement.marker is not None and requirement.marker.evaluate({"extra": extra}):
+            requirement.marker = None
+            found.add(str(requirement))
+    return found
+
+
+def test_all_providers_installs_every_provider_extra_and_nothing_else() -> None:
+    every_provider: set[str] = set()
+    for extra in PROVIDER_EXTRAS:
+        requirements = _extra_requirements(extra)
+        assert requirements, f"the {extra} extra declares nothing"
+        every_provider |= requirements
+    assert _extra_requirements("all-providers") == every_provider

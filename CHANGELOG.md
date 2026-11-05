@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a8] - 2026-11-04
+
+Wave 2, seventh and last merge: the konfig integration (`feat/0.1.0-konfig`), and the Wave 2 close. Milestone M2 (providers and stores).
+
+### Added
+
+- The konfig integration (`conduit.integrations.konfig`, `konfig` extra with cognisn-konfig):
+  - `load_settings` builds `ConduitSettings` (providers, assignments, residency, capture and catalogue overlays) from a konfig configuration section, keeping credentials as `secret://` references, and refuses a missing section;
+  - `KonfigSecretResolver` resolves `secret://` references through konfig's stores (encrypted file, keyring or AWS Secrets Manager) in a worker thread, refusing empty, non-text and placeholder values;
+  - errors name the field or reference, never a value, and carry no part of the failing exception.
+- The `all-providers` extra installs every provider adapter's dependencies: Bedrock, Anthropic, OpenAI-compatible, Gemini and Ollama.
+
+
 ## [0.1.0a7] - 2026-11-04
 
 Wave 2, sixth merge: the Gemini and Ollama adapters (`feat/0.1.0-provider-gemini-ollama`).

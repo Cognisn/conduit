@@ -49,7 +49,14 @@ anthropic = ["anthropic>=2.4,<3"]
 openai = ["openai>=3.45,<4", "azure-identity>=1.27,<2"]
 gemini = ["google-genai>=2.30,<3"]
 ollama = ["httpx>=0.28,<1"]
-all-providers = []
+all-providers = [
+    "boto3>=1.35,<2",
+    "anthropic>=2.4,<3",
+    "openai>=3.45,<4",
+    "azure-identity>=1.27,<2",
+    "google-genai>=2.30,<3",
+    "httpx>=0.28,<1",
+]
 # Layers (C12 to C15, C19, C10).
 local-embeddings = []
 mcp = []
