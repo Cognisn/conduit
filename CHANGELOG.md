@@ -16,7 +16,7 @@ Wave 2, sixth merge: the Gemini and Ollama adapters (`feat/0.1.0-provider-gemini
   - an API key as a secret reference, with the key, backend and base URL pinned against the environment;
   - streaming text and function calls, with Gemini thought signatures remembered per call and returned on the next turn;
   - usage from the final chunk, with cached prompt tokens reported as cache reads;
-  - cache breakpoints ignored, because Gemini caching is managed separately.
+  - cache breakpoints ignored, as documented in the adapter.
 - The Ollama adapter (`conduit.providers.ollama`, `ollama` extra with httpx):
   - an httpx client with a loopback default, ignoring the environment's proxies and never following redirects;
   - `/api/chat` NDJSON streaming with stream lines bounded at 8 MiB; text, tool calls, and usage with cached prompt tokens as cache reads where Ollama reports them;
