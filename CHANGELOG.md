@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a6] - 2026-11-04
+
+Wave 2, fifth merge: the OpenAI-compatible adapter (`feat/0.1.0-provider-openai-compat`).
+
+### Added
+
+- The OpenAI-compatible adapter (`conduit.providers.openai_compat`, `openai` extra with openai and azure-identity), for OpenAI, X.AI and Microsoft Foundry:
+  - Foundry takes an API key or Microsoft Entra ID.
+  - Streaming Chat Completions with usage on the final chunk; tool calls assembled from argument deltas; images and tool results.
+  - Structured output where the catalogue allows it.
+  - Cached prompt tokens reported as cache reads.
+  - Errors, including malformed stream chunks and stream close failures, mapped to provider failures with no provider text and no chained exception.
+  - Cache breakpoints are ignored, because caching on these services is automatic.
+- Catalogue: grok-4.3 on X.AI; GPT-6 Astra and GPT-6.1 Sol on OpenAI.
+- Licence audit: certifi (MPL-2.0), the CA bundle httpx and requests require, admitted as a named exception, used unmodified and installed separately (Q0016).
+
+### Changed
+
+- `builtin_factories()` includes the OpenAI-compatible factory.
+- The default catalogue's version is 2026.11.4.
+
+### Removed
+
+- Catalogue: the retired grok-4 entry (X.AI now serves grok-4.3 in its place).
+
+
 ## [0.1.0a5] - 2026-11-04
 
 Wave 2, fourth merge: the Anthropic adapter (`feat/0.1.0-provider-anthropic`), and the Bedrock error-chain follow-up.
