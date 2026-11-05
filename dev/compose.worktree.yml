@@ -1,0 +1,28 @@
+# Compose template for manual checks of conduit's sql extra against Postgres.
+# dev-worktree-setup.ps1 fills the placeholders from dev/worktree.json and writes the
+# sandbox's docker-compose.yml; start and stop it with compose_up and compose_down
+# from the sandbox's ports.txt. The credentials are fixed, development-only values.
+#
+# Connect with: postgresql+asyncpg://conduit_dev:conduit-dev-only@127.0.0.1:<postgres port>/conduit
+name: {{COMPOSE_PROJECT}}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      # Not "conduit": Postgres puts a schema named after the user first on the search path.
+      POSTGRES_USER: conduit_dev
+      POSTGRES_PASSWORD: conduit-dev-only
+      POSTGRES_DB: conduit
+    ports:
+      - "127.0.0.1:{{PORT_POSTGRES}}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U conduit_dev -d conduit"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  postgres-data:

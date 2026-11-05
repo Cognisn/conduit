@@ -15,12 +15,20 @@ from conduit.core.errors import (
     CapabilityRefused,
     ConduitError,
     ConfigurationError,
+    ModelNotAssigned,
     ProviderError,
     ProviderFailure,
     ResidencyRefused,
     UndeclaredModel,
 )
-from conduit.core.events import CapturePolicy, Event, EventSink, FanOutSink
+from conduit.core.events import (
+    CaptureAs,
+    CapturePolicy,
+    Event,
+    EventSink,
+    FanOutSink,
+    ToolContent,
+)
 from conduit.core.facade import SyncFacade, sync
 from conduit.core.provider import BaseProvider, Provider
 from conduit.core.registry import MeteredProvider, ProviderFactory, ProviderRegistry
@@ -66,6 +74,7 @@ __all__ = [
     "CacheBreakpoint",
     "CapabilityFloor",
     "CapabilityRefused",
+    "CaptureAs",
     "CapturePolicy",
     "Catalogue",
     "CatalogueOverlay",
@@ -82,6 +91,7 @@ __all__ = [
     "MeteredProvider",
     "ModelEntry",
     "ModelKey",
+    "ModelNotAssigned",
     "ModelRequest",
     "ModelResponse",
     "Provider",
@@ -109,6 +119,7 @@ __all__ = [
     "ToolCallFinished",
     "ToolCallStarted",
     "ToolCatalogue",
+    "ToolContent",
     "ToolRegistry",
     "ToolResultBlock",
     "ToolSpec",

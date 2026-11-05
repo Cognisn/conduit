@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a3] - 2026-11-04
+
+Wave 2, second merge: JSON and SQL stores (`feat/0.1.0-stores`).
+
+### Added
+
+- JSON file transcript and token stores (`conduit.stores.json`): atomic LF writes, the directory synced on POSIX, per-record locks across tasks, event loops and threads, and refusal of path-like ids and keys.
+- The `sql` extra (`conduit.stores.sql`): Postgres and SQLite transcript and token stores, with conduit's own `conduit` schema on Postgres, its own reversible Alembic chain and version table, and `migrate` for products to call.
+- `StoreError` (`conduit.stores.errors`): store failures name the store, the operation and the error class, and never carry ids, keys, content or token values.
+- `TokenStoreSuite` in `conduit.testing.conformance`; the token and transcript suites pass on the memory, JSON, SQLite and Postgres stores.
+- A Postgres CI job, and a Postgres service and Compose template in the worktree recipe.
+
+### Changed
+
+- CI's types and test jobs install every runtime extra the package declares.
+
+## [0.1.0a2] - 2026-11-04
+
+Wave 2, first merge: core hardening (`fix/0.1.0-core-hardening`).
+
+### Added
+
+- `ToolContent` and `CaptureAs` (`conduit.core.events`), for declaring tool-content fields on events.
+- `ModelNotAssigned` (`conduit.core.errors`), raised when a call names a model or task class outside the provider's resolved assignments.
+- `ModelNotAssigned`, `ToolContent` and `CaptureAs` are re-exported from the top-level `conduit` package.
+- The client-construction tripwire covers more SDK construction forms (aiobotocore, `service_name=`, session `create_client`, `getattr` construction) and requires that only the registry wraps a provider in metering.
+
+### Changed
+
+- A provider built at start-up now serves only the task-class assignments resolved for it. A call naming another model, or another task class's model, is refused with `ModelNotAssigned` before any client call. A provider built from the registry with an assignment has each assigned model checked against the registry's residency policy, and one built without is held to that policy (new `residency` argument) on every call.
+- Every model call is refused before any client call if its `max_output_tokens` exceeds the model's output limit (`ConfigurationError`), whether or not it was built with `TaskBinding.request`.
+- `MeteredProvider` no longer exposes the provider adapter it wraps, so every call goes through admission and metering.
+- Every model call now emits exactly one finished event however it ends:
+  - cancelled calls and abandoned streams are recorded as failed (`cancelled` or `abandoned`) with the last usage reported;
+  - a stream its consumer closes after a complete stop is recorded as ok;
+  - the provider's stream is closed before the event.
+- The sync facade applies its timeouts on the loop, so a timed-out call has finished its cleanup before `TimeoutError` is raised. A `TimeoutError` raised by the call itself passes through unchanged. Closing the facade's loop cancels pending calls and finalises suspended async generators, and every call it could not finish fails with `FacadeError`, so no caller is left waiting. Closing is refused from the loop's own thread.
+- The in-memory transcript store refuses an append that would leave the session unloadable, such as a compaction point replacing later entries. The transcript store conformance suite requires this of every store.
+- Tool arguments and results in events are always treated as tool content under the capture policy, whatever kind the emitter labelled them.
+- `TaskBinding.request` validates the request and refuses an explicit `max_output_tokens` above the model's output limit.
+- The recorded-response scrub check also refuses IPv6 addresses outside 2001:db8::/32 and any 12-digit number other than the documentation account id.
+
 ## [0.1.0a1] - 2026-11-04
 
 Wave 1: the core contracts every later layer builds on.

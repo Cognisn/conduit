@@ -8,7 +8,8 @@ Two halves, never skipped or weakened:
   or plain ``str`` field.
 - Behaviour: a marker planted in every place content can be (system prompt, messages,
   tool results, tool arguments, model output) never reaches a sink with capture off,
-  and does reach it with capture on (so the check is not vacuous).
+  and does reach it with capture on (so the check is not vacuous). Tool content an
+  emitter mislabels as prompt content stays out when only prompts are captured.
 """
 
 from __future__ import annotations
@@ -50,7 +51,7 @@ from conduit.core.types import (
 from conduit.providers.stub import StubFactory, StubToolCall, StubTurn, scripted
 from tests.tripwires.importscan import OPTIONAL_LIBRARIES
 
-MARKER = "Kestrel Analytics confidential marker"
+MARKER = "zz synthetic content marker 4417 zz"
 _SCALARS = (int, float, bool, datetime, type(None))
 _OPTIONAL_ROOTS = {name.split(".")[0] for name in OPTIONAL_LIBRARIES}
 
@@ -188,21 +189,32 @@ async def _events(capture: CapturePolicy) -> list[Event]:
             duration_ms=1.0,
         )
     )
+    # The same tool content, mislabelled by its emitter as prompt content.
+    await bus.emit(
+        ToolCallEvent(
+            call_id="toolu_2",
+            tool="lookup",
+            outcome="ok",
+            arguments=loose.capture(ContentKind.PROMPT, MARKER),
+            result=loose.capture(ContentKind.PROMPT, MARKER),
+            duration_ms=1.0,
+        )
+    )
     return sink.events
 
 
 class TestBehaviour:
     async def test_no_content_reaches_a_sink_with_capture_off(self) -> None:
         events = await _events(CapturePolicy())
-        assert len(events) == 3
+        assert len(events) == 4
         leaks = [e.type for e in events if MARKER in e.model_dump_json()]
         assert not leaks, leaks
 
     async def test_tool_content_stays_out_when_only_prompts_are_captured(self) -> None:
         events = await _events(CapturePolicy(prompts=True))
-        tool = events[-1]
-        assert isinstance(tool, ToolCallEvent)
-        assert MARKER not in tool.model_dump_json()
+        for tool in events[-2:]:  # labelled as tool content, then mislabelled as prompt
+            assert isinstance(tool, ToolCallEvent)
+            assert MARKER not in tool.model_dump_json()
         started = events[0]
         assert isinstance(started, ModelCallStartedEvent)
         assert started.request.text is not None
