@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a12] - 2026-11-05
+
+Wave 4, third merge: SKILL.md skills (`feat/0.1.0-skills`).
+
+### Added
+
+- SKILL.md skills (`conduit.skills`):
+  - the SKILL.md format, read with the standard library: name, description and optional version, licence, compatibility, allowed tools and metadata. Validation refuses anything outside the format, including control and line-separator characters in single-line fields, with a fixed reason and line, never the file's text;
+  - a filesystem skill source over a product-given directory, with every resource path confined to its skill's folder. Traversal, absolute paths, trailing-dot aliases, and links or junctions outside it are refused. Each file is checked again on its open handle, and every read is bounded by the source's limits on file sizes, counts and depth. There is also an in-memory source;
+  - progressive disclosure: skill summaries listed for the model, and a `use_skill` tool for a tool catalogue that loads a skill's instructions on demand and its resources on further request. Limits on the loaded skills and the listing count the request prefix as it is rendered;
+  - loaded skills placed in the stable request prefix before a cache breakpoint, so they are cached with the system prompt and tools;
+  - skill-use transcript markers (loaded, used, unloaded), and skill events carrying names, versions and sizes only.
+- A skill source conformance suite (`conduit.testing.conformance.SkillSourceSuite`).
+
 ## [0.1.0a11] - 2026-11-05
 
 Wave 4, second merge: the agent runner (`feat/0.1.0-agent-runner`).
