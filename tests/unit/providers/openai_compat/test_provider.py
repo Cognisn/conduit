@@ -274,11 +274,11 @@ class TestErrors:
 
     async def test_a_stream_left_early_is_closed(self) -> None:
         client = FakeClient(recordings.load("openai-text-cached"))
-        provider = await _build(OPENAI, client)
         # The adapter's own stream; the metered wrapper leaves closing to the loop.
+        provider = OpenAICompatProvider(client, catalogue_provider="openai")
         stream = cast(
             AsyncGenerator[StreamEvent, None],
-            provider.inner.stream(_request("gpt-5", Message.user("Say hello."))),
+            provider.stream(_request("gpt-5", Message.user("Say hello."))),
         )
         async for event in stream:
             if isinstance(event, TextDelta):
