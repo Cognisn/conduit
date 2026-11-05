@@ -10,8 +10,12 @@ settings are validated, secrets resolved and calls metered.
 The scan reads source, never imports it, and resolves the import forms adapters use:
 ``import x``, ``import x as y``, ``from x import Y as Z``, and
 ``importlib.import_module("x")`` (called directly or assigned to a name).
-Session-based Bedrock clients (``session.client("bedrock-runtime")``) are caught by
-their service name.
+Session-based Bedrock clients (``session.client("bedrock-runtime")`` and
+``session.create_client(...)``, with the service positional or as ``service_name=``)
+are caught by their service name; a session's ``create_client`` is not mistaken for
+the factory method. ``getattr(module, "Name")()`` resolves like ``module.Name()``, and
+``getattr(module, name)()`` with a computed name on a known SDK module counts as a
+construction.
 
 The scan also records every construction of ``MeteredProvider``: only the registry may
 wrap a provider, since the registry is where a provider is bound to its resolved
@@ -52,6 +56,8 @@ CLIENT_CONSTRUCTORS: frozenset[str] = frozenset(
         "boto3.Session",
         "boto3.session.Session",
         "aioboto3.Session",
+        "aiobotocore.session.AioSession",
+        "aiobotocore.session.get_session",
         "botocore.session.Session",
         "botocore.session.get_session",
         "google.genai.Client",
@@ -72,6 +78,11 @@ REGISTRY = "conduit.core.registry"
 METERED = "MeteredProvider"
 METERED_QUALIFIED = f"{REGISTRY}.{METERED}"
 BEDROCK_SERVICE_PREFIX = "bedrock"
+#: Session methods that make a service client from a service name.
+SESSION_CLIENT_METHODS: frozenset[str] = frozenset({"client", "create_client"})
+#: The SDK modules the constructors live in; ``getattr(module, name)()`` on one of them
+#: with a computed name counts as a construction.
+SDK_MODULES: frozenset[str] = frozenset(c.rpartition(".")[0] for c in CLIENT_CONSTRUCTORS)
 
 
 @dataclass(frozen=True)
@@ -88,6 +99,16 @@ class Finding:
 def _literal(node: ast.AST | None) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
+    return None
+
+
+def _service(node: ast.Call) -> str | None:
+    """The literal service name of a session ``client`` / ``create_client`` call."""
+    if node.args:
+        return _literal(node.args[0])
+    for keyword in node.keywords:
+        if keyword.arg == "service_name":
+            return _literal(keyword.value)
     return None
 
 
@@ -157,14 +178,43 @@ class _Visitor(ast.NodeVisitor):
     visit_FunctionDef = _function
     visit_AsyncFunctionDef = _function
 
+    def _getattr_target(self, node: ast.AST) -> tuple[str | None, bool]:
+        """For ``getattr(module, "Name")``: the dotted target, and whether it is a
+        dynamic lookup on a known SDK module (which counts as a construction)."""
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+        ):
+            return None, False
+        module = _dotted(node.args[0], self.aliases)
+        if module is None:
+            return None, False
+        name = _literal(node.args[1])
+        if name is not None:
+            return f"{module}.{name}", False
+        return f"{module}.<getattr>", module in SDK_MODULES
+
     def visit_Call(self, node: ast.Call) -> None:
         target = _dotted(node.func, self.aliases)
+        dynamic = False
+        if target is None:
+            target, dynamic = self._getattr_target(node.func)
         in_layer = any(within(self.module, layer) for layer in CLIENT_LAYERS)
-        constructs = target in CLIENT_CONSTRUCTORS or (target in HTTP_CLIENTS and in_layer)
-        if not constructs and isinstance(node.func, ast.Attribute) and node.func.attr == "client":
-            service = _literal(node.args[0]) if node.args else None
+        constructs = (
+            dynamic or target in CLIENT_CONSTRUCTORS or (target in HTTP_CLIENTS and in_layer)
+        )
+        session_call = (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in SESSION_CLIENT_METHODS
+            and _service(node) is not None
+        )
+        if not constructs and session_call:
+            assert isinstance(node.func, ast.Attribute)
+            service = _service(node)
             constructs = bool(service and service.startswith(BEDROCK_SERVICE_PREFIX))
-            target = target or f"<session>.client({service!r})"
+            target = target or f"<session>.{node.func.attr}({service!r})"
         if constructs:
             self.constructions.append(
                 Finding(
@@ -190,7 +240,8 @@ class _Visitor(ast.NodeVisitor):
             self.metered.append(
                 Finding(self.module, self.path, node.lineno, f"constructs {METERED}")
             )
-        if called == FACTORY_METHOD:
+        # An SDK session's create_client("service") is a construction, not the factory.
+        if called == FACTORY_METHOD and not session_call:
             self.factory_calls.append(
                 Finding(self.module, self.path, node.lineno, f"calls {FACTORY_METHOD}")
             )

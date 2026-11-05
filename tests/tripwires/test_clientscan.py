@@ -177,3 +177,90 @@ def test_a_metered_provider_may_be_made_only_by_the_registry() -> None:
         return registry.MeteredProvider(inner)
     """
     assert len(_metered(plain, "conduit.core.runtime")) == 1
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            """
+            def make(session):
+                return session.client(service_name="bedrock-runtime")
+            """,
+            id="session-client-service-name-keyword",
+        ),
+        pytest.param(
+            """
+            from aiobotocore.session import get_session
+            def make():
+                return get_session()
+            """,
+            id="aiobotocore-get-session",
+        ),
+        pytest.param(
+            """
+            import aiobotocore.session
+            def make():
+                return aiobotocore.session.AioSession()
+            """,
+            id="aiobotocore-aiosession",
+        ),
+        pytest.param(
+            """
+            def make(session):
+                return session.create_client("bedrock-runtime", region_name="ap-southeast-2")
+            """,
+            id="session-create-client",
+        ),
+        pytest.param(
+            """
+            def make(session):
+                return session.create_client(service_name="bedrock-runtime")
+            """,
+            id="session-create-client-service-name-keyword",
+        ),
+        pytest.param(
+            """
+            import anthropic
+            def make():
+                return getattr(anthropic, "AsyncAnthropic")()
+            """,
+            id="getattr-literal",
+        ),
+        pytest.param(
+            """
+            import importlib
+            def make():
+                return getattr(importlib.import_module("openai"), "OpenAI")()
+            """,
+            id="getattr-on-import-module",
+        ),
+        pytest.param(
+            """
+            import ollama as sdk
+            def make(name):
+                return getattr(sdk, name)()
+            """,
+            id="getattr-dynamic-name-on-an-sdk-module",
+        ),
+    ],
+)
+def test_every_construction_form_is_caught(source: str) -> None:
+    assert len(_constructions(source, "conduit.providers.example")) == 1
+
+
+def test_an_sdk_session_create_client_is_not_the_factory_method() -> None:
+    source = """
+    def make(session):
+        return session.create_client("bedrock-runtime")
+    """
+    assert _factory_calls(source, "conduit.providers.bedrock") == []
+
+
+def test_getattr_on_unrelated_objects_is_ignored() -> None:
+    source = """
+    import json
+    def make(obj, name):
+        return getattr(obj, "Client")(), getattr(json, "dumps")({}), getattr(obj, name)()
+    """
+    assert _constructions(source, "conduit.providers.example") == []
