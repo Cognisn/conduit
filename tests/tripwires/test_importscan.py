@@ -174,9 +174,11 @@ def test_the_sql_drivers_are_owned_by_the_sql_store_only(tmp_path: Path, driver:
 
 
 def test_the_real_table_lists_httpx_for_ollama_and_mcp_only(tmp_path: Path) -> None:
-    # Q0006: httpx has two owners. Every other library keeps exactly one.
+    # Q0006: httpx has two owners. Q0013: the bedrock-mantle adapter shares the
+    # anthropic SDK and botocore (tested below). Every other library keeps exactly one.
     assert OPTIONAL_LIBRARIES["httpx"] == ("conduit.providers.ollama", "conduit.mcp")
-    assert all(len(owners) == 1 for name, owners in OPTIONAL_LIBRARIES.items() if name != "httpx")
+    shared = {name for name, owners in OPTIONAL_LIBRARIES.items() if len(owners) != 1}
+    assert shared == {"httpx", "anthropic", "botocore"}
     src = _tree(
         tmp_path,
         {
@@ -192,6 +194,57 @@ def test_the_real_table_lists_httpx_for_ollama_and_mcp_only(tmp_path: Path) -> N
         ("conduit.stores", "httpx"),
         ("conduit.providers.openai_compat", "httpx"),
     }
+
+
+MANTLE = "conduit.providers.bedrock_mantle"
+
+
+@pytest.mark.parametrize(
+    ("library", "first_owner"),
+    [("anthropic", "conduit.providers.anthropic"), ("botocore", "conduit.providers.bedrock")],
+)
+def test_the_bedrock_mantle_adapter_shares_its_sdks_and_no_other_layer_does(
+    tmp_path: Path, library: str, first_owner: str
+) -> None:
+    # Q0013: the mantle adapter builds the anthropic SDK's mantle client and presigns
+    # short-term keys with botocore, so it owns both alongside their first adapter.
+    assert OPTIONAL_LIBRARIES[library] == (first_owner, MANTLE)
+    first = first_owner.replace(".", "/")
+    src = _tree(
+        tmp_path,
+        {
+            "conduit/providers/__init__.py": "",
+            f"{first}/__init__.py": f"import {library}\n",
+            "conduit/providers/bedrock_mantle/__init__.py": "",
+            "conduit/providers/bedrock_mantle/factory.py": (
+                f"import importlib\nimportlib.import_module('{library}.session')\n"
+            ),
+            "conduit/providers/bedrock_mantle_extra.py": f"import {library}\n",
+            "conduit/providers/openai_compat/__init__.py": f"import {library}\n",
+            "conduit/agent/__init__.py": f"from {library} import x\n",
+        },
+    )
+    found = {(e.importer, e.imported) for e in optional_library_violations(scan_tree(src))}
+    assert found == {
+        ("conduit.providers.bedrock_mantle_extra", library),
+        ("conduit.providers.openai_compat", library),
+        ("conduit.agent", library),
+        ("conduit.agent", f"{library}.x"),
+    }
+
+
+def test_boto3_stays_with_the_bedrock_adapter_alone(tmp_path: Path) -> None:
+    # The mantle adapter needs botocore only; boto3 is not one of its imports.
+    assert OPTIONAL_LIBRARIES["boto3"] == ("conduit.providers.bedrock",)
+    src = _tree(
+        tmp_path,
+        {
+            "conduit/providers/__init__.py": "",
+            "conduit/providers/bedrock_mantle/__init__.py": "import boto3\n",
+        },
+    )
+    found = {(e.importer, e.imported) for e in optional_library_violations(scan_tree(src))}
+    assert found == {(MANTLE, "boto3")}
 
 
 @pytest.mark.parametrize(

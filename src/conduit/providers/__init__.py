@@ -5,6 +5,7 @@ from __future__ import annotations
 from conduit.core.registry import ProviderFactory
 from conduit.providers.anthropic import AnthropicFactory
 from conduit.providers.bedrock import BedrockFactory
+from conduit.providers.bedrock_mantle import BedrockMantleFactory
 from conduit.providers.gemini import GeminiFactory
 from conduit.providers.ollama import OllamaFactory
 from conduit.providers.openai_compat import OpenAICompatFactory
@@ -22,6 +23,7 @@ def builtin_factories() -> list[ProviderFactory]:
     return [
         StubFactory(),
         BedrockFactory(),
+        BedrockMantleFactory(),
         AnthropicFactory(),
         OpenAICompatFactory(),
         GeminiFactory(),
