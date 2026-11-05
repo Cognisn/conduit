@@ -26,7 +26,7 @@ from conduit.core.types import (
     ToolUseBlock,
     Usage,
 )
-from conduit.providers.ollama import OllamaFactory, OllamaProvider
+from conduit.providers.ollama import OllamaFactory
 from conduit.testing.replay import Replay, load_recording
 from tests.unit.providers.ollama import recordings
 
@@ -326,21 +326,22 @@ class TestLifecycle:
         def handle(request: Any) -> Any:
             return httpx.Response(200, stream=body)
 
-        # The adapter's own stream; the metered wrapper's closing of its inner
-        # stream is the core's concern.
         provider = await _build(handle)
-        stream = provider.inner.stream(_request())
+        stream = provider.stream(_request())
         first = await anext(stream)
         assert first == TextDelta(text="one")
-        await stream.aclose()  # type: ignore[attr-defined]
+        await stream.aclose()
         assert body.closed
 
     async def test_aclose_closes_the_client(self) -> None:
-        provider = await _build(lambda request: _ndjson(_done_lines()))
-        inner = provider.inner
-        assert isinstance(inner, OllamaProvider)
+        factory = OllamaFactory(transport=httpx.MockTransport(lambda r: _ndjson(_done_lines())))
+        settings = factory.settings_model.model_validate({"kind": "ollama"})
+        client = factory.create_client(settings, {})
+        registry = ProviderRegistry(secrets=LiteralSecretResolver({}), factories=[factory])
+        provider = await registry.build("local", settings, client=client)
+        await provider.complete(_request())
         await provider.aclose()
-        assert inner.client.is_closed
+        assert client.is_closed
 
 
 class TestClient:

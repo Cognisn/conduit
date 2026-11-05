@@ -168,12 +168,13 @@ class TestSignatures:
             ]
 
         client = FakeClient(handle)
-        provider = await _build(client, signature_memory=2)
+        factory = GeminiFactory(signature_memory=2)
+        settings = factory.settings_model.model_validate(SETTINGS)
+        provider = factory.create_provider("gemini", settings, client)
+        assert isinstance(provider, GeminiProvider)
         for _ in range(3):
             await provider.complete(_request())
-        inner = provider.inner
-        assert isinstance(inner, GeminiProvider)
-        assert dict(inner.signatures) == {"fc_2": b"sig", "fc_3": b"sig"}
+        assert dict(provider.signatures) == {"fc_2": b"sig", "fc_3": b"sig"}
 
 
 class _Slow:
@@ -238,9 +239,9 @@ class TestLifecycle:
     async def test_stopping_early_closes_the_sdk_stream(self) -> None:
         client = FakeClient(lambda params: _done("one") + _done("two"))
         provider = await _build(client)
-        stream = provider.inner.stream(_request())
+        stream = provider.stream(_request())
         assert await anext(stream) == TextDelta(text="one")
-        await stream.aclose()  # type: ignore[attr-defined]
+        await stream.aclose()
         assert client.aio.models.closed_streams == 1
 
     async def test_aclose_closes_the_async_client(self) -> None:
