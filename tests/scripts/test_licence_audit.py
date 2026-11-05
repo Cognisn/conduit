@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from importlib import metadata
 
 import pytest
+from packaging.requirements import Requirement
 
-from licence_audit import Package, audit, classify, main
+from licence_audit import NOT_AUDITED, ROOT, Package, audit, classify, installed, main
 
 
 @pytest.mark.parametrize(
@@ -82,5 +84,28 @@ def test_the_dev_extra_is_never_audited() -> None:
     assert main(["--extra", "dev"]) == 2
 
 
+def _uninstalled_extra_requirements() -> list[str]:
+    """Requirements of a runtime extra that this environment has not installed."""
+    root = installed(ROOT)
+    missing: list[str] = []
+    for spec in root.requires:
+        requirement = Requirement(spec)
+        marker = requirement.marker
+        if marker is None or marker.evaluate({"extra": ""}):
+            continue  # a core requirement, always installed
+        if not any(marker.evaluate({"extra": e}) for e in root.extras if e not in NOT_AUDITED):
+            continue  # a dev requirement
+        try:
+            metadata.distribution(requirement.name)
+        except metadata.PackageNotFoundError:
+            missing.append(requirement.name)
+    return sorted(set(missing))
+
+
 def test_the_installed_package_passes_with_every_extra() -> None:
+    # The test job installs only the dev extra; the CI licences job installs every
+    # runtime extra and runs the full audit. Here, audit them all when they are present.
+    missing = _uninstalled_extra_requirements()
+    if missing:
+        pytest.skip(f"runtime extras not installed here ({', '.join(missing)})")
     assert main(["--all-extras"]) == 0
