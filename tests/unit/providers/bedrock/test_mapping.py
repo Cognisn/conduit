@@ -392,6 +392,10 @@ class TestStream:
             pytest.param([{"messageStop": {"stopReason": "end_turn"}}], id="no metadata"),
             pytest.param([METADATA], id="no message stop"),
             pytest.param(
+                [{"messageStop": {"stopReason": "end_turn"}}, METADATA, METADATA],
+                id="a second metadata event",
+            ),
+            pytest.param(
                 [
                     {
                         "contentBlockStart": {

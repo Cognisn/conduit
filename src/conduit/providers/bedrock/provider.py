@@ -2,8 +2,9 @@
 
 boto3 is synchronous, so each call runs in a worker thread. A ConverseStream call gets
 its own daemon thread, which reads the event stream and hands each raw event to the
-loop with ``call_soon_threadsafe``; the loop maps it and yields conduit events, so a
-slow or stalled stream never blocks the loop. ``request.timeout_s`` bounds the wait for
+loop through a bounded queue (``STREAM_BUFFER`` events), waiting for space, so it never
+reads far ahead of the consumer; the loop maps each event and yields conduit events, so
+a slow or stalled stream never blocks the loop. ``request.timeout_s`` bounds the wait for
 each next event (and, for Converse, the whole call). If the consumer stops early, the
 thread is told to stop and the underlying stream is closed.
 
@@ -14,6 +15,7 @@ reaches no log, exception or event.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
 import threading
 from collections.abc import AsyncIterator, Mapping
@@ -33,6 +35,8 @@ from conduit.providers.bedrock.mapping import (
 from conduit.providers.bedrock.settings import BedrockSettings
 
 _EVENT, _END, _ERROR = "event", "end", "error"
+#: Raw stream events the worker may read ahead of the consumer.
+STREAM_BUFFER = 64
 
 
 def _close(stream: Any) -> None:
@@ -86,17 +90,29 @@ class BedrockProvider(BaseProvider):
         self, params: dict[str, Any], timeout: float
     ) -> AsyncIterator[StreamEvent]:
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+        queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=STREAM_BUFFER)
         abandoned = threading.Event()
         opened: list[Any] = []
 
         def hand(kind: str, item: Any) -> None:
+            # Wait for space in the bounded queue, giving up if the consumer goes.
             if abandoned.is_set():
                 return
             try:
-                loop.call_soon_threadsafe(queue.put_nowait, (kind, item))
+                put = asyncio.run_coroutine_threadsafe(queue.put((kind, item)), loop)
             except RuntimeError:  # the loop has closed
                 abandoned.set()
+                return
+            while True:
+                try:
+                    put.result(timeout=0.1)
+                    return
+                except concurrent.futures.TimeoutError:
+                    if abandoned.is_set() or loop.is_closed():
+                        put.cancel()
+                        return
+                except concurrent.futures.CancelledError:
+                    return
 
         def read() -> None:
             try:

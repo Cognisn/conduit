@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
@@ -27,6 +28,7 @@ from conduit.core.types import (
     Usage,
 )
 from conduit.providers.bedrock import BedrockFactory, BedrockProvider, BedrockSettings
+from conduit.providers.bedrock.provider import STREAM_BUFFER
 from conduit.testing.replay import load_recording
 from tests.unit.providers.bedrock import recordings
 from tests.unit.providers.bedrock.recordings import NOTES, SYSTEM, RecordedRuntime
@@ -193,10 +195,17 @@ class ClientError(Exception):
 class ScriptedRuntime:
     """A fake client whose stream is a generator the test controls."""
 
-    def __init__(self, stream: Iterator[Any] | None = None, error: Exception | None = None):
+    def __init__(
+        self,
+        stream: Iterator[Any] | None = None,
+        error: Exception | None = None,
+        on_close: Callable[[], None] | None = None,
+    ):
         self.stream = stream
         self.error = error
+        self.on_close = on_close
         self.threads: list[int] = []
+        self.thread_objects: list[threading.Thread] = []
         self.closed_streams = 0
 
     def converse(self, **params: Any) -> Any:
@@ -207,6 +216,7 @@ class ScriptedRuntime:
 
     def converse_stream(self, **params: Any) -> Any:
         self.threads.append(threading.get_ident())
+        self.thread_objects.append(threading.current_thread())
         if self.error is not None:
             raise self.error
         runtime = self
@@ -218,6 +228,8 @@ class ScriptedRuntime:
 
             def close(self) -> None:
                 runtime.closed_streams += 1
+                if runtime.on_close is not None:
+                    runtime.on_close()
 
         return {"stream": Stream()}
 
@@ -316,25 +328,45 @@ class TestWorkerThreads:
         assert workers[0] != workers[1]
         assert ticks > 0
 
-    async def test_an_abandoned_stream_is_closed(self) -> None:
-        more = threading.Event()
+    async def test_an_abandoned_stream_is_closed_and_its_thread_exits(self) -> None:
+        # The stream stays blocked until it is closed, as a real network read does;
+        # once closed it would keep producing events, so only the worker's own check
+        # of abandonment ends the thread.
+        closed = threading.Event()
 
         def stream() -> Iterator[Any]:
             yield {"contentBlockDelta": {"delta": {"text": "first"}, "contentBlockIndex": 0}}
-            more.wait(5)
-            yield from STOP
+            closed.wait(10)
+            while True:
+                yield {"contentBlockDelta": {"delta": {"text": "more"}, "contentBlockIndex": 0}}
+                time.sleep(0.005)
 
-        runtime = ScriptedRuntime(stream())
+        runtime = ScriptedRuntime(stream(), on_close=closed.set)
         provider, _ = await built(runtime)
         events = provider.stream(REQUEST)
         assert await anext(events) == TextDelta(text="first")
         await events.aclose()
-        more.set()
-        for _ in range(100):
-            if runtime.closed_streams:
-                break
-            await asyncio.sleep(0.01)
-        assert runtime.closed_streams >= 1
+        assert runtime.closed_streams >= 1  # closed from the loop side, at once
+        worker = runtime.thread_objects[0]
+        await asyncio.to_thread(worker.join, 2)
+        assert not worker.is_alive()
+
+    async def test_the_worker_reads_only_a_bounded_way_ahead(self) -> None:
+        pulled = 0
+
+        def stream() -> Iterator[Any]:
+            nonlocal pulled
+            for _ in range(2_000):
+                pulled += 1
+                yield {"contentBlockDelta": {"delta": {"text": "x"}, "contentBlockIndex": 0}}
+            yield from STOP
+
+        provider, _ = await built(ScriptedRuntime(stream()))
+        events = provider.stream(REQUEST)
+        assert await anext(events) == TextDelta(text="x")
+        await asyncio.sleep(0.3)  # the worker runs ahead as far as it may
+        assert pulled <= STREAM_BUFFER + 2
+        await events.aclose()
 
     async def test_aclose_closes_the_client(self) -> None:
         runtime = RecordedRuntime(

@@ -253,6 +253,8 @@ class StreamMapper:
         elif "messageStop" in raw:
             self._stop = stop_reason_from_bedrock(raw["messageStop"]["stopReason"])
         elif "metadata" in raw:
+            if self._usage is not None:
+                raise _protocol()  # one metadata event per stream; never replace usage
             self._usage = usage_from_bedrock(raw["metadata"]["usage"])
 
     def finish(self) -> Iterator[StreamEvent]:

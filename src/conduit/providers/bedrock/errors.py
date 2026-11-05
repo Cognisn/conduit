@@ -22,6 +22,7 @@ _TIMEOUT_CLASSES = frozenset({"ReadTimeoutError", "ConnectTimeoutError", "Timeou
 _REJECTED_CLASSES = frozenset(
     {
         "NoCredentialsError",
+        "KeyRefreshRefused",
         "PartialCredentialsError",
         "CredentialRetrievalError",
         "NoAuthTokenError",

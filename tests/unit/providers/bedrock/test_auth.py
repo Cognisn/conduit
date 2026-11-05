@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import base64
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from conduit.core.errors import ProviderFailure
 from conduit.providers.bedrock.auth import (
     SHORT_TERM_PREFIX,
     IssuedKey,
+    KeyRefreshRefused,
     ShortTermKeySource,
     StaticKeySource,
     encode_short_term_key,
 )
+from conduit.providers.bedrock.errors import classify
 
 PRESIGNED = (
     "https://bedrock.amazonaws.com/?Action=CallWithBearerToken"
@@ -117,6 +121,7 @@ class TestRefresh:
         def slow_issue(lifetime_s: int) -> IssuedKey:
             with lock:
                 issued.append(lifetime_s)
+            time.sleep(0.05)  # long enough for every caller to arrive while it runs
             return IssuedKey(value="shared", expires_at=clock() + lifetime_s)
 
         source = ShortTermKeySource(slow_issue, lifetime_s=3_600, refresh_before_s=300, clock=clock)
@@ -132,8 +137,9 @@ class TestRefresh:
 
     def test_a_key_that_would_be_issued_already_inside_its_margin_is_refused(self) -> None:
         source, _, _ = self.make(cap=1_000.0 + 100)
-        with pytest.raises(ValueError, match="expires"):
+        with pytest.raises(KeyRefreshRefused, match="expires"):
             source.current()
+        assert classify(KeyRefreshRefused("x")) is ProviderFailure.REJECTED
 
 
 class TestStatic:

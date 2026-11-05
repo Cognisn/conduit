@@ -27,6 +27,10 @@ KEY_ACTION = "CallWithBearerToken"
 KEY_SIGNING_NAME = "bedrock"
 
 
+class KeyRefreshRefused(ValueError):
+    """A new short-term key would expire within its refresh margin (credentials expiring)."""
+
+
 def encode_short_term_key(presigned_url: str) -> str:
     """The short-term API key for a presigned ``CallWithBearerToken`` URL."""
     if not presigned_url.startswith("https://"):
@@ -97,7 +101,7 @@ class ShortTermKeySource:
             if key is None or not self._fresh(key):
                 key = self._issue(self._lifetime_s)
                 if not self._fresh(key):
-                    raise ValueError(
+                    raise KeyRefreshRefused(
                         "a new short-term Bedrock API key expires within its refresh margin; "
                         "the signing credentials are about to expire"
                     )
