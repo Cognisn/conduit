@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Bedrock provider and configuration errors carry no part of the failing exception: no cause and no context. A stream event or Converse response whose fields have the wrong type is a protocol failure.
+
+## [0.1.0a4] - 2026-11-04
+
+Wave 2, third merge: the Amazon Bedrock adapter (`feat/0.1.0-provider-bedrock`), and the stores follow-up (Q0018).
+
+### Added
+
+- The Amazon Bedrock adapter (`conduit.providers.bedrock`, `bedrock` extra with boto3):
+  - Converse and ConverseStream in worker threads, reading at most a bounded number of stream events ahead.
+  - The AWS credential chain with an optional profile, access keys as secret references, short-term Bedrock API keys generated and refreshed before expiry, and long-term keys refused unless explicitly allowed, however the settings were made.
+  - Cache points where the catalogue says the model caches; usage with all four counts; tool use; errors mapped to provider failures with no provider text.
+- Catalogue: in-region Claude Sonnet 4.6 (eu-west-2) and Claude Sonnet 5 (eu-west-2, ap-northeast-2, ap-southeast-1) on Bedrock, and the Sonnet 5 geographic and global profiles.
+
+### Changed
+
+- `builtin_factories()` includes the Bedrock factory.
+- The default catalogue's version is 2026.11.2.
 - The SQL stores refuse a stored row they cannot decode with `StoreError`, refuse a session id outside 1 to 256 characters with an error that does not repeat it, and name the driver's error class in `StoreError`. A JSON store write whose directory cannot be synced after the replace is no longer reported as failed (Q0018).
 
 ## [0.1.0a3] - 2026-11-04
