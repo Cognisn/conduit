@@ -55,9 +55,16 @@ class OverloadedError(APIStatusError):
 
 
 class FakeStream:
-    def __init__(self, events: Sequence[Event | BaseException], *, wrap: bool = False) -> None:
+    def __init__(
+        self,
+        events: Sequence[Event | BaseException],
+        *,
+        wrap: bool = False,
+        close_error: BaseException | None = None,
+    ) -> None:
         self._events = list(events)
         self._wrap = wrap
+        self._close_error = close_error
         self.closed = False
 
     def __aiter__(self) -> AsyncIterator[Any]:
@@ -71,6 +78,16 @@ class FakeStream:
 
     async def close(self) -> None:
         self.closed = True
+        if self._close_error is not None:
+            raise self._close_error
+
+
+def assert_clean(error: BaseException, marker: str) -> None:
+    """Nothing is chained to ``error``, and ``marker`` appears nowhere in it."""
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    for text in (str(error), repr(error), *(repr(a) for a in error.args)):
+        assert marker not in text
 
 
 class _Dumpable:

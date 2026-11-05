@@ -440,9 +440,42 @@ class TestErrors:
         with pytest.raises(ProviderError) as caught:
             await _events(_provider(client))
         assert caught.value.failure is ProviderFailure.UNAVAILABLE
-        assert "SECRET-MARKER" not in str(caught.value)
-        assert caught.value.__cause__ is None
-        assert caught.value.__suppress_context__
+        fakes.assert_clean(caught.value, "SECRET-MARKER")
+
+    async def test_a_non_sdk_error_mid_stream_is_a_clean_protocol_failure(self) -> None:
+        client = scripted_client([message_start(usage(5)), KeyError("SECRET-MARKER")])
+        with pytest.raises(ProviderError) as caught:
+            await _events(_provider(client))
+        assert caught.value.failure is ProviderFailure.PROTOCOL
+        fakes.assert_clean(caught.value, "SECRET-MARKER")
+
+    async def test_invalid_tool_json_is_a_clean_protocol_failure(self) -> None:
+        body = [*tool_block(0, "toolu_01", "x", '{"SECRET-MARKER": '), *text_block(1, "more")]
+        client = scripted_client(_simple(*body, stop_reason="tool_use"))
+        with pytest.raises(ProviderError) as caught:
+            await _events(_provider(client))
+        assert caught.value.failure is ProviderFailure.PROTOCOL
+        fakes.assert_clean(caught.value, "SECRET-MARKER")
+
+    async def test_a_failing_close_does_not_replace_or_chain_the_failure(self) -> None:
+        stream = fakes.FakeStream(
+            [message_start(usage(5)), fakes.RateLimitError("SECRET-MARKER", status_code=429)],
+            close_error=RuntimeError("SECRET-MARKER on close"),
+        )
+        client = fakes.FakeClient(lambda params: stream)
+        with pytest.raises(ProviderError) as caught:
+            await _events(_provider(client))
+        assert caught.value.failure is ProviderFailure.UNAVAILABLE
+        fakes.assert_clean(caught.value, "SECRET-MARKER")
+        assert stream.closed
+
+    async def test_a_failing_close_after_a_whole_stream_is_not_raised(self) -> None:
+        stream = fakes.FakeStream(
+            _simple(*text_block(0, "fine")), close_error=RuntimeError("SECRET-MARKER")
+        )
+        client = fakes.FakeClient(lambda params: stream)
+        response = await _provider(client).complete(_request())
+        assert response.text == "fine"
 
     async def test_error_event_text_is_not_carried(self) -> None:
         events = [
@@ -451,7 +484,7 @@ class TestErrors:
         ]
         with pytest.raises(ProviderError) as caught:
             await _events(_provider(scripted_client(events)))
-        assert "SECRET-MARKER" not in str(caught.value)
+        fakes.assert_clean(caught.value, "SECRET-MARKER")
 
     async def test_cancellation_is_not_swallowed(self) -> None:
         import asyncio

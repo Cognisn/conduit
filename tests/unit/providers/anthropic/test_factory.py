@@ -184,8 +184,10 @@ class TestFactory:
     def test_missing_sdk_is_a_configuration_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setitem(sys.modules, "anthropic", None)
         settings = AnthropicSettings(kind="anthropic", api_key=SecretRef("K"))
-        with pytest.raises(ConfigurationError, match=r"cognisn-conduit\[anthropic\]"):
+        with pytest.raises(ConfigurationError, match=r"cognisn-conduit\[anthropic\]") as caught:
             AnthropicFactory().create_client(settings, {"api_key": SecretStr(KEY)})
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
 
     def test_create_provider(self) -> None:
         settings = AnthropicSettings(kind="anthropic", api_key=SecretRef("K"))

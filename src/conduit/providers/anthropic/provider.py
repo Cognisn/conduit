@@ -23,8 +23,10 @@ value.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import inspect
+import logging
 import os
 from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Any
@@ -42,6 +44,8 @@ from conduit.providers.anthropic.request import build_params
 from conduit.providers.anthropic.settings import DEFAULT_BASE_URL, AnthropicSettings
 from conduit.providers.anthropic.stream import translate
 
+logger = logging.getLogger("conduit.providers.anthropic")
+
 StructuredOutputCheck = Callable[[str], bool]
 
 
@@ -58,6 +62,17 @@ async def _close(resource: Any) -> None:
     result = close()
     if inspect.isawaitable(result):
         await result
+
+
+async def _close_quietly(resource: Any) -> None:
+    """Close an SDK stream; a failing close is logged by class and never raised."""
+    failed: str | None = None
+    try:
+        await _close(resource)
+    except Exception as error:
+        failed = type(error).__name__
+    if failed is not None:
+        logger.warning("closing an anthropic stream failed: %s", failed)
 
 
 class AnthropicProvider(BaseProvider):
@@ -82,18 +97,23 @@ class AnthropicProvider(BaseProvider):
             raise ProviderError(ProviderFailure.REJECTED)
         params = build_params(request, structured_output=supported)
         sdk_stream: Any = None
+        failure: ProviderFailure | None = None
         try:
             sdk_stream = await self._client.messages.create(**params)
             async for event in translate(aiter(sdk_stream)):
                 yield event
-        except ProviderError:
-            raise
+        except ProviderError as error:
+            failure = error.failure
         except Exception as error:
             # The SDK's message can echo the request: only the failure class goes on.
-            raise ProviderError(failure_for(error)) from None
+            failure = failure_for(error)
         finally:
             if sdk_stream is not None:
-                await _close(sdk_stream)
+                await _close_quietly(sdk_stream)
+        # Raised here, after the handler, so the failing exception is neither the
+        # cause nor the context of the ProviderError.
+        if failure is not None:
+            raise ProviderError(failure)
 
     async def aclose(self) -> None:
         await _close(self._client)
@@ -136,13 +156,14 @@ class AnthropicFactory:
     def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
         validated = _settings(settings)
         _check_environment(validated.endpoint)
-        try:
+        sdk: Any = None
+        with contextlib.suppress(ImportError):
             sdk = importlib.import_module("anthropic")
-        except ImportError:
+        if sdk is None:  # raised after the handler, with nothing chained
             raise ConfigurationError(
                 "the anthropic provider needs the anthropic extra: "
                 "pip install 'cognisn-conduit[anthropic]'"
-            ) from None
+            )
         key = secrets["api_key"].get_secret_value()
         if validated.endpoint == "foundry":
             return sdk.AsyncAnthropicFoundry(

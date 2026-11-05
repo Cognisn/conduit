@@ -17,6 +17,7 @@ summed, so no count is ever doubled. The one ``StreamStopped`` carries the resul
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
@@ -160,10 +161,9 @@ class _Translator:
         block, self.held = self.held, None
         if block is None:
             return []
-        try:
+        arguments: Any = None
+        with contextlib.suppress(ValueError):  # refused below, with nothing chained
             arguments = json.loads("".join(block.json).strip() or "{}")
-        except ValueError:
-            raise _broken() from None
         if not isinstance(arguments, dict):
             raise _broken()
         return [

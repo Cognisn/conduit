@@ -39,11 +39,15 @@ class AnthropicSettings(ProviderSettings):
     def _check_url(cls, value: str | None) -> str | None:
         if value is None:
             return None
+        parts = None
+        host: str | None = None
         try:
             parts = urlsplit(value)
             host = parts.hostname
         except ValueError:
-            raise ValueError("base_url must be an https URL") from None
+            pass  # refused below, with nothing chained
+        if parts is None:
+            raise ValueError("base_url must be an https URL")
         if parts.username is not None or parts.password is not None:
             raise ValueError("base_url must not carry credentials")
         if not host:
