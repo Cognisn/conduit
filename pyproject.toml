@@ -73,7 +73,7 @@ sql = [
 ]
 konfig = ["cognisn-konfig>=0.5,<1"]
 warden = []
-otel = []
+otel = ["opentelemetry-api>=1.30,<2"]
 cli = []
 # Development only; never a runtime dependency.
 dev = [
@@ -85,6 +85,8 @@ dev = [
     "packaging>=24",
     # Postgres tests for the sql extra start a throwaway container (no psycopg: LGPL).
     "testcontainers[postgres]>=4.9,<5",
+    # In-memory span and metric exporters for the otel extra's tests (no collector).
+    "opentelemetry-sdk>=1.30,<2",
 ]
 
 [project.urls]
