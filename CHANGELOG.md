@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a18] - 2026-11-05
+
+Wave 5, third and last merge: audit and telemetry (`feat/0.1.0-audit-telemetry`). Milestone M4 (compaction and audit).
+
+### Added
+
+- The otel extra (`conduit.integrations.otel`): `OtelEventSink` turns conduit events into OpenTelemetry spans and metrics.
+  - Spans cover runs, model and embedding calls, tool calls, MCP calls, approvals, skill loads, compactions and hand-offs.
+  - Metrics cover all four token counts, cache hits, latency, errors, budget use, hand-offs and compactions, with attribute keys from a fixed low-cardinality set.
+  - Attributes are metadata only: identifiers, counts, durations and the hash and size of content, never content.
+  - It uses the product's tracer and meter providers, or the global ones. Telemetry failures are logged by class, never raised, and spans are always ended.
+- The warden extra (`conduit.integrations.warden`): `WardenAuditSink` records conduit events in warden's hash-chained audit trail as registered `conduit.<event type>` actions, which `register_conduit_actions` registers.
+  - Records carry metadata only, never content.
+  - It needs cognisn-warden (a pre-release) and its PostgreSQL driver, psycopg.
+- The event-content tripwire checks every event class in every layer under each capture policy. Capture-policy tests cover the runner, tools, MCP, skills and compaction through every sink and exporter.
+
+### Changed
+
+- The licence audit names psycopg (LGPL-3.0, required by cognisn-warden for the warden extra) as an agreed exception, matched by exact package name only.
+- The architecture document says the otel extra holds the OpenTelemetry API only; the product supplies the SDK and exporters.
+
 ## [0.1.0a17] - 2026-11-05
 
 Wave 5, second merge: compaction (`feat/0.1.0-compaction`).
