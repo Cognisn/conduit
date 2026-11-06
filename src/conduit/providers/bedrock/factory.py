@@ -16,6 +16,10 @@ the configured region and authentication mode, and returns it:
 The process environment (``AWS_BEARER_TOKEN_BEDROCK``) is never read or written: two
 providers in one process can use different keys.
 
+Credentials are resolved, any short-term key presigned and the client built in one
+guarded step (see ``conduit.providers``): a constructor that raises becomes a fixed
+``ConfigurationError`` naming the adapter and the exception's class.
+
 Providers read prompt-caching support from the catalogue the registry passes to
 ``create_provider``: the one it applied the product's overlays to. Called without one,
 outside a registry, the factory uses conduit's default catalogue.
@@ -33,6 +37,7 @@ from pydantic import SecretStr
 from conduit.core.catalogue import Catalogue, default_catalogue
 from conduit.core.errors import ConfigurationError
 from conduit.core.provider import Provider
+from conduit.core.registry import guarded_client
 from conduit.core.settings import ProviderSettings
 from conduit.providers.bedrock.auth import (
     KeySource,
@@ -104,47 +109,53 @@ class BedrockFactory:
                 )
             return boto3.session.Session(profile_name=source.profile, region_name=region)
 
-        key_source: KeySource | None = None
-        if isinstance(auth, ShortTermApiKeyAuth):
-            signing_session = session_for(auth.source, "auth.source.")
-            key_source = short_term_keys(
-                signing_session.get_credentials,
-                region=region,
-                lifetime_s=auth.lifetime_s,
-                refresh_before_s=auth.refresh_before_s,
-                clock=self._clock,
+        clock = self._clock
+
+        def build() -> Any:
+            # Credentials and keys are resolved here, in the guarded step's own frames.
+            key_source: KeySource | None = None
+            if isinstance(auth, ShortTermApiKeyAuth):
+                signing_session = session_for(auth.source, "auth.source.")
+                key_source = short_term_keys(
+                    signing_session.get_credentials,
+                    region=region,
+                    lifetime_s=auth.lifetime_s,
+                    refresh_before_s=auth.refresh_before_s,
+                    clock=clock,
+                )
+                session = boto3.session.Session(region_name=region)
+            elif isinstance(auth, LongTermApiKeyAuth):
+                keep_keys_out_of_logs()
+                key_source = StaticKeySource(secret("auth.api_key"))
+                session = boto3.session.Session(region_name=region)
+            else:
+                session = session_for(auth, "auth.")
+
+            options: dict[str, Any] = {
+                "region_name": region,
+                "connect_timeout": bedrock.connect_timeout_s,
+                "read_timeout": bedrock.read_timeout_s,
+                "retries": {"max_attempts": bedrock.max_attempts, "mode": "standard"},
+                "user_agent_extra": USER_AGENT,
+            }
+            if key_source is not None:
+                options["signature_version"] = botocore.UNSIGNED
+            client = session.client(
+                SERVICE,
+                region_name=region,
+                endpoint_url=bedrock.endpoint_url,
+                config=botocore_config.Config(**options),
             )
-            session = boto3.session.Session(region_name=region)
-        elif isinstance(auth, LongTermApiKeyAuth):
-            keep_keys_out_of_logs()
-            key_source = StaticKeySource(secret("auth.api_key"))
-            session = boto3.session.Session(region_name=region)
-        else:
-            session = session_for(auth, "auth.")
+            if key_source is not None:
+                bearer_source = key_source
 
-        options: dict[str, Any] = {
-            "region_name": region,
-            "connect_timeout": bedrock.connect_timeout_s,
-            "read_timeout": bedrock.read_timeout_s,
-            "retries": {"max_attempts": bedrock.max_attempts, "mode": "standard"},
-            "user_agent_extra": USER_AGENT,
-        }
-        if key_source is not None:
-            options["signature_version"] = botocore.UNSIGNED
-        client = session.client(
-            SERVICE,
-            region_name=region,
-            endpoint_url=bedrock.endpoint_url,
-            config=botocore_config.Config(**options),
-        )
-        if key_source is not None:
-            bearer_source = key_source
+                def add_bearer(request: Any, **_: Any) -> None:
+                    request.headers["Authorization"] = f"Bearer {bearer_source.current()}"
 
-            def add_bearer(request: Any, **_: Any) -> None:
-                request.headers["Authorization"] = f"Bearer {bearer_source.current()}"
+                client.meta.events.register(f"before-send.{SERVICE}", add_bearer)
+            return client
 
-            client.meta.events.register(f"before-send.{SERVICE}", add_bearer)
-        return client
+        return guarded_client(self.kind, build)
 
     def create_provider(
         self,

@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
+from conduit.core.errors import ConfigurationError
 from conduit.providers.openai_compat import OpenAICompatFactory, OpenAICompatSettings
 from conduit.providers.openai_compat.factory import OpenAICompatClient
 
@@ -158,7 +159,7 @@ class TestWithTheSdk:
         settings = _settings(
             {"name": "foundry", "endpoint": ENDPOINT, "auth": {"mode": "entra_id"}}
         )
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ConfigurationError, match=r"could not be built: RuntimeError$"):
             OpenAICompatFactory().create_client(settings, {})
         for _ in range(3):
             await asyncio.sleep(0)
@@ -187,7 +188,7 @@ class TestWithTheSdk:
         settings = _settings(
             {"name": "foundry", "endpoint": ENDPOINT, "auth": {"mode": "entra_id"}}
         )
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ConfigurationError, match=r"could not be built: RuntimeError$"):
             OpenAICompatFactory().create_client(settings, {})
         assert [c.closed for c in made] == [True]
 

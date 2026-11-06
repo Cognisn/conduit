@@ -6,6 +6,12 @@ secrets, and a ``create_provider`` that wraps the client. The registry validates
 settings, resolves every secret reference, calls ``create_client`` (nothing else in
 conduit may; a tripwire checks this) and wraps the result in a ``MeteredProvider``.
 
+The registry calls ``create_client`` under ``guarded_client``, the construction guard
+every built-in factory also runs its own client step under. A factory that raises
+surfaces at start-up as that factory's own conduit error, or as a fixed
+``ConfigurationError`` naming the provider, its kind and the exception's class only;
+never as the library's exception, whose frames could hold the resolved credential.
+
 ``create_provider`` receives the registry's catalogue as the keyword ``catalogue``: the
 catalogue ``start`` applied the product's overlays to, so an adapter's capability checks
 (structured output, prompt caching, context windows) follow the overlays. A factory
@@ -74,6 +80,7 @@ from pydantic import BaseModel, NonNegativeFloat, NonNegativeInt, SecretStr, Val
 from conduit.core.catalogue import Catalogue, ModelEntry, default_catalogue
 from conduit.core.errors import (
     CapabilityRefused,
+    ConduitError,
     ConfigurationError,
     ModelNotAssigned,
     ProviderError,
@@ -139,6 +146,45 @@ async def _aclose(stream: AsyncIterator[StreamEvent]) -> None:
     closer = getattr(stream, "aclose", None)
     if closer is not None:
         await closer()
+
+
+def guarded_client[T](kind: str, build: Callable[[], T], *, name: str | None = None) -> T:
+    """Run ``build``, a factory's whole client step, under the construction guard.
+
+    The step resolves the credential and constructs the SDK or HTTP client inside its
+    own frame, which has ended by the time anything is raised here. What it returns
+    passes through. If it raises:
+
+    - a conduit error (a ``ConfigurationError`` the factory raises on purpose, say)
+      goes on as it is, with its traceback, cause, context and notes cleared, so no
+      frame of the step, no exception it handled and no note added on the way travels
+      with it;
+    - any other exception becomes ``ConfigurationError`` naming the adapter ``kind``
+      (and the configured provider ``name``, when given) and the exception's class
+      only, raised after the handler so its cause and context are both ``None``;
+    - cancellation and any other ``BaseException`` propagate unchanged, so they still
+      carry the step's frames: the promise about frames covers ordinary exceptions only.
+
+    It cannot keep out what the library itself writes before it raises: an SDK that
+    logs its own arguments at DEBUG does so before the guard sees anything.
+    """
+    failed: str | None = None
+    refused: ConduitError | None = None
+    try:
+        return build()
+    except ConduitError as error:
+        refused = error
+    except Exception as error:
+        failed = type(error).__name__
+    if refused is not None:
+        refused.__cause__ = None
+        refused.__context__ = None
+        refused.__suppress_context__ = False
+        if hasattr(refused, "__notes__"):
+            del refused.__notes__
+        raise refused.with_traceback(None)
+    where = f"provider {name!r}: " if name is not None else ""
+    raise ConfigurationError(f"{where}the {kind} client could not be built: {failed}")
 
 
 @runtime_checkable
@@ -826,7 +872,9 @@ class ProviderRegistry:
                 self.residency.check(entry, validated.region, task=task)
         if client is _UNSET:
             secrets = await resolve_secret_fields(validated, self._secrets)
-            client = factory.create_client(validated, secrets)
+            client = guarded_client(
+                validated.kind, lambda: factory.create_client(validated, secrets), name=name
+            )
         if self._with_catalogue.get(factory.kind, False):
             inner = factory.create_provider(
                 name,
@@ -898,7 +946,9 @@ class ProviderRegistry:
                 )
         if client is _UNSET:
             secrets = await resolve_secret_fields(validated, self._secrets)
-            client = factory.create_client(validated, secrets)
+            client = guarded_client(
+                validated.kind, lambda: factory.create_client(validated, secrets), name=name
+            )
         inner = factory.create_embedder(name, validated, client, catalogue=self.catalogue)
         refusal: ConfigurationError | None = None
         for task in sorted(entries):
