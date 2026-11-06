@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+import subprocess
+import sys
 from importlib import metadata
 from pathlib import Path
 
@@ -88,7 +90,9 @@ def test_the_core_install_depends_on_pydantic_alone() -> None:
     assert core[0].specifier.contains("2.9") and not core[0].specifier.contains("3.0")
 
 
-#: The core's main types, re-exported from the top-level package (Wave 1 ruling Q0003).
+#: The core's main types, re-exported from the top-level package (Wave 1 ruling Q0003),
+#: and every other core name an integration, a guide or the terminal interface imports
+#: (Wave 6 ruling Q0044).
 REEXPORTS: dict[str, tuple[str, ...]] = {
     "conduit.core.types": (
         "CacheBreakpoint",
@@ -125,10 +129,16 @@ REEXPORTS: dict[str, tuple[str, ...]] = {
         "ResidencyRefused",
         "SettingsRefused",
         "UndeclaredModel",
+        "UnknownTaskClass",
+        "SecretUnavailable",
+        "UnknownTool",
+        "ToolRegistrationError",
+        "FacadeError",
+        "ReplayMismatch",
     ),
     "conduit.core.registry": ("MeteredProvider", "ProviderFactory", "ProviderRegistry"),
     "conduit.core.runtime": ("ConduitSettings", "Runtime", "TaskBinding", "start"),
-    "conduit.core.settings": ("AssignmentSettings", "ProviderSettings"),
+    "conduit.core.settings": ("AssignmentSettings", "ProviderSettings", "refusals"),
     "conduit.core.secrets": (
         "EnvironmentSecretResolver",
         "LiteralSecretResolver",
@@ -142,7 +152,7 @@ REEXPORTS: dict[str, tuple[str, ...]] = {
         "ModelKey",
         "default_catalogue",
     ),
-    "conduit.core.tasks": ("CapabilityFloor", "TaskClass"),
+    "conduit.core.tasks": ("CapabilityFloor", "TaskClass", "resolve_assignments"),
     "conduit.core.residency": ("ResidencyPolicy", "ResidencyScope"),
     "conduit.core.events": (
         "CaptureAs",
@@ -151,11 +161,43 @@ REEXPORTS: dict[str, tuple[str, ...]] = {
         "EventSink",
         "FanOutSink",
         "ToolContent",
+        "ContentKind",
+        "CapturedContent",
+        "ModelCallStartedEvent",
+        "ModelCallFinishedEvent",
+        "ToolCallEvent",
+        "MemoryEventSink",
+        "NullEventSink",
     ),
-    "conduit.core.transcript": ("Transcript", "TranscriptStore"),
-    "conduit.core.backends": ("ApprovalHandler", "SkillSource", "TokenStore"),
-    "conduit.core.tools": ("Tool", "ToolCatalogue", "ToolRegistry"),
+    "conduit.core.transcript": (
+        "Transcript",
+        "TranscriptStore",
+        "TranscriptEntry",
+        "MessageEntry",
+        "CompactionPoint",
+        "SkillUse",
+    ),
+    "conduit.core.backends": (
+        "ApprovalHandler",
+        "SkillSource",
+        "TokenStore",
+        "TokenSet",
+        "Skill",
+        "SkillSummary",
+        "ApprovalRequest",
+        "ApprovalDecision",
+    ),
+    "conduit.core.tools": (
+        "Tool",
+        "ToolCatalogue",
+        "ToolRegistry",
+        "TaskTools",
+        "ToolCallContext",
+        "ToolOutcome",
+        "ToolExecutor",
+    ),
     "conduit.core.facade": (
+        "LoopThread",
         "SyncFacade",
         "SyncProvider",
         "SyncRuntime",
@@ -177,6 +219,44 @@ def test_the_core_s_main_types_are_re_exported(module: str, name: str) -> None:
 def test_the_top_level_exports_nothing_unlisted() -> None:
     listed = {name for names in REEXPORTS.values() for name in names}
     assert set(conduit.__all__) == listed | {"__version__"}
+
+
+#: The reference stores, exported from their layer package rather than the top level,
+#: which imports the core alone (Wave 6 ruling Q0044).
+STORE_EXPORTS: dict[str, tuple[str, ...]] = {
+    "conduit.stores.memory": ("MemoryTokenStore", "MemoryTranscriptStore"),
+    "conduit.stores.json": ("JsonTokenStore", "JsonTranscriptStore"),
+    "conduit.stores.errors": ("StoreError",),
+}
+
+
+@pytest.mark.parametrize(
+    ("module", "name"),
+    [(module, name) for module, names in STORE_EXPORTS.items() for name in names],
+)
+def test_the_reference_stores_are_exported_from_their_layer(module: str, name: str) -> None:
+    stores = importlib.import_module("conduit.stores")
+    assert name in stores.__all__
+    assert getattr(stores, name) is getattr(importlib.import_module(module), name)
+    assert name not in conduit.__all__
+
+
+def test_importing_conduit_loads_the_core_alone() -> None:
+    # The top level re-exports core names only, so no layer loads with it (C2).
+    code = (
+        "import sys, conduit; print(sorted(m for m in sys.modules if m.startswith('conduit.') "
+        "and m != 'conduit.core' and not m.startswith('conduit.core.')))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True, timeout=120
+    )
+    assert result.stdout.strip() == "[]"
+
+
+def test_the_stores_layer_exports_nothing_unlisted() -> None:
+    stores = importlib.import_module("conduit.stores")
+    listed = {name for names in STORE_EXPORTS.values() for name in names}
+    assert set(stores.__all__) == listed
 
 
 PROVIDER_EXTRAS = ("bedrock", "bedrock-mantle", "anthropic", "openai", "gemini", "ollama")

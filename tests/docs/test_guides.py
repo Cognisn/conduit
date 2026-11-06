@@ -17,10 +17,16 @@ The guard has three parts, each of which fails rather than silently checking les
   ``python`` or a language that is never Python. Indented, tilde and longer fences, which
   the parser would not see, are refused, as are untagged fences, and a never-Python
   fence holding a line that reads as Python (an import, an assert, a definition).
+
+Examples also show the public import path: a name exported from ``conduit``, or from a
+layer's package, is never imported from the submodule it lives in.
 """
 
 from __future__ import annotations
 
+import ast
+import functools
+import importlib
 import re
 import sys
 import types
@@ -105,6 +111,41 @@ def fence_problems(text: str) -> list[str]:
     return problems
 
 
+@functools.cache
+def _exports(package: str) -> frozenset[str]:
+    """The names ``package`` exports in its ``__all__``."""
+    return frozenset(getattr(importlib.import_module(package), "__all__", ()))
+
+
+def import_problems(text: str) -> list[str]:
+    """Imports in ``text``'s Python examples that bypass a package exporting the name.
+
+    A name exported from ``conduit`` is imported from ``conduit``, and a name a layer's
+    package exports (``conduit.stores``) from that package, never from the submodule
+    it lives in, so the guides show the public import path (Wave 6 ruling Q0044).
+    """
+    problems: list[str] = []
+    for language, start, code in _blocks(text):
+        if language != "python":
+            continue
+        for node in ast.walk(ast.parse(code)):
+            if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
+                continue
+            parts = node.module.split(".")
+            if parts[0] != "conduit":
+                continue
+            for alias in node.names:
+                for depth in range(1, len(parts)):
+                    package = ".".join(parts[:depth])
+                    if alias.name in _exports(package):
+                        problems.append(
+                            f"line {start + node.lineno - 1}: import {alias.name} from "
+                            f"{package}, not {node.module}"
+                        )
+                        break
+    return problems
+
+
 def _name(path: Path) -> str:
     return path.relative_to(ROOT).as_posix()
 
@@ -153,6 +194,48 @@ def test_the_guard_refuses_a_fence_an_example_could_escape_through(text: str, re
     assert any(reason in problem for problem in problems), problems
 
 
+def test_a_public_import_path_has_no_problems() -> None:
+    text = (
+        "```python\nfrom conduit import TaskTools, start\n"
+        "from conduit.stores import MemoryTokenStore\n"
+        "from conduit.providers.stub import StubFactory\nimport json\n```\n"
+        "```text\nfrom conduit.core.tools import TaskTools\n```\n"
+    )
+    assert import_problems(text) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        (
+            "```python\nfrom conduit.core.tools import TaskTools\n```\n",
+            "line 2: import TaskTools from conduit, not conduit.core.tools",
+        ),
+        (
+            "```python\nx = 1\nfrom conduit.core.facade import LoopThread as Loop\n```\n",
+            "line 3: import LoopThread from conduit, not conduit.core.facade",
+        ),
+        (
+            "```python\nfrom conduit.core import types\nfrom conduit.core.backends import (\n"
+            "    TokenStore,\n    TokenSet,\n)\n```\n",
+            "import TokenSet from conduit, not conduit.core.backends",
+        ),
+        (
+            "```python\ndef f():\n    from conduit.core.errors import SecretUnavailable\n```\n",
+            "import SecretUnavailable from conduit, not conduit.core.errors",
+        ),
+        (
+            "```python\nfrom conduit.stores.memory import MemoryTranscriptStore\n```\n",
+            "import MemoryTranscriptStore from conduit.stores, not conduit.stores.memory",
+        ),
+    ],
+    ids=["core-submodule", "aliased", "parenthesised", "nested", "layer-submodule"],
+)
+def test_the_guard_refuses_an_import_that_bypasses_the_public_path(text: str, reason: str) -> None:
+    problems = import_problems(text)
+    assert any(reason in problem for problem in problems), problems
+
+
 # The documents ----------------------------------------------------------------------
 
 
@@ -170,6 +253,11 @@ def test_every_document_is_checked_and_listed() -> None:
 @pytest.mark.parametrize("document", DOCUMENTS, ids=_name)
 def test_no_example_can_escape_the_run(document: Path) -> None:
     assert fence_problems(document.read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.parametrize("document", DOCUMENTS, ids=_name)
+def test_every_example_imports_from_the_public_path(document: Path) -> None:
+    assert import_problems(document.read_text(encoding="utf-8")) == []
 
 
 @pytest.mark.parametrize("document", DOCUMENTS, ids=_name)
