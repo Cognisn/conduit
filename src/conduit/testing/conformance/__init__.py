@@ -34,7 +34,7 @@ pytest.register_assert_rewrite(
     "conduit.testing.conformance.approval",
 )
 
-from conduit.testing.conformance.approval import ApprovalHandlerSuite  # noqa: E402
+from conduit.testing.conformance.approval import ApprovalCall, ApprovalHandlerSuite  # noqa: E402
 from conduit.testing.conformance.base import ConformanceSuite  # noqa: E402
 from conduit.testing.conformance.secret import SecretResolverSuite  # noqa: E402
 from conduit.testing.conformance.sink import EventSinkSuite  # noqa: E402
@@ -43,6 +43,7 @@ from conduit.testing.conformance.token import TokenStoreSuite  # noqa: E402
 from conduit.testing.conformance.transcript import TranscriptStoreSuite  # noqa: E402
 
 __all__ = [
+    "ApprovalCall",
     "ApprovalHandlerSuite",
     "ConformanceSuite",
     "EventSinkSuite",

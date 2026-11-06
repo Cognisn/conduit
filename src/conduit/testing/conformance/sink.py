@@ -11,8 +11,9 @@ reaches a sink's record.
 A sink is write-only, so the suite reads back what it kept through ``recorded`` (each
 event it recorded, as a mapping holding at least ``event_id``) and ``recorded_text``
 (everything it kept or sent, as text). A sink that keeps no record per event (an
-exporter of aggregates) returns ``None`` from ``recorded``; the order scenarios are
-then skipped with that reason, and the others still run.
+exporter of aggregates) opts out with ``keeps_records = False`` and overrides
+``recorded_text``; its two order scenarios are then skipped with that reason, and the
+others still run. A suite that has not opted out and reads back nothing fails.
 """
 
 # Suites are test code shipped for products to run under pytest: assertions are the point.
@@ -24,7 +25,7 @@ import asyncio
 import json
 import unittest
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from conduit.agent.events import RunFinishedEvent, RunStartedEvent
 from conduit.core.events import (
@@ -127,27 +128,31 @@ class EventSinkSuite(ConformanceSuite):
     concurrent_runs: ClassVar[int] = 8
     #: How long one emit may take before the suite calls it stuck.
     emit_deadline_s: ClassVar[float] = 5.0
+    #: Whether the sink keeps a record per event that ``recorded`` reads back. Set it
+    #: false for a sink that does not (an exporter of aggregates), and override
+    #: ``recorded_text``: the order scenarios are then skipped, saying why.
+    keeps_records: ClassVar[bool] = True
 
     async def make_sink(self) -> EventSink:
         """A new sink with an empty record, for one scenario. Products override this."""
         raise NotImplementedError("override make_sink to return your event sink")
 
-    async def recorded(self, sink: EventSink) -> Sequence[Mapping[str, Any]] | None:
+    async def recorded(self, sink: EventSink) -> Sequence[Mapping[str, Any]]:
         """Each event ``sink`` has recorded, in the order it recorded them, as a mapping
         holding at least the event's ``event_id`` (``event.model_dump(mode="json")`` is
-        one). ``None`` when the sink keeps no record per event. Products override this."""
+        one). Products override this, unless they set ``keeps_records`` false."""
         raise NotImplementedError("override recorded to read back what your sink kept")
 
     async def recorded_text(self, sink: EventSink) -> str:
         """Everything ``sink`` has kept or sent, as text, for the content scenario. The
-        default is ``recorded`` as JSON; a sink without a record per event overrides it."""
-        records = await self.recorded(sink)
-        if records is None:
+        default is ``recorded`` as JSON; a sink that keeps no record per event (with
+        ``keeps_records`` false) must override it."""
+        if not type(self).keeps_records:
             raise NotImplementedError(
-                "override recorded_text: recorded returned None, so the suite cannot read "
-                "what your sink kept"
+                "override recorded_text: keeps_records is false, so the suite cannot read "
+                "what your sink kept through recorded"
             )
-        return json.dumps(list(records), default=str, sort_keys=True)
+        return json.dumps(list(await self._records(sink)), default=str, sort_keys=True)
 
     def records(self, event: Event) -> bool:
         """Whether the sink records ``event``. Override for a sink that keeps only some
@@ -179,15 +184,22 @@ class EventSinkSuite(ConformanceSuite):
 
         self.run(scenario)
 
+    async def _records(self, sink: EventSink) -> Sequence[Mapping[str, Any]]:
+        records: Any = await self.recorded(sink)
+        assert records is not None, (
+            "recorded returned None: read back what the sink kept, or, for a sink that "
+            "keeps no record per event, set keeps_records = False and override recorded_text"
+        )
+        return cast(Sequence[Mapping[str, Any]], records)
+
     async def _ids(self, sink: EventSink) -> list[str]:
-        records = await self.recorded(sink)
-        if records is None:
+        if not type(self).keeps_records:
             raise unittest.SkipTest(
-                "the sink keeps no record per event (recorded returned None), so the order "
+                "the sink keeps no record per event (keeps_records is false), so the order "
                 "it records events in cannot be read back"
             )
         ids: list[str] = []
-        for record in records:
+        for record in await self._records(sink):
             event_id = record.get("event_id")
             assert isinstance(event_id, str), "a recorded event has no event_id"
             ids.append(event_id)

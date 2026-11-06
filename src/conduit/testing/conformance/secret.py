@@ -6,6 +6,10 @@ client when it connects, so a resolver must give back the exact value as a
 ``SecretStr``, refuse a reference it cannot resolve with ``SecretUnavailable`` naming
 the reference and nothing it holds, keep values out of its ``repr`` and its logs, and
 stay correct when several tasks resolve at once.
+
+The log scenario captures records through a handler on the root logger, so it sees
+every logger that propagates. A logger with ``propagate = False`` (or one writing
+somewhere other than ``logging``) escapes it: check such output yourself.
 """
 
 # Suites are test code shipped for products to run under pytest: assertions are the point.

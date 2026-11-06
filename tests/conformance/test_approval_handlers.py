@@ -6,11 +6,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Mapping
 from typing import Any, cast
 
 import pytest
 
+from conduit.agent import AgentRunner, Bindings
 from conduit.core.backends import ApprovalDecision, ApprovalHandler, ApprovalRequest
+from conduit.core.tools import TaskTools
 from conduit.testing.conformance import ApprovalHandlerSuite
 from conduit.testing.conformance.approval import ApprovalCall
 
@@ -152,3 +155,90 @@ def test_a_call_must_be_a_tool_name_and_its_arguments() -> None:
 def test_an_unconfigured_suite_says_what_to_override() -> None:
     with pytest.raises(NotImplementedError, match="make_handler"):
         ApprovalHandlerSuite().test_each_call_gets_its_decision()
+
+
+class _AnswersTheWrongCaller(_Base):
+    """Queues each request, then answers from the newest: the right mix of approvals and
+    refusals, given to the wrong callers when requests overlap."""
+
+    async def decide(self, request: ApprovalRequest) -> ApprovalDecision:
+        self.pending: list[ApprovalRequest] = getattr(self, "pending", [])
+        self.pending.append(request)
+        await asyncio.sleep(0.001)
+        return ApprovalDecision(approved=self.wanted(self.pending.pop()))
+
+
+def test_the_suite_fails_a_handler_that_answers_the_wrong_caller() -> None:
+    suite = _suite(_AnswersTheWrongCaller)
+    suite.test_each_call_gets_its_decision()  # sound one request at a time
+    with pytest.raises(AssertionError):
+        suite.test_concurrent_requests_get_their_own_decisions()
+
+
+# The raise and stall scenarios guard conduit's runner around the product's handler. A
+# runner that forgave a failing handler (approving on a raise, or on its own deadline
+# before the run's budget ran out) must fail them.
+
+
+class _ForgivesARaise:
+    def __init__(self, handler: ApprovalHandler) -> None:
+        self._handler = handler
+
+    async def decide(self, request: ApprovalRequest) -> ApprovalDecision:
+        try:
+            return await self._handler.decide(request)
+        except Exception:
+            return ApprovalDecision(approved=True)
+
+
+class _ForgivesAStall:
+    def __init__(self, handler: ApprovalHandler) -> None:
+        self._handler = handler
+
+    async def decide(self, request: ApprovalRequest) -> ApprovalDecision:
+        try:
+            async with asyncio.timeout(0.05):
+                return await self._handler.decide(request)
+        except TimeoutError:
+            return ApprovalDecision(approved=True)
+
+
+def _forgiving(wrapper: type[_ForgivesARaise] | type[_ForgivesAStall]) -> ApprovalHandlerSuite:
+    base = type(_suite(_Sound))
+
+    class Suite(base):  # type: ignore[valid-type, misc]
+        def build_runner(
+            self,
+            runtime: Bindings,
+            tools: Mapping[str, TaskTools],
+            handler: ApprovalHandler,
+        ) -> AgentRunner:
+            return AgentRunner(runtime, tools=tools, approvals=wrapper(handler))
+
+    return cast(ApprovalHandlerSuite, Suite())
+
+
+def test_the_raise_scenario_fails_a_runner_that_approves_on_a_raise() -> None:
+    with pytest.raises(AssertionError):
+        _forgiving(_ForgivesARaise).test_a_handler_that_raises_is_a_refusal()
+
+
+def test_the_stall_scenario_fails_a_runner_that_approves_on_a_stall() -> None:
+    with pytest.raises(AssertionError):
+        _forgiving(
+            _ForgivesAStall
+        ).test_a_handler_still_deciding_when_the_budget_ends_is_a_refusal()
+
+
+def test_the_runner_scenarios_pass_with_conduits_runner_through_the_hook() -> None:
+    class Suite(type(_suite(_Sound))):  # type: ignore[misc]
+        def build_runner(
+            self,
+            runtime: Bindings,
+            tools: Mapping[str, TaskTools],
+            handler: ApprovalHandler,
+        ) -> AgentRunner:
+            runner: AgentRunner = super().build_runner(runtime, tools, handler)
+            return runner
+
+    Suite().test_a_handler_that_raises_is_a_refusal()

@@ -26,7 +26,7 @@ from typing import Any, ClassVar
 
 from conduit.agent.budgets import RunBudget
 from conduit.agent.events import ApprovalDecidedEvent, ApprovalOutcome
-from conduit.agent.runner import AgentRunner, AgentTask
+from conduit.agent.runner import AgentRunner, AgentTask, Bindings
 from conduit.core.backends import ApprovalDecision, ApprovalHandler, ApprovalRequest
 from conduit.core.events import ToolCallEvent
 from conduit.core.tasks import CapabilityFloor, TaskClass
@@ -143,6 +143,17 @@ class ApprovalHandlerSuite(ConformanceSuite):
         )
         return decision.approved
 
+    def build_runner(
+        self,
+        runtime: Bindings,
+        tools: Mapping[str, TaskTools],
+        handler: ApprovalHandler,
+    ) -> AgentRunner:
+        """The runner the runner scenarios use: conduit's own, with ``handler`` as its
+        approvals. Products leave this alone; the suite's own tests replace it with a
+        runner that forgives a failing handler, to prove those scenarios would fail it."""
+        return AgentRunner(runtime, tools=dict(tools), approvals=handler)
+
     async def _run(
         self, handler: ApprovalHandler, call: ApprovalCall, budget: RunBudget | None = None
     ) -> _Ran:
@@ -162,10 +173,8 @@ class ApprovalHandlerSuite(ConformanceSuite):
             )
             executor = RecordingExecutor()
             registry = ToolCatalogue.from_tools([tool]).registry_for(SUITE_TASK_CLASS)
-            runner = AgentRunner(
-                runtime,
-                tools={SUITE_TASK_CLASS: TaskTools(registry, executor)},
-                approvals=handler,
+            runner = self.build_runner(
+                runtime, {SUITE_TASK_CLASS: TaskTools(registry, executor)}, handler
             )
             task = AgentTask(
                 task_class=SUITE_TASK_CLASS,
@@ -215,6 +224,8 @@ class ApprovalHandlerSuite(ConformanceSuite):
         self._scenario(body)
 
     def test_a_handler_that_raises_is_a_refusal(self) -> None:
+        """Guards conduit's runner around your handler: a decision that raises is a
+        refusal, and the tool never runs."""
         call = self.approved_call(0)
 
         async def body(handler: ApprovalHandler) -> None:
@@ -225,6 +236,8 @@ class ApprovalHandlerSuite(ConformanceSuite):
         self._scenario(body)
 
     def test_a_handler_still_deciding_when_the_budget_ends_is_a_refusal(self) -> None:
+        """Guards conduit's runner around your handler: a decision still pending when the
+        run's wall-time budget ends is a refusal, and the tool never runs."""
         call = self.approved_call(0)
         budget = RunBudget(max_wall_time_s=self.stalled_budget_s)
 

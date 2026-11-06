@@ -247,3 +247,35 @@ class _ReprSafeLiteral(_Base):
 def test_an_unconfigured_suite_says_what_to_override() -> None:
     with pytest.raises(NotImplementedError, match="make_resolver"):
         SecretResolverSuite().test_a_known_reference_resolves_to_its_value()
+
+
+class _ChainsAHarmlessCause(_Base):
+    """Chains a cause that holds no value: still a kept exception, which conduit forbids."""
+
+    async def resolve(self, ref: SecretRef) -> SecretStr:
+        if ref.name not in self.values:
+            raise SecretUnavailable(f"{ref} is unknown") from RuntimeError("store unavailable")
+        return SecretStr(self.values[ref.name])
+
+
+def test_the_suite_fails_a_resolver_that_chains_any_cause() -> None:
+    with pytest.raises(AssertionError, match="keeps a RuntimeError as its cause"):
+        _suite(_ChainsAHarmlessCause).test_an_unknown_reference_is_secret_unavailable()
+
+
+class _AnswersTheWrongCaller(_Base):
+    """Queues each reference, then answers from the newest: every value it holds comes
+    back, but to the wrong caller when calls overlap."""
+
+    async def resolve(self, ref: SecretRef) -> SecretStr:
+        self.pending: list[str] = getattr(self, "pending", [])
+        self.pending.append(ref.name)
+        await asyncio.sleep(0)
+        return SecretStr(self.values[self.pending.pop()])
+
+
+def test_the_suite_fails_a_resolver_that_answers_the_wrong_caller() -> None:
+    suite = _suite(_AnswersTheWrongCaller)
+    suite.test_a_known_reference_resolves_to_its_value()  # sound one call at a time
+    with pytest.raises(AssertionError):
+        suite.test_concurrent_references_resolve_to_their_own_values()

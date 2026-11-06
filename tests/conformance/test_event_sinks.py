@@ -23,7 +23,7 @@ class TestMemoryEventSink(EventSinkSuite):
     async def make_sink(self) -> EventSink:
         return MemoryEventSink()
 
-    async def recorded(self, sink: EventSink) -> Sequence[Mapping[str, Any]] | None:
+    async def recorded(self, sink: EventSink) -> Sequence[Mapping[str, Any]]:
         assert isinstance(sink, MemoryEventSink)
         return _memory_records(sink)
 
@@ -38,7 +38,7 @@ class TestFanOutSink(EventSinkSuite):
     async def make_sink(self) -> EventSink:
         return _FanOutOverMemory()
 
-    async def recorded(self, sink: EventSink) -> Sequence[Mapping[str, Any]] | None:
+    async def recorded(self, sink: EventSink) -> Sequence[Mapping[str, Any]]:
         assert isinstance(sink, _FanOutOverMemory)
         return _memory_records(sink.memory)
 
@@ -54,13 +54,15 @@ class TestFanOutSinkBesideAFailingSink(EventSinkSuite):
     async def make_sink(self) -> EventSink:
         return _FanOutOverMemory(_AlwaysFails())
 
-    async def recorded(self, sink: EventSink) -> Sequence[Mapping[str, Any]] | None:
+    async def recorded(self, sink: EventSink) -> Sequence[Mapping[str, Any]]:
         assert isinstance(sink, _FanOutOverMemory)
         return _memory_records(sink.memory)
 
 
 class TestOtelEventSink(EventSinkSuite):
     """Spans and metrics in memory (the otel extra and the SDK, a dev dependency)."""
+
+    keeps_records = False  # spans and metrics, not a record per event
 
     @pytest.fixture(autouse=True)
     def _telemetry(self) -> Iterator[None]:
@@ -96,9 +98,6 @@ class TestOtelEventSink(EventSinkSuite):
 
         assert isinstance(sink, OtelEventSink)
         sink.close()
-
-    async def recorded(self, sink: EventSink) -> Sequence[Mapping[str, Any]] | None:
-        return None  # spans and metrics, not a record per event
 
     async def recorded_text(self, sink: EventSink) -> str:
         from conduit.integrations.otel import OtelEventSink
@@ -150,7 +149,7 @@ class TestWardenAuditSink(EventSinkSuite):
 
         return event.type in CONDUIT_ACTIONS
 
-    async def recorded(self, sink: EventSink) -> Sequence[Mapping[str, Any]] | None:
+    async def recorded(self, sink: EventSink) -> Sequence[Mapping[str, Any]]:
         return [
             {**record.details, "action": record.action, "outcome": record.outcome}
             for record in self.recorder.events
@@ -217,7 +216,7 @@ def _suite(sink: type[_Kept], *, slow: bool = False) -> EventSinkSuite:
         async def make_sink(self) -> EventSink:
             return sink()
 
-        async def recorded(self, made: EventSink) -> Sequence[Mapping[str, Any]] | None:
+        async def recorded(self, made: EventSink) -> Sequence[Mapping[str, Any]]:
             assert isinstance(made, _Kept)
             return _memory_records(made)
 
@@ -250,7 +249,7 @@ def test_the_suite_fails_a_sink_whose_record_holds_withheld_content() -> None:
         async def make_sink(self) -> EventSink:
             return MemoryEventSink()
 
-        async def recorded(self, made: EventSink) -> Sequence[Mapping[str, Any]] | None:
+        async def recorded(self, made: EventSink) -> Sequence[Mapping[str, Any]]:
             return []
 
         async def recorded_text(self, made: EventSink) -> str:
@@ -261,16 +260,84 @@ def test_the_suite_fails_a_sink_whose_record_holds_withheld_content() -> None:
         Suite().test_withheld_content_never_reaches_the_sink()
 
 
-def test_a_sink_without_a_record_skips_the_order_scenarios_with_a_reason() -> None:
+def test_a_sink_that_opts_out_of_records_skips_the_order_scenarios_with_a_reason() -> None:
+    class Suite(EventSinkSuite):
+        keeps_records = False
+
+        async def make_sink(self) -> EventSink:
+            return MemoryEventSink()
+
+        async def recorded_text(self, made: EventSink) -> str:
+            return ""
+
+    for scenario in (
+        Suite().test_every_event_is_recorded_in_order,
+        Suite().test_concurrent_emits_are_each_recorded_once_in_order,
+    ):
+        with pytest.raises(unittest.SkipTest, match="keeps no record per event"):
+            scenario()
+
+
+def test_a_sink_that_keeps_no_record_fails_unless_it_opts_out() -> None:
     class Suite(EventSinkSuite):
         async def make_sink(self) -> EventSink:
             return MemoryEventSink()
 
-        async def recorded(self, made: EventSink) -> Sequence[Mapping[str, Any]] | None:
-            return None
+        async def recorded(self, made: EventSink) -> Sequence[Mapping[str, Any]]:
+            return None  # type: ignore[return-value]  # what a no-op sink's suite returns
 
-    with pytest.raises(unittest.SkipTest, match="keeps no record per event"):
+    with pytest.raises(AssertionError, match="keeps_records = False"):
         Suite().test_every_event_is_recorded_in_order()
+
+
+def test_a_sink_that_opts_out_must_say_what_it_kept() -> None:
+    class Suite(EventSinkSuite):
+        keeps_records = False
+
+        async def make_sink(self) -> EventSink:
+            return MemoryEventSink()
+
+    with pytest.raises(NotImplementedError, match="recorded_text"):
+        Suite().test_withheld_content_never_reaches_the_sink()
+
+
+class _ReordersWhenEmitsOverlap(_Kept):
+    """Records in order when emits come one at a time, newest first when they overlap."""
+
+    async def emit(self, event: Event) -> None:
+        self.inflight = getattr(self, "inflight", 0) + 1
+        await asyncio.sleep(0)
+        if self.inflight > 1:
+            self.events.insert(0, event)
+        else:
+            self.events.append(event)
+        self.inflight -= 1
+
+
+def test_the_suite_fails_a_sink_that_reorders_only_under_concurrency() -> None:
+    suite = _suite(_ReordersWhenEmitsOverlap)
+    suite.test_every_event_is_recorded_in_order()  # sound one emit at a time
+    with pytest.raises(AssertionError, match="out of order"):
+        suite.test_concurrent_emits_are_each_recorded_once_in_order()
+
+
+def test_a_records_filter_that_keeps_nothing_is_refused() -> None:
+    class Suite(EventSinkSuite):
+        async def make_sink(self) -> EventSink:
+            return MemoryEventSink()
+
+        async def recorded(self, made: EventSink) -> Sequence[Mapping[str, Any]]:
+            return []
+
+        def records(self, event: Event) -> bool:
+            return False
+
+    for scenario in (
+        Suite().test_every_event_is_recorded_in_order,
+        Suite().test_concurrent_emits_are_each_recorded_once_in_order,
+    ):
+        with pytest.raises(AssertionError, match="keeps none of the suite's events"):
+            scenario()
 
 
 @pytest.mark.parametrize(
