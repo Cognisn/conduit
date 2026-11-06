@@ -3,7 +3,10 @@
 ``create_client`` imports httpx and builds an ``AsyncClient`` for the configured base
 URL. The client ignores the environment (``trust_env=False``): a proxy variable or a
 ``.netrc`` entry must not route prompts to another host or attach credentials, and it
-never follows redirects. Each call sets its own timeout from the request.
+never follows redirects. Each call sets its own timeout from the request. The client is
+built in the guarded step every adapter uses (see ``conduit.providers``): a constructor
+that raises becomes a fixed ``ConfigurationError`` naming the adapter and the
+exception's class.
 
 Providers read the context window and structured-output support from the catalogue
 the registry passes to ``create_provider``: the one it applied the product's overlays
@@ -22,6 +25,7 @@ from pydantic import SecretStr
 from conduit.core.catalogue import Catalogue, default_catalogue
 from conduit.core.errors import ConfigurationError
 from conduit.core.provider import Provider
+from conduit.core.registry import guarded_client
 from conduit.core.settings import ProviderSettings
 from conduit.providers.ollama.provider import OllamaProvider
 from conduit.providers.ollama.settings import OllamaSettings
@@ -49,13 +53,18 @@ class OllamaFactory:
         """An httpx ``AsyncClient`` for ``settings``. Imports httpx here only."""
         ollama = _ollama(settings)
         httpx = importlib.import_module("httpx")
-        return httpx.AsyncClient(
-            base_url=ollama.base_url,
-            timeout=DEFAULT_TIMEOUT_S,
-            trust_env=False,
-            follow_redirects=False,
-            transport=self._transport,
-        )
+        transport = self._transport
+
+        def build() -> Any:
+            return httpx.AsyncClient(
+                base_url=ollama.base_url,
+                timeout=DEFAULT_TIMEOUT_S,
+                trust_env=False,
+                follow_redirects=False,
+                transport=transport,
+            )
+
+        return guarded_client(self.kind, build)
 
     def create_provider(
         self,

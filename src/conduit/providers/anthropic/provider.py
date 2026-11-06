@@ -18,7 +18,9 @@ refused while it is set (``info`` logs only retries and is allowed). A product t
 sets the ``anthropic`` logger to DEBUG itself takes on the same exposure.
 
 The SDK is imported only inside ``create_client``. Errors name the variable, never its
-value.
+value. The key is resolved and the client built in one guarded step (see
+``conduit.providers``): a constructor that raises becomes a fixed
+``ConfigurationError`` naming the adapter and the exception's class.
 
 Foundry takes an API key or Microsoft Entra ID (Q0011). Entra ID shares the
 OpenAI-compatible adapter's approach (``conduit.providers.openai_compat.entra``):
@@ -50,6 +52,7 @@ from pydantic import SecretStr
 from conduit.core.catalogue import Catalogue, default_catalogue
 from conduit.core.errors import ConfigurationError, ProviderError, ProviderFailure
 from conduit.core.provider import BaseProvider, Provider
+from conduit.core.registry import guarded_client
 from conduit.core.settings import ProviderSettings
 from conduit.core.streaming import StreamEvent
 from conduit.core.types import ModelRequest
@@ -211,35 +214,41 @@ class AnthropicFactory:
                 "the anthropic provider needs the anthropic extra: "
                 "pip install 'cognisn-conduit[anthropic]'"
             )
-        if validated.endpoint == "direct":
-            return sdk.AsyncAnthropic(
-                api_key=secrets["api_key"].get_secret_value(),
-                base_url=validated.base_url or DEFAULT_BASE_URL,
-                max_retries=validated.max_retries,
-                open_telemetry=False,
-            )
-        if validated.entra_id is None:
-            return sdk.AsyncAnthropicFoundry(
-                api_key=secrets["api_key"].get_secret_value(),
-                base_url=validated.base_url,
-                max_retries=validated.max_retries,
-                open_telemetry=False,
-            )
-        credential, token_provider = entra_id_token_provider(validated.entra_id)
-        try:
-            client = sdk.AsyncAnthropicFoundry(
-                azure_ad_token_provider=token_provider,
-                base_url=validated.base_url,
-                max_retries=validated.max_retries,
-                open_telemetry=False,
-            )
-        except Exception:
-            close_soon(credential)
-            raise
-        # The SDK reads a key from the environment when none is given; with Entra ID
-        # the token always wins, and the client holds no key at all.
-        client.api_key = None
-        return FoundryEntraClient(sdk=client, credential=credential)
+        entra_id = validated.entra_id
+
+        def build() -> Any:
+            # The key is resolved here, in the guarded step's own frame.
+            if validated.endpoint == "direct":
+                return sdk.AsyncAnthropic(
+                    api_key=secrets["api_key"].get_secret_value(),
+                    base_url=validated.base_url or DEFAULT_BASE_URL,
+                    max_retries=validated.max_retries,
+                    open_telemetry=False,
+                )
+            if entra_id is None:
+                return sdk.AsyncAnthropicFoundry(
+                    api_key=secrets["api_key"].get_secret_value(),
+                    base_url=validated.base_url,
+                    max_retries=validated.max_retries,
+                    open_telemetry=False,
+                )
+            credential, token_provider = entra_id_token_provider(entra_id)
+            try:
+                client = sdk.AsyncAnthropicFoundry(
+                    azure_ad_token_provider=token_provider,
+                    base_url=validated.base_url,
+                    max_retries=validated.max_retries,
+                    open_telemetry=False,
+                )
+            except Exception:
+                close_soon(credential)
+                raise
+            # The SDK reads a key from the environment when none is given; with Entra ID
+            # the token always wins, and the client holds no key at all.
+            client.api_key = None
+            return FoundryEntraClient(sdk=client, credential=credential)
+
+        return guarded_client(self.kind, build)
 
     def create_provider(
         self,
