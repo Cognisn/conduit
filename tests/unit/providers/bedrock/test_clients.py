@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import importlib
 import json
+import logging
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,13 @@ from conduit.core.secrets import LiteralSecretResolver
 from conduit.core.settings import ProviderSettings
 from conduit.core.types import Message, ModelRequest
 from conduit.providers.bedrock import BedrockFactory, BedrockSettings
-from conduit.providers.bedrock.auth import SHORT_TERM_PREFIX
+from conduit.providers.bedrock.auth import (
+    ENDPOINT_LOGGER,
+    SHORT_TERM_PREFIX,
+    SIGNER_LOGGER,
+    RenderedRecordFilter,
+    SignatureRecordFilter,
+)
 
 # The documentation example access key pair, never a real credential.
 ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
@@ -195,6 +202,103 @@ class TestApiKeys:
         with pytest.raises(ConfigurationError, match="NoCredentialsError") as raised:
             client_for({"mode": "short_term_api_key"})
         assert raised.value.__cause__ is None and raised.value.__context__ is None
+
+
+class Busy(Sent):
+    """Answers the first request as busy (503), then as ``Sent`` does."""
+
+    def __call__(self, request: Any, **kwargs: Any) -> Any:
+        if self.requests:
+            return super().__call__(request, **kwargs)
+        self.requests.append(request)
+        aws_response = importlib.import_module("botocore.awsrequest").AWSResponse
+        body = json.dumps({"message": "busy"}).encode()
+
+        class Raw:
+            def stream(self, **_: Any) -> Iterator[bytes]:
+                yield body
+
+        headers = {"Content-Type": "application/json", "x-amzn-ErrorType": "ServiceUnavailable"}
+        return aws_response(request.url, 503, headers, Raw())
+
+
+#: Every logger that sees a request or its signing: the root, botocore's, boto3's, the
+#: HTTP library's and conduit's.
+DEBUG_LOGGERS = (
+    "",
+    "botocore",
+    "botocore.auth",
+    "botocore.endpoint",
+    "botocore.hooks",
+    "botocore.retries",
+    "botocore.credentials",
+    "boto3",
+    "urllib3",
+    "conduit",
+)
+
+
+class TestLogging:
+    """No key reaches a log record, even with every logger at DEBUG.
+
+    botocore's SigV4 signer logs each signature at DEBUG on ``botocore.auth``, and a
+    presigned short-term key can be rebuilt from it with the canonical request it also
+    logs. A product enables those records simply by running its root logger at DEBUG.
+    """
+
+    @pytest.mark.parametrize("mode", ["short_term", "long_term"])
+    def test_the_key_is_in_no_record_across_a_retry(
+        self, mode: str, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Start without conduit's record filters, whichever test installed them first,
+        # so only this client's creation can put them there.
+        for name in (SIGNER_LOGGER, ENDPOINT_LOGGER):
+            logger = logging.getLogger(name)
+            kept = [
+                f
+                for f in logger.filters
+                if not isinstance(f, SignatureRecordFilter | RenderedRecordFilter)
+            ]
+            monkeypatch.setattr(logger, "filters", kept)
+        # No backoff wait before the retry.
+        standard = importlib.import_module("botocore.retries.standard")
+        monkeypatch.setattr(standard.ExponentialBackoff, "delay_amount", lambda *_: 0)
+        for name in DEBUG_LOGGERS:
+            caplog.set_level(logging.DEBUG, logger=name)
+        if mode == "short_term":
+            auth: dict[str, Any] = {"mode": "short_term_api_key", "source": ACCESS_KEYS}
+            fields: dict[str, Any] = {}
+        else:
+            auth = {"mode": "long_term_api_key", "api_key": "secret://bedrock/key"}
+            fields = {"allow_long_term_api_keys": True}
+        settings = BedrockSettings.model_validate(
+            {"region": "eu-west-2", "auth": auth, "max_attempts": 2, **fields}
+        )
+        secrets = {
+            "auth.source.access_key_id": SecretStr(ACCESS_KEY_ID),
+            "auth.source.secret_access_key": SecretStr(SECRET_ACCESS_KEY),
+            "auth.api_key": SecretStr("long-term-example-key"),
+        }
+        client = BedrockFactory().create_client(settings, secrets)
+        busy = Busy()
+        client.meta.events.register("before-send.bedrock-runtime", busy)
+        client.converse(modelId="anthropic.claude-sonnet-4-6", messages=[])
+        assert len(busy.requests) == 2  # the retry carried the key too
+        keys = {_text(r.headers["Authorization"]).removeprefix("Bearer ") for r in busy.requests}
+        assert caplog.records  # botocore did log at DEBUG
+        assert any(r.name == "botocore.auth" for r in caplog.records) == (mode == "short_term")
+        for record in caplog.records:
+            text = record.getMessage() + (record.exc_text or "")
+            for key in keys:
+                assert key not in text, record.name
+                # A presigned key's signature is enough to rebuild it.
+                if key.startswith(SHORT_TERM_PREFIX):
+                    signature = decode(key)["X-Amz-Signature"][0]
+                    assert signature not in text, record.name
+
+
+def _text(value: str | bytes) -> str:
+    return value.decode() if isinstance(value, bytes) else value
 
 
 class AnsweringFactory(BedrockFactory):

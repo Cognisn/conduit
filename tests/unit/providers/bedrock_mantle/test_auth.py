@@ -1,22 +1,15 @@
-"""Bearer keys set at send time, read off the event loop, and kept out of log records."""
+"""Bearer keys set at send time, read off the event loop, and only through the hook."""
 
 from __future__ import annotations
 
 import asyncio
-import logging
 import threading
 from typing import Any
 
 import pytest
 
 from conduit.core.errors import ProviderError, ProviderFailure
-from conduit.providers.bedrock_mantle.auth import (
-    SIGNER_LOGGER,
-    SignatureRecordFilter,
-    bearer_client_class,
-    keep_signatures_out_of_logs,
-    set_bearer,
-)
+from conduit.providers.bedrock_mantle.auth import bearer_client_class, set_bearer
 
 MARKER = "SECRET-MARKER-7f3a"
 
@@ -128,24 +121,3 @@ async def test_the_client_class_sets_the_key_in_its_send_time_hook() -> None:
     await client._prepare_request(request)
     assert client.prepared == [request]  # the SDK's own hook still runs
     assert request.headers == {"Authorization": "Bearer bedrock-api-key-synthetic-1"}
-
-
-def _record(msg: str, *args: Any) -> logging.LogRecord:
-    return logging.LogRecord(SIGNER_LOGGER, logging.DEBUG, __file__, 1, msg, args, None)
-
-
-def test_the_filter_drops_signature_records_only() -> None:
-    record_filter = SignatureRecordFilter()
-    assert not record_filter.filter(_record("Signature:\n%s", "abc123"))
-    assert record_filter.filter(_record("Calculating signature using v4 auth."))
-    assert record_filter.filter(_record("StringToSign:\n%s", "AWS4-HMAC-SHA256"))
-
-
-def test_the_filter_is_installed_on_the_signer_logger_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    logger = logging.getLogger(SIGNER_LOGGER)
-    monkeypatch.setattr(logger, "filters", [])  # restored afterwards
-    keep_signatures_out_of_logs()
-    keep_signatures_out_of_logs()
-    assert sum(isinstance(f, SignatureRecordFilter) for f in logger.filters) == 1
