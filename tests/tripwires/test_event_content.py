@@ -26,6 +26,7 @@ from __future__ import annotations
 import base64
 import enum
 import importlib
+import importlib.util
 import json
 import pkgutil
 import types
@@ -391,7 +392,11 @@ class TestEveryEventClass:
             "ToolCallStartedEvent",
             "RunFinishedEvent",
         } <= with_content
-        assert {"ToolCallEvent", "ToolCallStartedEvent"} <= with_tool_content
+        tool_classes = {"ToolCallEvent", "ToolCallStartedEvent"}
+        if importlib.util.find_spec("mcp") is not None:  # the MCP layer is the mcp extra's
+            tool_classes.add("McpCallEvent")
+            assert "McpCallEvent" in with_content
+        assert tool_classes <= with_tool_content
 
     async def test_with_capture_off_no_class_carries_content_to_a_sink(self) -> None:
         leaks = []
