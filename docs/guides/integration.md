@@ -545,7 +545,7 @@ with start_sync(
     assert "".join(pieces) == "streamed"
 ```
 
-Leaving the `with` block closes every provider. `timeout` applies to start-up and to every later call (each step of a stream has its own); a call that times out has been cancelled, and has finished its cleanup, before `TimeoutError` reaches the caller. `sync_runtime.with_timeout(seconds)` gives the same runtime with another timeout.
+Leaving the `with` block closes every provider. `timeout` applies to start-up and to every later call (each step of a stream has its own); a call that times out is cancelled on the loop, and has normally finished its cleanup before `TimeoutError` reaches the caller; if the cleanup itself hangs, the caller is released with `TimeoutError` after a further grace period (`UNWIND_GRACE_S`, 10 seconds) while the cleanup carries on. `sync_runtime.with_timeout(seconds)` gives the same runtime with another timeout.
 
 ### Holding the objects the facade returns
 
@@ -604,4 +604,4 @@ conduit errors never chain the exception they replace: `__cause__` and `__contex
 
 ## Logging
 
-conduit logs through the standard `logging` module under the `conduit` logger (`conduit.registry`, `conduit.facade`, `conduit.providers.bedrock` and so on) and configures no handler. Its records never carry prompt or tool content, or a credential. Some provider SDKs can log request content or credentials at DEBUG on their own loggers; [Providers](providers.md) lists what each adapter refuses or documents. Keep the `botocore`, `anthropic`, `openai` and `httpx` loggers above DEBUG in production.
+conduit logs through the standard `logging` module under the `conduit` logger (`conduit.registry`, `conduit.facade`, `conduit.compaction`, `conduit.mcp` and so on) and configures no handler. Its records never carry prompt or tool content, or a credential. Some provider SDKs can log request content or credentials at DEBUG on their own loggers; [Providers](providers.md) lists what each adapter refuses or documents. Keep the `botocore`, `anthropic`, `openai` and `httpx` loggers above DEBUG in production.

@@ -58,7 +58,7 @@ uvx --from "cognisn-conduit[cli,all-providers]" conduit
 
 ### Local embeddings and CPU-only torch
 
-The `local-embeddings` extra runs sentence-transformers on the CPU. conduit never uses a GPU, so install torch's CPU-only build. On Linux the default torch from PyPI also installs about 2.4 GB of NVIDIA CUDA packages conduit never uses; the macOS and Windows wheels on PyPI are CPU-only already.
+The `local-embeddings` extra runs sentence-transformers on the CPU. conduit never uses a GPU, so install torch's CPU-only build. On Linux the default torch from PyPI also installs NVIDIA CUDA packages, which are large and which conduit never uses; the macOS and Windows wheels on PyPI are CPU-only already.
 
 With pip, install torch from the CPU index first, then conduit:
 
@@ -69,7 +69,7 @@ pip install "cognisn-conduit[local-embeddings]"
 
 A later `pip install --upgrade torch` without `--index-url` brings the CUDA build back.
 
-With uv in a project, take torch from the CPU index in `pyproject.toml`, then add conduit:
+With uv in a project, take torch from the CPU index in `pyproject.toml`, then add torch as a direct dependency alongside conduit, so the source applies to it:
 
 ```toml
 [[tool.uv.index]]
@@ -82,7 +82,7 @@ torch = { index = "pytorch-cpu" }
 ```
 
 ```sh
-uv add "cognisn-conduit[local-embeddings]"
+uv add torch "cognisn-conduit[local-embeddings]"
 ```
 
 With uv in a plain environment, or uvx for a throwaway run:

@@ -48,7 +48,7 @@ The core install and the stub provider need no extra. [Setting up providers](htt
 | `mcp` | MCP client over the official SDK (stdio, streamable HTTP and SSE), with static credentials and an OAuth 2.1 client |
 | `sql` | SQL transcript and token stores (SQLAlchemy; Postgres and SQLite) with their own schema and migrations |
 | `konfig` | konfig settings loader and secret resolver |
-| `warden` | Records conduit events in warden's audit trail (metadata only). Pulls about 37 packages, including psycopg (LGPL-3.0, a reviewed licence exception) |
+| `warden` | Records conduit events in warden's audit trail (metadata only). 37 runtime packages with the core, including psycopg (LGPL-3.0, a reviewed licence exception) |
 | `otel` | OpenTelemetry spans and metrics (the OpenTelemetry API; the product supplies the SDK and exporters) |
 | `cli` | A terminal interface demonstrating the public API (`uvx --from "cognisn-conduit[cli]" conduit`) |
 

@@ -54,7 +54,7 @@ key = asyncio.run(resolver.resolve(SecretRef.parse("secret://example/anthropic")
 assert key.get_secret_value() == "sk-example-not-real"
 ```
 
-A reference name may hold letters, digits and `_ . / : -`, so it can name a path in a vault (`secret://prod/ai/anthropic`) or an ARN-like key. The konfig extra's `KonfigSecretResolver` resolves references through konfig's secrets store (AWS Secrets Manager or konfig's encrypted store).
+A reference name may hold letters, digits and `_ . / : -`, so it can name a path in a vault (`secret://prod/ai/anthropic`) or an ARN-like key. The konfig extra's `KonfigSecretResolver` resolves references through konfig's secrets store, whichever backend konfig has selected: its encrypted file, the operating system's keyring, an AWS Secrets Manager secret per name, or a designated Secrets Manager bundle. konfig's backends are synchronous, so each read runs in a worker thread.
 
 There is no conformance suite for resolvers in this release; the example's behaviour (a value for a known reference, `SecretUnavailable` naming only the reference otherwise, no value in `repr`) is what conduit relies on.
 

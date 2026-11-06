@@ -55,7 +55,7 @@ async def one_call(events: FanOutSink) -> None:
 pip install "cognisn-conduit[warden]"
 ```
 
-The extra installs cognisn-warden, which is published as pre-releases only (the extra pins one, so resolvers accept it). warden's audit recorder writes to PostgreSQL through psycopg, which is licensed LGPL-3.0: conduit's licence policy accepts it as a named, reviewed exception for this extra. The extra brings in about 37 packages in all; install it only where the product records an audit trail.
+The extra installs cognisn-warden, which is published as pre-releases only (the extra pins one, so resolvers accept it). warden's audit recorder writes to PostgreSQL through psycopg, which is licensed LGPL-3.0: conduit's licence policy accepts it as a named, reviewed exception for this extra. With the core, the extra comes to 37 runtime packages; install it only where the product records an audit trail.
 
 Each audited event type is a warden action named `conduit.<event type>` (`conduit.model_call_finished`, `conduit.tool_call`, `conduit.run_finished` and so on), with a severity and a summary. **Register conduit's actions** in the product's warden `ActionRegistry` with `register_conduit_actions` before recording: the sink records an event only when its action is registered, so nothing unregistered ever reaches the trail.
 
