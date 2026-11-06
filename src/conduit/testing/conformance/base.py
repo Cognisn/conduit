@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import ClassVar
+from typing import Any, ClassVar
+
+#: Scenarios abandoned at their bound. Their loops are closed, so they never run again;
+#: they are kept referenced on purpose, so asyncio never reports them as destroyed while
+#: pending in whatever test happens to collect them. The leak is deliberate and small: a
+#: hung backend's scenario per failing test.
+_ABANDONED: set[asyncio.Future[Any]] = set()
 
 
 class ConformanceSuite:
@@ -50,6 +56,7 @@ class ConformanceSuite:
             done, _ = await asyncio.wait({task}, timeout=suite.scenario_cancel_grace_s)
             if task not in done:
                 abandoned = True
+                _ABANDONED.add(task)
             elif not task.cancelled():
                 task.exception()  # retrieved, so the loop does not report it as unread
 
@@ -61,6 +68,9 @@ class ConformanceSuite:
                 # Closing the runner would cancel the stuck scenario again and wait for it
                 # without end; close only the loop, leaving the scenario behind.
                 runner.get_loop().close()
+                if suite.loop_factory is None:
+                    # As Runner.close does: no closed loop is left as the current one.
+                    asyncio.set_event_loop(None)
             else:
                 runner.close()
         # Raised here, outside every handler, so it keeps no timeout as its context.

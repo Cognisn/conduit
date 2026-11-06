@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gc
+import logging
 import time
 import unittest
+import warnings
 from collections.abc import Mapping, Sequence
 from typing import ClassVar
 
@@ -37,6 +40,7 @@ from conduit.testing.conformance import (
     TokenStoreSuite,
     TranscriptStoreSuite,
 )
+from tests.conformance.meta import fails
 
 BOUND = 0.3
 GRACE = 0.3
@@ -280,3 +284,70 @@ class _TokenSuiteHangingOnClose(TokenStoreSuite):
 
 def test_a_suite_whose_backend_hangs_in_close_fails_within_the_grace() -> None:
     _fails_within_the_bound(_TokenSuiteHangingOnClose().test_an_unknown_key_is_none)
+
+
+async def _swallows_cancellation() -> None:
+    while True:
+        with contextlib.suppress(asyncio.CancelledError):  # the defect
+            await asyncio.sleep(10)
+
+
+def test_an_abandoned_scenario_logs_no_asyncio_error_when_collected(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with fails(match="did not finish"):
+        _Bounded().run(_swallows_cancellation)
+    with caplog.at_level(logging.DEBUG, logger="asyncio"):
+        gc.collect()
+        gc.collect()
+    errors = [r.getMessage() for r in caplog.records if r.name == "asyncio"]
+    assert errors == []
+
+
+def test_an_abandoned_scenario_leaves_no_closed_loop_current() -> None:
+    with fails(match="did not finish"):
+        _Bounded().run(_swallows_cancellation)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        try:
+            current = asyncio.get_event_loop()
+        except RuntimeError:
+            return  # no current loop, as after asyncio.Runner closes
+    try:
+        assert not current.is_closed(), "the abandoned scenario's closed loop is still current"
+    finally:
+        if not current.is_closed():
+            current.close()
+        asyncio.set_event_loop(None)
+
+
+class _ResolverClosedAfterTheBound:
+    def __init__(self) -> None:
+        self.closed_at: float | None = None
+
+    async def resolve(self, ref: SecretRef) -> SecretStr:
+        await _forever()
+        raise AssertionError("unreachable")
+
+    async def aclose(self) -> None:
+        await asyncio.sleep(0.05)  # a close that takes a moment, as a real one does
+        self.closed_at = time.monotonic()
+
+
+def test_a_backend_is_closed_after_the_bound_and_within_the_grace() -> None:
+    made: list[_ResolverClosedAfterTheBound] = []
+
+    class Suite(SecretResolverSuite):
+        scenario_timeout_s: ClassVar[float] = BOUND
+        scenario_cancel_grace_s: ClassVar[float] = 10.0
+
+        async def make_resolver(self, secrets: Mapping[str, str]) -> SecretResolver:
+            made.append(_ResolverClosedAfterTheBound())
+            return made[0]
+
+    began = time.monotonic()
+    with fails(match="did not finish"):
+        Suite().test_a_known_reference_resolves_to_its_value()
+    [resolver] = made
+    assert resolver.closed_at is not None, "the backend was never closed"
+    assert BOUND <= resolver.closed_at - began < BOUND + 5.0
