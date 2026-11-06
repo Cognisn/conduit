@@ -12,6 +12,13 @@ Two halves, never skipped or weakened:
   check is not vacuous). Tool content an emitter mislabels as prompt content stays out
   when only prompts are captured. Provider state is prompt content: it is captured with
   prompts, and never under the tool-content setting alone.
+- Every class: each event class in every layer (core, registry, agent, skills, MCP,
+  compaction) is built with the marker in every content field, all labelled as prompt
+  content, and sent through a ``FanOutSink``. With capture off no marker reaches the
+  sink; with prompts only, no marker remains in a tool-content field; with both on, the
+  marker reaches the sink from every class that has a content field. Every module that
+  defines an event class must be listed in ``EVENT_MODULES``, so a new layer's events
+  cannot be missed, and the scan must see every class each listed module defines.
 """
 
 from __future__ import annotations
@@ -19,6 +26,7 @@ from __future__ import annotations
 import base64
 import enum
 import importlib
+import json
 import pkgutil
 import types
 from datetime import datetime
@@ -30,6 +38,7 @@ from pydantic.fields import FieldInfo
 
 import conduit
 from conduit.core.events import (
+    CaptureAs,
     CapturedContent,
     CapturePolicy,
     ContentKind,
@@ -257,3 +266,174 @@ class TestBehaviour:
     async def test_content_reaches_a_sink_when_the_product_opts_in(self) -> None:
         events = await _events(CapturePolicy(prompts=True, tool_content=True))
         assert all(MARKER in e.model_dump_json() for e in events)
+
+
+#: Every module that defines conduit event classes. The scan must see every class each
+#: defines, and a module defining event classes that is not listed fails the check, so
+#: a new layer's events are always covered.
+EVENT_MODULES = (
+    "conduit.core.events",
+    "conduit.core.registry",
+    "conduit.agent.events",
+    "conduit.compaction.events",
+    "conduit.skills.events",
+    "conduit.mcp.events",
+)
+
+LOOSE = CapturePolicy(prompts=True, tool_content=True)
+
+
+def _declares_tool_content(annotation: Any, metadata: list[Any]) -> bool:
+    if any(isinstance(m, CaptureAs) and m.kind is ContentKind.TOOL for m in metadata):
+        return True
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        inner, *extra = get_args(annotation)
+        return _declares_tool_content(inner, [*metadata, *extra])
+    if origin in (Union, types.UnionType):
+        return any(_declares_tool_content(arg, []) for arg in get_args(annotation))
+    return False
+
+
+def _sample(annotation: Any) -> Any:
+    """A valid value for ``annotation``, with the marker (labelled as prompt content) in
+    every ``CapturedContent``, so a policy that relabels nothing would leak tool content."""
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _sample(get_args(annotation)[0])
+    if origin in (Union, types.UnionType):
+        return _sample(next(a for a in get_args(annotation) if a is not type(None)))
+    if origin is Literal:
+        return get_args(annotation)[0]
+    if origin in (tuple, frozenset, list):
+        item = next(a for a in get_args(annotation) if a is not Ellipsis)
+        return origin([_sample(item)])
+    if annotation is CapturedContent:
+        return LOOSE.capture(ContentKind.PROMPT, MARKER)
+    if annotation is str:
+        return "sample_id"
+    if annotation is bool:
+        return True
+    if annotation in (int, float):
+        return annotation(1)
+    if annotation is datetime:
+        return datetime(2026, 1, 1).astimezone()
+    if isinstance(annotation, type) and issubclass(annotation, enum.Enum):
+        return next(iter(annotation))
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation(**_sample_fields(annotation))
+    raise AssertionError(f"no sample for {annotation!r}")
+
+
+def _sample_fields(model: type[BaseModel]) -> dict[str, Any]:
+    return {name: _sample(info.annotation) for name, info in model.model_fields.items()}
+
+
+def _content_fields(cls: type[Event]) -> dict[str, bool]:
+    """Each top-level field that holds content, and whether it is declared tool content."""
+    sample = cls(**_sample_fields(cls))
+    return {
+        name: _declares_tool_content(info.annotation, list(info.metadata))
+        for name, info in cls.model_fields.items()
+        if MARKER in _field_text(sample, name)
+    }
+
+
+async def _through(event: Event, policy: CapturePolicy) -> Event:
+    sink = MemoryEventSink()
+    await FanOutSink([sink], policy=policy).emit(event)
+    (received,) = sink.events
+    return received
+
+
+def _field_text(event: Event, name: str) -> str:
+    return json.dumps(event.model_dump(mode="json")[name])
+
+
+def _conduit_event_classes() -> list[type[Event]]:
+    return sorted(
+        (c for c in _event_classes() if c.__module__.startswith("conduit.")),
+        key=lambda c: (c.__module__, c.__name__),
+    )
+
+
+class TestEveryEventClass:
+    def test_every_module_defining_events_is_listed(self) -> None:
+        defining = {c.__module__ for c in _conduit_event_classes()}
+        assert defining <= set(EVENT_MODULES), sorted(defining - set(EVENT_MODULES))
+
+    @pytest.mark.parametrize("module", EVENT_MODULES)
+    def test_the_scan_sees_every_class_a_listed_module_defines(self, module: str) -> None:
+        try:
+            loaded = importlib.import_module(module)
+        except ImportError as error:
+            if (error.name or "").split(".")[0] not in _OPTIONAL_ROOTS:
+                raise
+            pytest.skip(f"{module} needs an optional extra that is not installed")
+        defined = {
+            value
+            for value in vars(loaded).values()
+            if isinstance(value, type) and issubclass(value, Event) and value.__module__ == module
+        }
+        assert defined, module
+        assert defined <= _event_classes()
+
+    def test_the_sample_events_are_not_vacuous(self) -> None:
+        classes = _conduit_event_classes()
+        with_content = {c.__name__ for c in classes if _content_fields(c)}
+        with_tool_content = {c.__name__ for c in classes if any(_content_fields(c).values())}
+        assert len(classes) >= 20
+        assert {
+            "ModelCallStartedEvent",
+            "ModelCallFinishedEvent",
+            "ToolCallEvent",
+            "EmbeddingCallStartedEvent",
+            "TextDeltaEvent",
+            "ToolCallStartedEvent",
+            "RunFinishedEvent",
+            "CompactionEvent",
+        } <= with_content
+        # conduit.mcp.events imports nothing from the mcp SDK, so it is always scanned.
+        assert "McpCallEvent" in with_content
+        assert {"ToolCallEvent", "ToolCallStartedEvent", "McpCallEvent"} <= with_tool_content
+        # A compaction summary is prompt content, held to the prompts setting.
+        assert "CompactionEvent" not in with_tool_content
+
+    async def test_with_capture_off_no_class_carries_content_to_a_sink(self) -> None:
+        leaks = []
+        for cls in _conduit_event_classes():
+            received = await _through(cls(**_sample_fields(cls)), CapturePolicy())
+            if _leaks(received.model_dump_json()) or _leaks(repr(received)):
+                leaks.append(cls.__name__)
+        assert not leaks, leaks
+
+    async def test_with_prompts_only_no_class_carries_tool_content(self) -> None:
+        leaks, missing = [], []
+        for cls in _conduit_event_classes():
+            received = await _through(cls(**_sample_fields(cls)), CapturePolicy(prompts=True))
+            for name, is_tool in _content_fields(cls).items():
+                seen = MARKER in _field_text(received, name)
+                if is_tool and seen:
+                    leaks.append(f"{cls.__name__}.{name}")
+                if not is_tool and not seen:
+                    missing.append(f"{cls.__name__}.{name}")
+        assert not leaks, leaks
+        assert not missing, missing  # prompt content still reaches the sink
+
+    async def test_with_tool_content_only_no_class_carries_prompt_content(self) -> None:
+        leaks = []
+        for cls in _conduit_event_classes():
+            received = await _through(cls(**_sample_fields(cls)), CapturePolicy(tool_content=True))
+            for name, is_tool in _content_fields(cls).items():
+                if not is_tool and MARKER in _field_text(received, name):
+                    leaks.append(f"{cls.__name__}.{name}")
+        assert not leaks, leaks
+
+    async def test_with_both_on_every_content_field_reaches_the_sink(self) -> None:
+        missing = []
+        for cls in _conduit_event_classes():
+            received = await _through(cls(**_sample_fields(cls)), LOOSE)
+            for name in _content_fields(cls):
+                if MARKER not in _field_text(received, name):
+                    missing.append(f"{cls.__name__}.{name}")
+        assert not missing, missing
