@@ -333,6 +333,79 @@ The HTTP client ignores the environment (no proxy variables, no `.netrc`) and ne
 
 Kind `stub`, no extra. A deterministic, scriptable provider for tests: it never reaches a network, streams like a real provider, and reports all four usage counts (including cache reads and writes for requests with cache breakpoints). It needs `not_for_production: true` in its settings and logs a warning when built. Scripts are registered by name with `StubFactory(scripts={...})`: `echo` (the default), `scripted` turns in order, and `answer_tool_results` (call a tool, then answer from its result).
 
+## Building clients
+
+Each adapter resolves its credential and builds its SDK client in one guarded step. The registry builds every client under the same guard (`guarded_client`, exported from `conduit`), a product's own factories included.
+
+If a client cannot be built, `start()` raises `ConfigurationError` naming the provider, its kind and the exception's class, such as `provider 'primary': the anthropic client could not be built: TypeError`. The error has no cause or context, so the key never appears in a traceback with locals. conduit's own refusals (a missing extra, an unresolved secret, a refused environment variable) keep their own messages, with their traceback, cause, context and notes cleared.
+
+```python
+import asyncio
+from collections.abc import Mapping
+from typing import Any
+
+from pydantic import SecretStr
+
+from conduit import ConduitSettings, ProviderSettings, TaskClass, start
+from conduit.providers.stub import StubFactory
+
+
+class BrokenStubFactory(StubFactory):
+    """A factory whose client step fails with the key in the library's message."""
+
+    def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
+        raise TypeError("sk-example-not-real is not a valid key")
+
+
+async def start_broken() -> ConfigurationError:
+    settings = ConduitSettings.model_validate(
+        {
+            "providers": {"primary": {"kind": "stub", "not_for_production": True}},
+            "assignments": {"triage": {"provider": "primary", "model": "stub-echo"}},
+        }
+    )
+    try:
+        await start(
+            settings,
+            task_classes=[TaskClass(name="triage")],
+            factories=[BrokenStubFactory()],
+            secrets=LiteralSecretResolver({}),
+        )
+    except ConfigurationError as refusal:
+        return refusal
+    raise AssertionError("expected a refusal")
+
+
+refusal = asyncio.run(start_broken())
+assert str(refusal) == "provider 'primary': the stub client could not be built: TypeError"
+assert refusal.__cause__ is None and refusal.__context__ is None
+```
+
+This covers ordinary exceptions. Cancellation, `KeyboardInterrupt` and other `BaseException` propagate unchanged, with the library's frames.
+
+The guard cannot stop a library logging its own arguments before it fails. botocore's signer, for example, logs the canonical request (with the AWS access key id and any session token) at DEBUG when conduit presigns a short-term Bedrock key. Keep SDK loggers above DEBUG in production.
+
 ## Writing a provider adapter
 
 A product can add an adapter of its own by giving the registry a `ProviderFactory`: a `kind`, a `settings_model` (a subclass of `ProviderSettings`, whose credential fields must be typed `SecretRef`), `create_client(settings, secrets)` and `create_provider(name, settings, client, *, catalogue=None)`. Only the registry calls `create_client`, and every provider it builds is wrapped in metering, so calls through the adapter get admission checks, residency, usage events and capture enforcement like any other. Subclass `BaseProvider` and implement `stream`; declare the adapter's models in a catalogue overlay under its kind.
+
+The registry already runs `create_client` under the construction guard. A factory that builds a client anywhere else (an embedder's client, a client it refreshes later) can run that step under the same guard with `guarded_client(kind, build, name=...)`: what `build` returns passes through, a conduit error goes on with its traceback, cause, context and notes cleared, and any other exception becomes the fixed `ConfigurationError`.
+
+```python
+from conduit import guarded_client
+
+
+def build_acme_client() -> object:
+    raise ValueError("https://api.example.com/?key=sk-example-not-real refused")
+
+
+try:
+    guarded_client("acme", build_acme_client, name="primary")
+except ConfigurationError as refusal:
+    assert str(refusal) == "provider 'primary': the acme client could not be built: ValueError"
+    assert refusal.__cause__ is None and refusal.__context__ is None
+else:
+    raise AssertionError("expected a refusal")
+
+assert guarded_client("acme", lambda: "client") == "client"
+```

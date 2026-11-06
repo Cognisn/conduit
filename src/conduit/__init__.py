@@ -2,8 +2,18 @@
 
 from importlib.resources import files
 
-from conduit.core.backends import ApprovalHandler, SkillSource, TokenStore
+from conduit.core.backends import (
+    ApprovalDecision,
+    ApprovalHandler,
+    ApprovalRequest,
+    Skill,
+    SkillSource,
+    SkillSummary,
+    TokenSet,
+    TokenStore,
+)
 from conduit.core.catalogue import (
+    Capabilities,
     Catalogue,
     CatalogueOverlay,
     ModelEntry,
@@ -15,22 +25,36 @@ from conduit.core.errors import (
     CapabilityRefused,
     ConduitError,
     ConfigurationError,
+    FacadeError,
     ModelNotAssigned,
     ProviderError,
     ProviderFailure,
+    ReplayMismatch,
     ResidencyRefused,
+    SecretUnavailable,
     SettingsRefused,
+    ToolRegistrationError,
     UndeclaredModel,
+    UnknownTaskClass,
+    UnknownTool,
 )
 from conduit.core.events import (
     CaptureAs,
+    CapturedContent,
     CapturePolicy,
+    ContentKind,
     Event,
     EventSink,
     FanOutSink,
+    MemoryEventSink,
+    ModelCallFinishedEvent,
+    ModelCallStartedEvent,
+    NullEventSink,
+    ToolCallEvent,
     ToolContent,
 )
 from conduit.core.facade import (
+    LoopThread,
     SyncFacade,
     SyncProvider,
     SyncRuntime,
@@ -39,7 +63,12 @@ from conduit.core.facade import (
     sync,
 )
 from conduit.core.provider import BaseProvider, Provider
-from conduit.core.registry import MeteredProvider, ProviderFactory, ProviderRegistry
+from conduit.core.registry import (
+    MeteredProvider,
+    ProviderFactory,
+    ProviderRegistry,
+    guarded_client,
+)
 from conduit.core.residency import ResidencyPolicy, ResidencyScope
 from conduit.core.runtime import ConduitSettings, Runtime, TaskBinding, start
 from conduit.core.secrets import (
@@ -48,7 +77,7 @@ from conduit.core.secrets import (
     SecretRef,
     SecretResolver,
 )
-from conduit.core.settings import AssignmentSettings, ProviderSettings
+from conduit.core.settings import AssignmentSettings, ProviderSettings, refusals
 from conduit.core.streaming import (
     ProviderStateReported,
     StreamStopped,
@@ -58,9 +87,30 @@ from conduit.core.streaming import (
     UsageReported,
     collect,
 )
-from conduit.core.tasks import CapabilityFloor, TaskClass
-from conduit.core.tools import Tool, ToolCatalogue, ToolRegistry
-from conduit.core.transcript import Transcript, TranscriptStore
+from conduit.core.tasks import (
+    Assignments,
+    CapabilityFloor,
+    ResolvedAssignment,
+    TaskClass,
+    resolve_assignments,
+)
+from conduit.core.tools import (
+    TaskTools,
+    Tool,
+    ToolCallContext,
+    ToolCatalogue,
+    ToolExecutor,
+    ToolOutcome,
+    ToolRegistry,
+)
+from conduit.core.transcript import (
+    CompactionPoint,
+    MessageEntry,
+    SkillUse,
+    Transcript,
+    TranscriptEntry,
+    TranscriptStore,
+)
 from conduit.core.types import (
     CacheBreakpoint,
     ImageBlock,
@@ -77,33 +127,47 @@ from conduit.core.types import (
 )
 
 __all__ = [
+    "ApprovalDecision",
     "ApprovalHandler",
+    "ApprovalRequest",
     "AssignmentRefused",
     "AssignmentSettings",
+    "Assignments",
     "BaseProvider",
     "CacheBreakpoint",
+    "Capabilities",
     "CapabilityFloor",
     "CapabilityRefused",
     "CaptureAs",
     "CapturePolicy",
+    "CapturedContent",
     "Catalogue",
     "CatalogueOverlay",
+    "CompactionPoint",
     "ConduitError",
     "ConduitSettings",
     "ConfigurationError",
+    "ContentKind",
     "EnvironmentSecretResolver",
     "Event",
     "EventSink",
+    "FacadeError",
     "FanOutSink",
     "ImageBlock",
     "LiteralSecretResolver",
+    "LoopThread",
+    "MemoryEventSink",
     "Message",
+    "MessageEntry",
     "MeteredProvider",
+    "ModelCallFinishedEvent",
+    "ModelCallStartedEvent",
     "ModelEntry",
     "ModelKey",
     "ModelNotAssigned",
     "ModelRequest",
     "ModelResponse",
+    "NullEventSink",
     "Provider",
     "ProviderError",
     "ProviderFactory",
@@ -112,14 +176,20 @@ __all__ = [
     "ProviderSettings",
     "ProviderStateBlock",
     "ProviderStateReported",
+    "ReplayMismatch",
     "ResidencyPolicy",
     "ResidencyRefused",
     "ResidencyScope",
+    "ResolvedAssignment",
     "Runtime",
     "SecretRef",
     "SecretResolver",
+    "SecretUnavailable",
     "SettingsRefused",
+    "Skill",
     "SkillSource",
+    "SkillSummary",
+    "SkillUse",
     "StopReason",
     "StreamStopped",
     "SyncFacade",
@@ -128,26 +198,39 @@ __all__ = [
     "SyncTaskBinding",
     "TaskBinding",
     "TaskClass",
+    "TaskTools",
     "TextBlock",
     "TextDelta",
+    "TokenSet",
     "TokenStore",
     "Tool",
+    "ToolCallContext",
+    "ToolCallEvent",
     "ToolCallFinished",
     "ToolCallStarted",
     "ToolCatalogue",
     "ToolContent",
+    "ToolExecutor",
+    "ToolOutcome",
+    "ToolRegistrationError",
     "ToolRegistry",
     "ToolResultBlock",
     "ToolSpec",
     "ToolUseBlock",
     "Transcript",
+    "TranscriptEntry",
     "TranscriptStore",
     "UndeclaredModel",
+    "UnknownTaskClass",
+    "UnknownTool",
     "Usage",
     "UsageReported",
     "__version__",
     "collect",
     "default_catalogue",
+    "guarded_client",
+    "refusals",
+    "resolve_assignments",
     "start",
     "start_sync",
     "sync",

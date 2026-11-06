@@ -428,9 +428,8 @@ Tools are the product's: it declares them, says which task classes each serves, 
 from dataclasses import dataclass, field
 from typing import Any
 
-from conduit import ToolCatalogue, ToolResultBlock
+from conduit import TaskTools, ToolCallContext, ToolCatalogue, ToolOutcome, ToolResultBlock
 from conduit.agent import AgentRunner, AgentTask, RunBudget, RunStatus
-from conduit.core.tools import TaskTools, ToolCallContext, ToolOutcome
 from conduit.providers.stub import StubToolCall, StubTurn, answer_tool_results
 
 
@@ -559,8 +558,7 @@ Two rules make this safe:
 A product holding several conduit objects keeps one `LoopThread` for them all and closes it at shutdown:
 
 ```python
-from conduit import sync
-from conduit.core.facade import LoopThread
+from conduit import LoopThread, sync
 
 loop = LoopThread(name="example-app-conduit")
 try:
