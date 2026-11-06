@@ -81,6 +81,13 @@ UNBOUNDED = re.compile(r"^(?:evt|call|tool|run|corr|appr|emb)_[0-9a-f]+$|^[0-9a-
 RUN: dict[str, Any] = {"run_id": "run_1", "correlation_id": "corr_1", "task_class": "chat"}
 
 
+class RaisingOnEnd(SpanProcessor):
+    """A span processor that fails on every span it is given to end."""
+
+    def on_end(self, span: ReadableSpan) -> None:
+        raise RuntimeError(f"exporter said {MARKER}")
+
+
 def at(ms: float) -> datetime:
     return T0 + timedelta(milliseconds=ms)
 
@@ -858,6 +865,35 @@ class TestLifecycle:
         run = telemetry.span("conduit.run")
         assert run.end_time == ns(at(5))
         assert run.status.status_code is StatusCode.UNSET
+        assert target.open_spans == 0
+
+    async def test_a_span_processor_failing_to_end_a_span_never_escapes(
+        self, telemetry: Telemetry, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        telemetry.tracer_provider.add_span_processor(RaisingOnEnd())
+        target = sink(telemetry)
+        with caplog.at_level(logging.WARNING, logger="conduit.integrations.otel"):
+            await target.emit(run_started(0))
+            await target.emit(run_finished(5))  # ending the run span raises in on_end
+        assert "RuntimeError" in caplog.text
+        assert MARKER not in caplog.text
+        assert target.open_spans == 0
+
+    async def test_a_failing_handler_is_logged_over_a_failing_span_end(
+        self, telemetry: Telemetry, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        class Failing:
+            def record(self, *args: Any, **kwargs: Any) -> None:
+                raise ValueError(f"histogram said {MARKER}")
+
+        telemetry.tracer_provider.add_span_processor(RaisingOnEnd())
+        target = sink(telemetry)
+        await target.emit(run_started(0))
+        target._duration = Failing()  # type: ignore[assignment]
+        with caplog.at_level(logging.WARNING, logger="conduit.integrations.otel"):
+            await target.emit(run_finished(5))  # the run span's end and the latency both fail
+        assert "run_finished: ValueError" in caplog.text
+        assert MARKER not in caplog.text
         assert target.open_spans == 0
 
     async def test_concurrent_runs_keep_their_spans_apart(self, telemetry: Telemetry) -> None:
