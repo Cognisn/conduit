@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b3] - 2026-11-06
+
+Wave 7, second merge: conformance suites and the evaluation harness (`feat/0.1.0-testing-suites`).
+
+### Added
+
+- Conformance suites for the secret resolver (`SecretResolverSuite`), the event sink (`EventSinkSuite`) and the approval handler (`ApprovalHandlerSuite`, with `ApprovalCall`) in `conduit.testing.conformance`, run against conduit's own resolvers and sinks.
+- The evaluation harness, `conduit.testing.evaluation`: cases with a task, a stub script and tools, judged by checks over the run's result, events and executed tools; `StubHarness` for the default test run and `LiveHarness` for a configured runtime in tests marked integration; a report of outcomes, passes, skips and a score.
+
+### Changed
+
+- Every conformance scenario is bounded by `scenario_timeout_s` (60 seconds by default, with a `scenario_cancel_grace_s` grace after cancelling), so a backend that hangs fails rather than hanging the test run.
+
+## [0.1.0b2] - 2026-11-06
+
+Wave 7, first merge: guarded client construction (`fix/0.1.0-client-construction`).
+
+### Added
+
+- `conduit.core.registry.guarded_client`, the construction guard, for products writing their own provider factories.
+
+### Changed
+
+- Every provider and embedding factory resolves its credential and builds its SDK or HTTP client in one guarded step, and the registry builds every client under the same guard.
+- A client that cannot be built is refused at start-up with a `ConfigurationError` naming the provider and the exception's class only, with nothing chained.
+- conduit's own refusals (a missing extra, an unresolved secret, a refused environment variable) keep their messages, with their traceback, cause, context and notes cleared.
+
 ## [0.1.0b1] - 2026-11-06
 
 Wave 6, third and last merge: the live provider suite (`test/0.1.0-live-providers`). Feature complete.
