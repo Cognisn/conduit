@@ -63,7 +63,7 @@ settings = ConduitSettings.model_validate(
 )
 TASK_CLASSES = [
     TaskClass(name="assistant", floor=CapabilityFloor(tools=True)),
-    TaskClass(name="conversation_summary"),
+    TaskClass(name="conversation_summary", floor=CapabilityFloor(tools=True)),
 ]
 
 history = [
@@ -89,12 +89,8 @@ async def compacted_run() -> tuple[list[Event], int]:
         compactor = Compactor(
             [
                 DropToolResults(keep_turns=2),
-                Summarise(
-                    runtime,
-                    task_class="conversation_summary",
-                    floor=CapabilityFloor(),
-                    keep_turns=2,
-                ),
+                # The default summary floor: a model with tools (see "The summary call").
+                Summarise(runtime, task_class="conversation_summary", keep_turns=2),
                 KeepLastTurns(keep_turns=2),
             ],
             transcripts=store,
@@ -148,7 +144,11 @@ A failure (`CompactionFailed`, with a fixed reason) leaves the conversation as i
 
 ## The summary call
 
-`Summarise` sends the older turns, rendered as text with long tool results cut down, to the model assigned to the task class the product names. The product declares that task class, with its own floor (a model with tools by default) and assignment, like any other: a smaller, cheaper model often serves well. Tool content in the older turns is cut to `tool_result_chars` and is never sent as tool calls.
+`Summarise` sends the older turns to the model assigned to the task class the product names, as messages much as they were: text trimmed to `max_message_chars`, images named rather than sent, cache markers and provider state left out, and the summary instructions added to the last user turn. **Tool calls and tool results keep their own blocks**: each tool use is sent whole, so its result still answers it, and each result is trimmed to `tool_result_chars` (500 characters by default). The request also carries a definition for every tool those turns used (the run's own definition, or a minimal one for a tool the run no longer offers), because a model is sent tool calls only alongside their tools.
+
+That is why `Summarise`'s default floor is `CapabilityFloor(tools=True)`: the summary model must accept tool definitions, calls and results. Pass a lower `floor` only when the conversations it summarises never hold tool calls (a chat with no tools), so no summary request ever carries one. The product declares the summary task class, with its floor and assignment, like any other: a smaller, cheaper model often serves well.
+
+Tool arguments and results in the summary request are tool content, and the summary call's events are held to the capture policy like every model call's: the request is always recorded by hash and size, its text only when `prompts` is captured, and even then without the tool arguments and results unless `tool_content` is captured too.
 
 The summary call is metered by the provider registry like every model call, and its events carry the run's id, but its tokens are **not charged to the run's own budget**: the run's budget meter belongs to the runner, which the hook cannot reach. Budget summaries through the usage events if they matter.
 
