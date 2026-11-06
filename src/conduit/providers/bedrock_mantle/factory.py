@@ -26,6 +26,10 @@ out of the logs, since a presigned key can be rebuilt from them. Long-term keys 
 unless ``allow_long_term_api_keys`` is exactly ``True``, and the Region and any
 ``endpoint_url`` are checked again, however the settings were made.
 
+Credentials are resolved, any short-term key presigned and the client built in one
+guarded step (see ``conduit.providers``): a constructor that raises becomes a fixed
+``ConfigurationError`` naming the adapter and the exception's class.
+
 Providers read capabilities from the catalogue the registry passes to
 ``create_provider``; called without one, outside a registry, the factory uses conduit's
 default catalogue.
@@ -46,6 +50,7 @@ from pydantic import SecretStr
 from conduit.core.catalogue import Catalogue, default_catalogue
 from conduit.core.errors import ConfigurationError
 from conduit.core.provider import Provider
+from conduit.core.registry import guarded_client
 from conduit.core.settings import ProviderSettings
 from conduit.providers.bedrock.auth import (
     KeySource,
@@ -140,46 +145,55 @@ class BedrockMantleFactory:
                 raise ConfigurationError(f"secret {path} was not resolved")
             return value.get_secret_value()
 
-        keys: KeySource
+        botocore_session: Any = None
         if isinstance(auth, ShortTermApiKeyAuth):
-            botocore_session: Any = None
             with contextlib.suppress(ImportError):
                 botocore_session = importlib.import_module("botocore.session")
             if botocore_session is None:
                 raise _missing_extra()
-            source = auth.source
+        clock = self._clock
 
-            def signing_credentials() -> Any:
-                session = botocore_session.Session(
-                    profile=source.profile if isinstance(source, CredentialChainAuth) else None
-                )
-                if isinstance(source, AccessKeyAuth):
-                    token = secret("auth.source.session_token") if source.session_token else None
-                    session.set_credentials(
-                        secret("auth.source.access_key_id"),
-                        secret("auth.source.secret_access_key"),
-                        token,
+        def build() -> Any:
+            # Credentials and keys are resolved here, in the guarded step's own frames.
+            keys: KeySource
+            if isinstance(auth, ShortTermApiKeyAuth):
+                source = auth.source
+
+                def signing_credentials() -> Any:
+                    session = botocore_session.Session(
+                        profile=source.profile if isinstance(source, CredentialChainAuth) else None
                     )
-                return session.get_credentials()
+                    if isinstance(source, AccessKeyAuth):
+                        token = (
+                            secret("auth.source.session_token") if source.session_token else None
+                        )
+                        session.set_credentials(
+                            secret("auth.source.access_key_id"),
+                            secret("auth.source.secret_access_key"),
+                            token,
+                        )
+                    return session.get_credentials()
 
-            keys = short_term_keys(
-                signing_credentials,
-                region=region,
-                lifetime_s=auth.lifetime_s,
-                refresh_before_s=auth.refresh_before_s,
-                clock=self._clock,
+                keys = short_term_keys(
+                    signing_credentials,
+                    region=region,
+                    lifetime_s=auth.lifetime_s,
+                    refresh_before_s=auth.refresh_before_s,
+                    clock=clock,
+                )
+            else:
+                keys = StaticKeySource(secret("auth.api_key"))
+
+            client_class = bearer_client_class(sdk.AsyncAnthropicBedrockMantle, keys)
+            return client_class(
+                skip_auth=True,
+                aws_region=region,
+                base_url=mantle.endpoint_url or mantle_base_url(region),
+                max_retries=mantle.max_retries,
+                open_telemetry=False,
             )
-        else:
-            keys = StaticKeySource(secret("auth.api_key"))
 
-        client_class = bearer_client_class(sdk.AsyncAnthropicBedrockMantle, keys)
-        return client_class(
-            skip_auth=True,
-            aws_region=region,
-            base_url=mantle.endpoint_url or mantle_base_url(region),
-            max_retries=mantle.max_retries,
-            open_telemetry=False,
-        )
+        return guarded_client(self.kind, build)
 
     def create_provider(
         self,

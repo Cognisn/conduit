@@ -570,7 +570,7 @@ class TestFoundryEntraId:
             raise RuntimeError("cannot build the client")
 
         monkeypatch.setattr(sdk, "AsyncAnthropicFoundry", refuse)
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ConfigurationError, match=r"could not be built: RuntimeError$"):
             AnthropicFactory().create_client(AnthropicSettings.model_validate(ENTRA_SETTINGS), {})
         for _ in range(3):
             await asyncio.sleep(0)
@@ -585,7 +585,7 @@ class TestFoundryEntraId:
             raise RuntimeError("cannot build the client")
 
         monkeypatch.setattr(sdk, "AsyncAnthropicFoundry", refuse)
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ConfigurationError, match=r"could not be built: RuntimeError$"):
             AnthropicFactory().create_client(AnthropicSettings.model_validate(ENTRA_SETTINGS), {})
         assert [c.closed for c in credential.made] == [True]
 

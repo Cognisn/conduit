@@ -16,6 +16,10 @@ the host would: proxy variables and ``.netrc`` (its HTTP clients use ``trust_env
 ``GOOGLE_GENAI_HTTP_CLIENT`` for the choice of HTTP library. The SDK's retries are
 bounded by ``max_attempts``.
 
+The key is resolved and the client built in one guarded step (see
+``conduit.providers``): a constructor that raises becomes a fixed
+``ConfigurationError`` naming the adapter and the exception's class.
+
 ``async_client_args`` are passed to the SDK's async HTTP client (a test gives a mock
 transport).
 
@@ -35,6 +39,7 @@ from pydantic import SecretStr
 from conduit.core.catalogue import Catalogue, default_catalogue
 from conduit.core.errors import ConfigurationError
 from conduit.core.provider import Provider
+from conduit.core.registry import guarded_client
 from conduit.core.settings import ProviderSettings
 from conduit.providers.gemini.provider import GeminiProvider
 from conduit.providers.gemini.settings import GeminiSettings
@@ -58,23 +63,27 @@ class GeminiFactory:
     def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
         """A ``google.genai.Client`` for ``settings``. Imports the SDK here only."""
         gemini = _gemini(settings)
-        resolved = secrets.get("api_key")
-        if resolved is None:
+        if secrets.get("api_key") is None:
             raise ConfigurationError("secret api_key was not resolved")
-        api_key = resolved.get_secret_value()
         genai = importlib.import_module("google.genai")
         types = importlib.import_module("google.genai.types")
-        options: dict[str, Any] = {
-            "base_url": gemini.base_url,
-            "retry_options": types.HttpRetryOptions(attempts=gemini.max_attempts),
-        }
-        if self._async_client_args:
-            options["async_client_args"] = dict(self._async_client_args)
-        return genai.Client(
-            vertexai=False,
-            api_key=api_key,
-            http_options=types.HttpOptions(**options),
-        )
+        client_args = dict(self._async_client_args)
+
+        def build() -> Any:
+            options: dict[str, Any] = {
+                "base_url": gemini.base_url,
+                "retry_options": types.HttpRetryOptions(attempts=gemini.max_attempts),
+            }
+            if client_args:
+                options["async_client_args"] = dict(client_args)
+            # The key is resolved here, in the guarded step's own frame.
+            return genai.Client(
+                vertexai=False,
+                api_key=secrets["api_key"].get_secret_value(),
+                http_options=types.HttpOptions(**options),
+            )
+
+        return guarded_client(self.kind, build)
 
     def create_provider(
         self,
