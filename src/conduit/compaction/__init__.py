@@ -33,6 +33,7 @@ from conduit.compaction.strategies import (
     StrategyContext,
     Summarise,
     SummaryBindings,
+    SummaryCharge,
     check_strategy,
     summary_messages,
 )
@@ -57,6 +58,7 @@ __all__ = [
     "StrategyContext",
     "Summarise",
     "SummaryBindings",
+    "SummaryCharge",
     "TokenEstimator",
     "check_strategy",
     "estimate_tokens",

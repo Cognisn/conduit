@@ -80,7 +80,12 @@ from typing import Any, Protocol
 from conduit.compaction.conversation import estimate_tokens, find_cut
 from conduit.compaction.errors import CompactionFailed
 from conduit.compaction.events import CompactionEvent, CompactionTrigger
-from conduit.compaction.strategies import CompactionStrategy, StrategyContext, check_strategy
+from conduit.compaction.strategies import (
+    CompactionStrategy,
+    StrategyContext,
+    SummaryCharge,
+    check_strategy,
+)
 from conduit.core.errors import ConfigurationError
 from conduit.core.events import CapturePolicy, ContentKind, EventSink, FanOutSink
 from conduit.core.tasks import ResolvedAssignment
@@ -392,8 +397,14 @@ class Compactor:
         request: CompactionContext,
     ) -> tuple[str | None, CompactionFailed | None]:
         """The strategy's text, or the failure to report. Never raises but cancellation."""
+        # The runner's request carries the run's charge (D0085); a caller's that offers
+        # none, or something else, leaves the strategy's calls uncharged.
+        charge = getattr(request, "charge", None)
         context = StrategyContext(
-            run_id=request.run_id, assignment=request.assignment, tools=tuple(request.tools)
+            run_id=request.run_id,
+            assignment=request.assignment,
+            tools=tuple(request.tools),
+            charge=charge if isinstance(charge, SummaryCharge) else None,
         )
         try:
             text: object = await strategy.summarise(replaced, context)

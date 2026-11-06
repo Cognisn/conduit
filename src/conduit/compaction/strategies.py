@@ -72,6 +72,7 @@ from conduit.core.types import (
     ToolResultBlock,
     ToolSpec,
     ToolUseBlock,
+    Usage,
 )
 
 __all__ = [
@@ -83,6 +84,7 @@ __all__ = [
     "StrategyContext",
     "Summarise",
     "SummaryBindings",
+    "SummaryCharge",
     "check_strategy",
     "summary_messages",
 ]
@@ -103,15 +105,33 @@ DEFAULT_INSTRUCTIONS = (
 )
 
 
+@runtime_checkable
+class SummaryCharge(Protocol):
+    """The run's budget, for a strategy's own model calls: the agent runner's
+    ``ModelCallCharge``, read structurally (D0085).
+
+    ``begin`` counts a call about to be made and returns the output tokens it may
+    produce, or ``None`` when the run's budget refuses it; ``record`` charges the call's
+    usage and returns ``False`` when that takes the run past its budget. Either refusal
+    ends the run once the hook returns.
+    """
+
+    def begin(self, max_output_tokens: int) -> int | None: ...
+
+    def record(self, usage: Usage) -> bool: ...
+
+
 @dataclass(frozen=True, slots=True)
 class StrategyContext:
     """What a strategy knows about the call being compacted: the run, the model the
-    conversation goes to (its catalogue entry gives the context window), and the tools
-    the conversation's tool calls were made with."""
+    conversation goes to (its catalogue entry gives the context window), the tools the
+    conversation's tool calls were made with, and the run's ``charge`` for any model call
+    the strategy makes (``None`` outside a run, or with a hook caller that offers none)."""
 
     run_id: str | None
     assignment: ResolvedAssignment
     tools: tuple[ToolSpec, ...] = ()
+    charge: SummaryCharge | None = None
 
 
 @runtime_checkable
@@ -273,8 +293,12 @@ class Summarise:
     ``floor`` is the least the summary model must offer (a model with tools unless the
     product says otherwise); it is checked here, once. The request carries the run's id,
     so the provider registry's model-call events tie the summary call to the run. Its
-    tokens are metered by the registry like any call, but are not charged to the run's
-    own budget: the run's meter belongs to the runner, which the hook cannot reach.
+    tokens are metered by the registry like any call, and charged to the run's own
+    budget through the context's ``charge`` (D0085): the call is counted before it is
+    made, its output is held to what the run's token budget has left, and its usage is
+    charged once it is made. A call the budget refuses is never made, and a summary
+    whose usage takes the run past its budget is not used; both fail the compaction as
+    ``budget_exhausted``, and the runner ends the run as for any over-budget call.
     """
 
     def __init__(
@@ -341,6 +365,12 @@ class Summarise:
             assignment.entry.context_window
         ):
             raise CompactionFailed("summary_too_large")
+        charge = context.charge
+        if charge is not None:
+            allowed = charge.begin(output)
+            if allowed is None:
+                raise CompactionFailed("budget_exhausted")
+            output = max(1, min(output, allowed))
         request = binding.request(
             messages=messages, tools=tools, max_output_tokens=output, run_id=context.run_id
         )
@@ -352,6 +382,8 @@ class Summarise:
             failure = error.failure
         if response is None:  # raised after the handler, so nothing is chained (D0040)
             raise CompactionFailed("summary_failed", failure=failure)
+        if charge is not None and not charge.record(response.usage):
+            raise CompactionFailed("budget_exhausted")
         text = response.text.strip()
         if not text:
             raise CompactionFailed("summary_empty")
