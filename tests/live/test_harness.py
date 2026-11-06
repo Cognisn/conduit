@@ -7,11 +7,18 @@ here reaches a network.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import math
+from collections.abc import AsyncIterator, Iterator
+from typing import Any, cast
 
 import pytest
 
-from conduit.core.types import ProviderStateBlock, StopReason, Usage
+from conduit.core.errors import ProviderError, ProviderFailure
+from conduit.core.provider import EmbeddingResponse
+from conduit.core.runtime import TaskBinding
+from conduit.core.streaming import StreamEvent, StreamStopped, TextDelta, ToolCallStarted
+from conduit.core.types import ModelRequest, ProviderStateBlock, StopReason, Usage
+from conduit.embeddings import EmbeddingBinding
 from conduit.providers.stub import (
     StubFactory,
     StubToolCall,
@@ -20,7 +27,10 @@ from conduit.providers.stub import (
     scripted,
 )
 from tests.live.harness import (
+    EMBEDDING_TEXTS,
     LOOKUP_TOOL,
+    ask,
+    assert_usage,
     check_caching,
     check_chat,
     check_embeddings,
@@ -30,6 +40,7 @@ from tests.live.harness import (
     check_vision,
     started,
     started_embeddings,
+    stream_shape,
 )
 from tests.live.report import REPORT, Verdict
 from tests.live.targets import Target
@@ -205,3 +216,141 @@ async def test_embeddings_fail_at_the_wrong_length() -> None:
     async with started_embeddings(target) as binding:
         with pytest.raises(AssertionError):
             await check_embeddings(binding, "stub embed", 9)
+
+
+# Shapes a registry-built provider never produces, through a fake binding ------------
+
+
+class _FakeProvider:
+    def __init__(self, events: list[StreamEvent]) -> None:
+        self._events = events
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
+        for event in self._events:
+            yield event
+
+
+class _FakeBinding:
+    """Just what the checks use of a TaskBinding: ``request`` and ``provider.stream``."""
+
+    def __init__(self, events: list[StreamEvent]) -> None:
+        self.provider = _FakeProvider(events)
+
+    def request(self, **fields: Any) -> ModelRequest:
+        return ModelRequest(model="fake", max_output_tokens=16, **fields)
+
+
+def _fake(events: list[StreamEvent]) -> TaskBinding:
+    return cast(TaskBinding, _FakeBinding(events))
+
+
+def _stop(reason: StopReason = StopReason.END_TURN) -> StreamStopped:
+    return StreamStopped(
+        stop_reason=reason,
+        usage=Usage(input_tokens=5, output_tokens=5, cache_read_tokens=0, cache_write_tokens=0),
+    )
+
+
+async def test_a_stream_without_a_final_event_fails() -> None:
+    binding = _fake([TextDelta(text="x")])
+    with pytest.raises(AssertionError) as failed:
+        await stream_shape(binding, binding.request(messages=ask("x")))
+    assert "exactly one StreamStopped" in str(failed.value)
+
+
+async def test_a_stream_with_two_final_events_fails() -> None:
+    binding = _fake([TextDelta(text="x"), _stop(), _stop()])
+    with pytest.raises(AssertionError) as failed:
+        await stream_shape(binding, binding.request(messages=ask("x")))
+    assert "exactly one StreamStopped" in str(failed.value)
+
+
+async def test_events_after_the_final_event_fail() -> None:
+    binding = _fake([_stop(), TextDelta(text="x")])
+    with pytest.raises(AssertionError) as failed:
+        await stream_shape(binding, binding.request(messages=ask("x")))
+    assert "events followed StreamStopped" in str(failed.value)
+
+
+async def test_an_unfinished_tool_call_is_named_before_the_protocol_failure() -> None:
+    binding = _fake([ToolCallStarted(id="c1", name=LOOKUP_TOOL.name), _stop(StopReason.TOOL_USE)])
+    with pytest.raises(AssertionError) as failed:
+        await check_tools(binding, "fake tools")
+    assert "a started tool call was not finished" in str(failed.value)
+
+
+async def test_a_broken_stream_with_balanced_calls_still_fails_as_protocol() -> None:
+    binding = _fake([TextDelta(text="x")])  # no final event: collect refuses it
+    with pytest.raises(ProviderError) as failed:
+        await check_tools(binding, "fake tools")
+    assert failed.value.failure is ProviderFailure.PROTOCOL
+    assert failed.value.__cause__ is None
+    assert failed.value.__context__ is None
+
+
+def test_usage_with_no_input_fails() -> None:
+    usage = Usage(input_tokens=0, output_tokens=5, cache_read_tokens=0, cache_write_tokens=0)
+    with pytest.raises(AssertionError) as failed:
+        assert_usage(usage)
+    assert "no input tokens" in str(failed.value)
+
+
+def test_usage_with_a_negative_count_fails() -> None:
+    usage = Usage.model_construct(
+        input_tokens=-1, output_tokens=5, cache_read_tokens=10, cache_write_tokens=0
+    )
+    with pytest.raises(AssertionError) as failed:
+        assert_usage(usage)
+    assert "negative" in str(failed.value)
+
+
+async def test_a_tool_call_without_a_string_code_fails() -> None:
+    turn = StubTurn(tool_calls=(StubToolCall(LOOKUP_TOOL.name, {"code": 1234}),))
+    script = answer_tool_results(turn, lambda results: StubTurn(text="done"))
+    async with started(_target("num"), factories=_factory(num=script)) as binding:
+        with pytest.raises(AssertionError) as failed:
+            await check_tools(binding, "stub tools")
+    assert "no string code" in str(failed.value)
+
+
+async def test_a_silent_answer_after_the_tool_result_fails() -> None:
+    usage = Usage(input_tokens=10, output_tokens=5, cache_read_tokens=0, cache_write_tokens=0)
+    silent = StubTurn(text="", usage=usage, stop_reason=StopReason.END_TURN)
+    script = answer_tool_results(_tool_turn(), lambda results: silent)
+    async with started(_target("silent"), factories=_factory(silent=script)) as binding:
+        with pytest.raises(AssertionError) as failed:
+            await check_tools(binding, "stub tools")
+    assert "no answer followed the tool result" in str(failed.value)
+
+
+class _FakeEmbedder:
+    def __init__(self, response: EmbeddingResponse) -> None:
+        self._response = response
+
+    async def embed(self, texts: Any, **fields: Any) -> EmbeddingResponse:
+        return self._response
+
+
+def _vectors(value: float) -> tuple[tuple[float, ...], ...]:
+    return tuple((value, 0.5) for _ in EMBEDDING_TEXTS)
+
+
+async def test_a_non_finite_embedding_fails() -> None:
+    response = EmbeddingResponse(model="fake", vectors=_vectors(math.nan), usage=None)
+    with pytest.raises(AssertionError) as failed:
+        await check_embeddings(cast(EmbeddingBinding, _FakeEmbedder(response)), "fake", 2)
+    assert "non-finite" in str(failed.value)
+
+
+async def test_embedding_usage_beyond_input_fails() -> None:
+    usage = Usage(input_tokens=3, output_tokens=1, cache_read_tokens=0, cache_write_tokens=0)
+    response = EmbeddingResponse(model="fake", vectors=_vectors(0.25), usage=usage)
+    with pytest.raises(AssertionError) as failed:
+        await check_embeddings(cast(EmbeddingBinding, _FakeEmbedder(response)), "fake", 2)
+    assert "more than input tokens" in str(failed.value)
+
+
+async def test_a_well_formed_fake_embedding_passes() -> None:
+    usage = Usage(input_tokens=3, output_tokens=0, cache_read_tokens=0, cache_write_tokens=0)
+    response = EmbeddingResponse(model="fake", vectors=_vectors(0.25), usage=usage)
+    await check_embeddings(cast(EmbeddingBinding, _FakeEmbedder(response)), "fake", 2)

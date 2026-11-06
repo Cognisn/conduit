@@ -7,13 +7,11 @@ call that reads nothing from the cache is reported as unobserved, not failed.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from tests.live import needs
 from tests.live.harness import check_caching, check_chat, check_tools, started
-from tests.live.needs import value
+from tests.live.needs import live_env, value
 from tests.live.report import REPORT, Verdict
 from tests.live.targets import Target, gemini_settings, ollama_settings
 
@@ -24,15 +22,15 @@ DEFAULT_OLLAMA_MODEL = "llama3.1:8b"
 
 
 def _gemini() -> Target:
-    model = value(os.environ, "GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+    model = value(live_env(), "GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
     assert model is not None
     return Target("gemini", gemini_settings(), model)
 
 
 def _ollama() -> Target:
-    model = value(os.environ, "OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+    model = value(live_env(), "OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
     assert model is not None
-    return Target("ollama", ollama_settings(os.environ), model)
+    return Target("ollama", ollama_settings(live_env()), model)
 
 
 @pytest.mark.live_needs(needs.GEMINI)

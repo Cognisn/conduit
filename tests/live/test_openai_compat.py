@@ -8,8 +8,6 @@ arithmetic) and grok-4.3's output limit.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from conduit.core.catalogue import default_catalogue
@@ -21,7 +19,7 @@ from tests.live.harness import (
     check_tools,
     started,
 )
-from tests.live.needs import value
+from tests.live.needs import live_env, value
 from tests.live.probes import ProbeFailed, xai_accepts_output, xai_raw_usage
 from tests.live.report import REPORT, Verdict
 from tests.live.targets import (
@@ -39,27 +37,27 @@ DEFAULT_XAI_MODEL = "grok-4.3"
 
 
 def _openai() -> Target:
-    model = value(os.environ, "OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
+    model = value(live_env(), "OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
     assert model is not None
     return Target("openai", openai_settings(), model)
 
 
 def _xai() -> Target:
-    model = value(os.environ, "XAI_MODEL", DEFAULT_XAI_MODEL)
+    model = value(live_env(), "XAI_MODEL", DEFAULT_XAI_MODEL)
     assert model is not None
     return Target("xai", xai_settings(), model)
 
 
 def _foundry(entra: bool, family: str) -> Target:
     variable = "FOUNDRY_GROK_DEPLOYMENT" if family == "xai" else "FOUNDRY_OPENAI_DEPLOYMENT"
-    deployment = value(os.environ, variable)
+    deployment = value(live_env(), variable)
     assert deployment is not None  # the gate checked it
     label = f"foundry {'entra-id' if entra else 'api-key'} {family}"
     return Target(
         label,
-        foundry_settings(os.environ, entra=entra, catalogue_provider=family),
+        foundry_settings(live_env(), entra=entra, catalogue_provider=family),
         deployment,
-        deployment_overlay(os.environ, family, deployment),
+        deployment_overlay(live_env(), family, deployment),
     )
 
 
@@ -116,7 +114,7 @@ async def test_xai_reasoning_token_arithmetic() -> None:
     """Q0021: whether X.AI's ``total_tokens`` counts reasoning beside the completion."""
     target = _xai()
     try:
-        raw = await xai_raw_usage(target.model, 2048)
+        raw = await xai_raw_usage(target.model, 2048, live_env())
     except ProbeFailed as failed:
         pytest.fail(f"the X.AI usage probe failed: {failed}")
     outside = raw.reasoning_outside_completion
@@ -151,7 +149,7 @@ async def test_xai_output_limit() -> None:
         Verdict.MATCH if accepted else Verdict.MISMATCH,
         failure,
     )
-    above, why = await xai_accepts_output(target.model, limit + 1)
+    above, why = await xai_accepts_output(target.model, limit + 1, live_env())
     REPORT.record(
         "catalogue",
         target.subject,

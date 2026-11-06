@@ -6,14 +6,12 @@ uses tools, and reports usage with a cached second call.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from conduit.core.catalogue import default_catalogue
 from tests.live import needs
 from tests.live.harness import check_caching, check_chat, check_tools, started
-from tests.live.needs import value
+from tests.live.needs import live_env, value
 from tests.live.report import REPORT, Verdict
 from tests.live.targets import (
     Target,
@@ -33,7 +31,7 @@ KEY_SOURCES = {
 
 
 def _model(region: str) -> str:
-    model = value(os.environ, "BEDROCK_MANTLE_MODEL") or default_mantle_model(region)
+    model = value(live_env(), "BEDROCK_MANTLE_MODEL") or default_mantle_model(region)
     if model is None:
         pytest.skip(
             f"no catalogued bedrock-mantle model in {region}; set CONDUIT_LIVE_BEDROCK_MANTLE_MODEL"
@@ -42,7 +40,7 @@ def _model(region: str) -> str:
 
 
 def _region() -> str:
-    region = value(os.environ, "BEDROCK_MANTLE_REGION")
+    region = value(live_env(), "BEDROCK_MANTLE_REGION")
     assert region is not None  # the gate checked it
     return region
 
@@ -66,7 +64,7 @@ def _caching_model(region: str) -> str:
 
 def _target(*, caching: bool = False) -> Target:
     region = _region()
-    chosen = mantle_auth(os.environ)
+    chosen = mantle_auth(live_env())
     assert chosen is not None
     auth, long_term = chosen
     return Target(
@@ -83,7 +81,7 @@ def _target(*, caching: bool = False) -> Target:
 async def test_streaming_chat_with_each_key_source(source: str) -> None:
     """Short-term keys from each AWS credential source are accepted (and a long-term key)."""
     region = _region()
-    auth, long_term = bedrock_auth(source, os.environ)
+    auth, long_term = bedrock_auth(source, live_env())
     target = Target(
         f"bedrock-mantle {region} {source}",
         mantle_settings(region, auth, long_term),

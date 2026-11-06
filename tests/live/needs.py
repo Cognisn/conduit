@@ -18,13 +18,47 @@ environment, without running any live test.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import os
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 
 import pytest
 
 #: The prefix of every variable the live suite reads.
 PREFIX = "CONDUIT_LIVE_"
+
+
+class LiveEnv(Mapping[str, str]):
+    """The live variables, as a mapping whose ``repr`` and ``str`` never show a value.
+
+    pytest prints frame arguments in long tracebacks and locals under ``-l``, so the
+    suite never passes ``os.environ`` or a dict of values around: every helper that reads
+    a variable takes a ``LiveEnv``. Only ``CONDUIT_LIVE_`` variables are kept.
+    """
+
+    __slots__ = ("_values",)
+
+    def __init__(self, values: Mapping[str, str]) -> None:
+        self._values = {k: v for k, v in values.items() if k.startswith(PREFIX)}
+
+    def __getitem__(self, key: str) -> str:
+        return self._values[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def __repr__(self) -> str:
+        return f"LiveEnv(<{len(self._values)} variables, values redacted>)"
+
+    __str__ = __repr__
+
+
+def live_env() -> LiveEnv:
+    """A redacted snapshot of the process's ``CONDUIT_LIVE_`` variables."""
+    return LiveEnv(os.environ)
 
 
 def var(name: str) -> str:

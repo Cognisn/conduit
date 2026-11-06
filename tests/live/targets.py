@@ -8,17 +8,16 @@ Non-secret values (regions, model ids, URLs, deployment names) are read as plain
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from conduit.core.catalogue import Capabilities, CatalogueOverlay, ModelEntry, default_catalogue
 from conduit.core.residency import ResidencyScope
 from conduit.core.secrets import EnvironmentSecretResolver
-from tests.live.needs import PREFIX, present, value
+from tests.live.needs import PREFIX, LiveEnv, present, value
 
 
-def resolver(environ: Mapping[str, str] | None = None) -> EnvironmentSecretResolver:
+def resolver(environ: LiveEnv) -> EnvironmentSecretResolver:
     """The only way the live suite reaches a credential."""
     return EnvironmentSecretResolver(prefix=PREFIX, environ=environ)
 
@@ -49,7 +48,7 @@ def offered_in(entry: ModelEntry, region: str) -> bool:
     return True
 
 
-def regions_list(environ: Mapping[str, str], many: str, one: str) -> list[str]:
+def regions_list(environ: LiveEnv, many: str, one: str) -> list[str]:
     """The regions named in ``many`` (comma-separated), or the single region ``one``."""
     listed = value(environ, many)
     if listed:
@@ -70,7 +69,7 @@ BEDROCK_AUTH_MODES = (
 )
 
 
-def _chain(environ: Mapping[str, str]) -> dict[str, Any]:
+def _chain(environ: LiveEnv) -> dict[str, Any]:
     auth: dict[str, Any] = {"mode": "credential_chain"}
     profile = value(environ, "BEDROCK_PROFILE")
     if profile:
@@ -78,7 +77,7 @@ def _chain(environ: Mapping[str, str]) -> dict[str, Any]:
     return auth
 
 
-def _access_keys(environ: Mapping[str, str]) -> dict[str, Any]:
+def _access_keys(environ: LiveEnv) -> dict[str, Any]:
     auth: dict[str, Any] = {
         "mode": "access_keys",
         "access_key_id": ref("AWS_ACCESS_KEY_ID"),
@@ -89,7 +88,7 @@ def _access_keys(environ: Mapping[str, str]) -> dict[str, Any]:
     return auth
 
 
-def bedrock_auth(mode: str, environ: Mapping[str, str]) -> tuple[dict[str, Any], bool]:
+def bedrock_auth(mode: str, environ: LiveEnv) -> tuple[dict[str, Any], bool]:
     """The ``auth`` mapping for ``mode``, and whether long-term keys must be allowed."""
     if mode == "credential_chain":
         return _chain(environ), False
@@ -104,7 +103,7 @@ def bedrock_auth(mode: str, environ: Mapping[str, str]) -> tuple[dict[str, Any],
     raise ValueError(f"unknown Bedrock authentication mode {mode!r}")
 
 
-def first_bedrock_auth(environ: Mapping[str, str]) -> str | None:
+def first_bedrock_auth(environ: LiveEnv) -> str | None:
     """The first SigV4 or key mode whose variables are set, preferring SigV4."""
     if present(environ, "BEDROCK_CREDENTIAL_CHAIN"):
         return "credential_chain"
@@ -115,7 +114,7 @@ def first_bedrock_auth(environ: Mapping[str, str]) -> str | None:
     return None
 
 
-def bedrock_settings(region: str, mode: str, environ: Mapping[str, str]) -> dict[str, Any]:
+def bedrock_settings(region: str, mode: str, environ: LiveEnv) -> dict[str, Any]:
     auth, long_term = bedrock_auth(mode, environ)
     settings: dict[str, Any] = {"kind": "bedrock", "region": region, "auth": auth}
     if long_term:
@@ -143,7 +142,7 @@ def default_bedrock_model(region: str) -> str | None:
     return None
 
 
-def mantle_auth(environ: Mapping[str, str]) -> tuple[dict[str, Any], bool] | None:
+def mantle_auth(environ: LiveEnv) -> tuple[dict[str, Any], bool] | None:
     """Short-term keys from AWS credentials if set, else a long-term key."""
     if present(environ, "BEDROCK_CREDENTIAL_CHAIN"):
         return bedrock_auth("short_term_from_chain", environ)
@@ -181,7 +180,7 @@ def anthropic_direct() -> dict[str, Any]:
     return {"kind": "anthropic", "endpoint": "direct", "api_key": ref("ANTHROPIC_API_KEY")}
 
 
-def anthropic_foundry(environ: Mapping[str, str], *, entra: bool) -> dict[str, Any]:
+def anthropic_foundry(environ: LiveEnv, *, entra: bool) -> dict[str, Any]:
     settings: dict[str, Any] = {
         "kind": "anthropic",
         "endpoint": "foundry",
@@ -194,7 +193,7 @@ def anthropic_foundry(environ: Mapping[str, str], *, entra: bool) -> dict[str, A
     return settings
 
 
-def _entra(environ: Mapping[str, str]) -> dict[str, Any]:
+def _entra(environ: LiveEnv) -> dict[str, Any]:
     entra: dict[str, Any] = {"mode": "entra_id"}
     client_id = value(environ, "FOUNDRY_MANAGED_IDENTITY_CLIENT_ID")
     if client_id:
@@ -217,7 +216,7 @@ def xai_settings() -> dict[str, Any]:
 
 
 def foundry_settings(
-    environ: Mapping[str, str], *, entra: bool, catalogue_provider: str = "openai"
+    environ: LiveEnv, *, entra: bool, catalogue_provider: str = "openai"
 ) -> dict[str, Any]:
     auth: dict[str, Any] = (
         _entra(environ) if entra else {"mode": "api_key", "api_key": ref("FOUNDRY_OPENAI_API_KEY")}
@@ -233,13 +232,13 @@ def foundry_settings(
     }
 
 
-def _int(environ: Mapping[str, str], name: str, default: int) -> int:
+def _int(environ: LiveEnv, name: str, default: int) -> int:
     given = value(environ, name)
     return int(given) if given else default
 
 
 def deployment_overlay(
-    environ: Mapping[str, str], provider: str, deployment: str, *, kind: str = "chat"
+    environ: LiveEnv, provider: str, deployment: str, *, kind: str = "chat"
 ) -> tuple[CatalogueOverlay, ...]:
     """A product overlay declaring a Foundry deployment, unless the catalogue has it.
 
@@ -282,7 +281,7 @@ def gemini_settings() -> dict[str, Any]:
 OLLAMA_NUM_CTX = 16_384
 
 
-def ollama_settings(environ: Mapping[str, str]) -> dict[str, Any]:
+def ollama_settings(environ: LiveEnv) -> dict[str, Any]:
     return {
         "kind": "ollama",
         "base_url": value(environ, "OLLAMA_URL"),

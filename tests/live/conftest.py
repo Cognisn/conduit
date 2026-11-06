@@ -12,13 +12,12 @@ JSON to the file ``CONDUIT_LIVE_REPORT`` names, if it is set.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 import pytest
 
-from tests.live.needs import Need, check, value
+from tests.live.needs import Need, check, live_env, value
 from tests.live.report import REPORT
 
 LIVE_NEEDS = "live_needs"
@@ -54,7 +53,7 @@ def live_gate(request: pytest.FixtureRequest) -> Iterator[None]:
     runs before the gate."""
     item = request.node
     assert isinstance(item, pytest.Item)
-    gate(item, os.environ)
+    gate(item, live_env())
     yield
 
 
@@ -64,7 +63,7 @@ def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
     terminalreporter.section("conduit live report")
     for line in REPORT.render():
         terminalreporter.write_line(line)
-    target = value(os.environ, "REPORT")
+    target = value(live_env(), "REPORT")
     if target:
         REPORT.write_json(Path(target))
         terminalreporter.write_line(f"report written to {target}")

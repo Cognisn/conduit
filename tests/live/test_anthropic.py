@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from tests.live import needs
 from tests.live.harness import check_caching, check_chat, check_tools, started
-from tests.live.needs import value
+from tests.live.needs import live_env, value
 from tests.live.report import REPORT, Verdict
 from tests.live.targets import Target, anthropic_direct, anthropic_foundry
 
@@ -21,16 +19,16 @@ DEFAULT_THINKING_MODEL = "claude-sonnet-4-6"
 
 
 def _direct(model_variable: str = "ANTHROPIC_MODEL", default: str = DEFAULT_MODEL) -> Target:
-    model = value(os.environ, model_variable, default)
+    model = value(live_env(), model_variable, default)
     assert model is not None
     return Target("anthropic direct", anthropic_direct(), model)
 
 
 def _foundry(entra: bool) -> Target:
-    model = value(os.environ, "FOUNDRY_ANTHROPIC_MODEL", DEFAULT_MODEL)
+    model = value(live_env(), "FOUNDRY_ANTHROPIC_MODEL", DEFAULT_MODEL)
     assert model is not None
     label = "anthropic foundry " + ("entra-id" if entra else "api-key")
-    return Target(label, anthropic_foundry(os.environ, entra=entra), model)
+    return Target(label, anthropic_foundry(live_env(), entra=entra), model)
 
 
 @pytest.mark.live_needs(needs.ANTHROPIC_DIRECT)

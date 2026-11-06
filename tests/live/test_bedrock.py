@@ -5,16 +5,20 @@ Runs only with ``-m integration`` and the variables each test's needs name.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from conduit.core.catalogue import default_catalogue
-from conduit.core.errors import ResidencyRefused
-from conduit.core.residency import ResidencyPolicy, ResidencyScope
+from conduit.core.residency import ResidencyScope
 from tests.live import needs
-from tests.live.harness import check_caching, check_chat, check_tools, started
-from tests.live.needs import value
+from tests.live.harness import (
+    check_caching,
+    check_chat,
+    check_residency_refusal,
+    check_tools,
+    in_region_policy,
+    started,
+)
+from tests.live.needs import live_env, value
 from tests.live.report import REPORT, Verdict
 from tests.live.targets import (
     BEDROCK_AUTH_MODES,
@@ -41,17 +45,17 @@ IN_REGION_SONNETS = ("anthropic.claude-sonnet-4-6", "anthropic.claude-sonnet-5")
 
 
 def _region() -> str:
-    region = value(os.environ, "BEDROCK_REGION")
+    region = value(live_env(), "BEDROCK_REGION")
     assert region is not None  # the gate checked it
     return region
 
 
 def _target(mode: str) -> Target:
     region = _region()
-    model = value(os.environ, "BEDROCK_MODEL") or default_bedrock_model(region)
+    model = value(live_env(), "BEDROCK_MODEL") or default_bedrock_model(region)
     if model is None:
         pytest.skip(f"no catalogued Claude profile serves {region}; set CONDUIT_LIVE_BEDROCK_MODEL")
-    return Target(f"bedrock {region} {mode}", bedrock_settings(region, mode, os.environ), model)
+    return Target(f"bedrock {region} {mode}", bedrock_settings(region, mode, live_env()), model)
 
 
 @pytest.mark.parametrize(
@@ -69,7 +73,7 @@ async def test_streaming_chat_in_each_authentication_mode(mode: str) -> None:
 
 @pytest.mark.live_needs(needs.BEDROCK_REGION, needs.BEDROCK_ANY_AUTH)
 async def test_tool_loop_with_reasoning_state_sent_back() -> None:
-    mode = first_bedrock_auth(os.environ)
+    mode = first_bedrock_auth(live_env())
     assert mode is not None
     target = _target(mode)
     async with started(target) as binding:
@@ -78,7 +82,7 @@ async def test_tool_loop_with_reasoning_state_sent_back() -> None:
 
 @pytest.mark.live_needs(needs.BEDROCK_REGION, needs.BEDROCK_ANY_AUTH)
 async def test_cache_point_writes_then_reads() -> None:
-    mode = first_bedrock_auth(os.environ)
+    mode = first_bedrock_auth(live_env())
     assert mode is not None
     target = _target(mode)
     async with started(target) as binding:
@@ -88,7 +92,7 @@ async def test_cache_point_writes_then_reads() -> None:
 @pytest.mark.live_needs(needs.BEDROCK_REGION, needs.BEDROCK_ANY_AUTH)
 async def test_cross_region_profile_is_refused_under_an_in_region_policy() -> None:
     region = _region()
-    mode = first_bedrock_auth(os.environ)
+    mode = first_bedrock_auth(live_env())
     assert mode is not None
     profiles = [
         entry
@@ -100,23 +104,9 @@ async def test_cross_region_profile_is_refused_under_an_in_region_policy() -> No
     if not profiles:
         pytest.skip(f"no catalogued cross-region profile serves {region}")
     target = Target(
-        f"bedrock {region} {mode}", bedrock_settings(region, mode, os.environ), profiles[0].model_id
+        f"bedrock {region} {mode}", bedrock_settings(region, mode, live_env()), profiles[0].model_id
     )
-    policy = ResidencyPolicy(
-        scopes=frozenset({ResidencyScope.IN_REGION}), regions=frozenset({region})
-    )
-    refused: ResidencyRefused | None = None
-    try:
-        async with started(target, residency=policy):
-            pass
-    except ResidencyRefused as error:
-        refused = error
-    assert refused is not None, "the cross-region profile was not refused"
-    assert refused.__cause__ is None
-    assert refused.__context__ is None
-    REPORT.record(
-        "residency", target.subject, "cross-region refused under in-region policy", Verdict.MATCH
-    )
+    await check_residency_refusal(target, region, target.subject)
 
 
 @pytest.mark.parametrize("model", IN_REGION_SONNETS)
@@ -125,11 +115,11 @@ async def test_bare_id_in_region_invocation(model: str) -> None:
     """Q0004: the bare id is invoked in each catalogued region the run covers, under an
     in-region policy for that region."""
     entry = default_catalogue().require("bedrock", model)
-    mode = first_bedrock_auth(os.environ)
+    mode = first_bedrock_auth(live_env())
     assert mode is not None
     covered = [
         region
-        for region in regions_list(os.environ, "BEDROCK_REGIONS", "BEDROCK_REGION")
+        for region in regions_list(live_env(), "BEDROCK_REGIONS", "BEDROCK_REGION")
         if region in entry.regions
     ]
     if not covered:
@@ -139,11 +129,8 @@ async def test_bare_id_in_region_invocation(model: str) -> None:
         )
     for region in covered:
         target = Target(
-            f"bedrock {region} {mode}", bedrock_settings(region, mode, os.environ), model
+            f"bedrock {region} {mode}", bedrock_settings(region, mode, live_env()), model
         )
-        policy = ResidencyPolicy(
-            scopes=frozenset({ResidencyScope.IN_REGION}), regions=frozenset({region})
-        )
-        async with started(target, residency=policy) as binding:
+        async with started(target, residency=in_region_policy(region)) as binding:
             await check_chat(binding, target.subject)
         REPORT.record("catalogue", target.subject, "Q0004 bare id in region", Verdict.MATCH)

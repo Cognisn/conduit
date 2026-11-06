@@ -13,7 +13,8 @@ run has credentials and regions for, and checks what it can observe against the 
 
 Everything observed goes into the report. A mismatch fails the entry's test, naming
 the checks; what cannot be observed (OpenAI's and X.AI's limits, which no API states;
-a model that chose not to call the tool) is reported as unobserved and never fails.
+a model that chose not to call the tool; an entry with no output limit) is reported as
+unobserved and never fails. ``test_catalogue_logic.py`` proves this offline on the stub.
 
 Opt in with ``CONDUIT_LIVE_CATALOGUE=1`` as well as each provider's credentials; select
 providers with ``-k`` (``-k "bedrock and not mantle"``).
@@ -21,16 +22,18 @@ providers with ``-k`` (``-k "bedrock and not mantle"``).
 
 from __future__ import annotations
 
-import os
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Iterable
 
 import pytest
 
 from conduit.core.catalogue import ModelEntry, default_catalogue
 from conduit.core.errors import ProviderError
+from conduit.core.registry import ProviderFactory
 from conduit.core.residency import ResidencyScope
 from tests.live import needs
 from tests.live.harness import (
+    DEFAULT_OUTPUT_BUDGET,
+    NoToolCall,
     check_caching,
     check_chat,
     check_embeddings,
@@ -41,7 +44,7 @@ from tests.live.harness import (
     started,
     started_embeddings,
 )
-from tests.live.needs import Need
+from tests.live.needs import LiveEnv, Need, live_env
 from tests.live.probes import (
     Limits,
     ProbeFailed,
@@ -84,14 +87,6 @@ PROVIDER_NEEDS: dict[str, tuple[Need, ...]] = {
 #: Providers whose caches are written through explicit breakpoints.
 EXPLICIT_CACHES = frozenset({"anthropic", "bedrock", "bedrock_mantle"})
 
-#: Capabilities the catalogue declares that an adapter refuses before any call: reported
-#: as unobserved with the reason, since the provider is never asked (Skuld Q0042).
-KNOWN_ADAPTER_GAPS: dict[tuple[str, str], str] = {
-    ("bedrock", "structured output"): (
-        "known adapter gap: Converse structured output is not mapped, refused before any call"
-    ),
-}
-
 ENTRIES = [entry for entry in default_catalogue() if entry.provider != "stub"]
 
 
@@ -103,7 +98,7 @@ def _param(entry: ModelEntry) -> object:
     )
 
 
-def routes(entry: ModelEntry, environ: Mapping[str, str]) -> list[tuple[Target, str | None]]:
+def routes(entry: ModelEntry, environ: LiveEnv) -> list[tuple[Target, str | None]]:
     """The targets to call ``entry`` through, each with the region it is called in."""
     model = entry.model_id
     if entry.provider == "anthropic":
@@ -156,83 +151,92 @@ def routes(entry: ModelEntry, environ: Mapping[str, str]) -> list[tuple[Target, 
     return []
 
 
-async def _guard(subject: str, check: str, coro: Awaitable[object]) -> bool:
-    """Run one check; a provider refusal is a mismatch, a model's choice is unobserved."""
+def _failure(error: ProviderError) -> str:
+    return f"ProviderError({error.failure.value})"
+
+
+async def verify_tools(binding_subject: str, run: Awaitable[object]) -> None:
+    """Record a tool loop: a model that chose not to call the tool is unobserved; any
+    other defect (wrong tool, unfinished call, wrong stop, no answer, no usage, a refusal)
+    is a mismatch."""
+    check = "tools"
     try:
-        await coro
-    except ProviderError as error:
-        REPORT.record(
-            "catalogue", subject, check, Verdict.MISMATCH, f"ProviderError({error.failure.value})"
-        )
-        return False
+        await run
+    except NoToolCall as error:
+        REPORT.record("catalogue", binding_subject, check, Verdict.UNOBSERVED, str(error))
     except AssertionError as error:
-        REPORT.record("catalogue", subject, check, Verdict.UNOBSERVED, str(error))
-        return False
-    return True
+        REPORT.record("catalogue", binding_subject, check, Verdict.MISMATCH, str(error))
+    except ProviderError as error:
+        REPORT.record("catalogue", binding_subject, check, Verdict.MISMATCH, _failure(error))
 
 
-async def verify_chat(entry: ModelEntry, target: Target) -> None:
+async def verify_chat(
+    entry: ModelEntry, target: Target, *, factories: Iterable[ProviderFactory] | None = None
+) -> None:
+    """Invocation and every declared capability, then the output limit."""
     subject = target.subject
     caps = entry.capabilities
-    limit = entry.output_limit or 1
-    async with started(target, max_output_tokens=min(4096, limit)) as binding:
-        invocable = False
+    budget = min(DEFAULT_OUTPUT_BUDGET, entry.output_limit or DEFAULT_OUTPUT_BUDGET)
+    async with started(target, max_output_tokens=budget, factories=factories) as binding:
+        detail = ""
         try:
             await check_chat(binding, subject)
-            invocable = True
         except ProviderError as error:
-            REPORT.record(
-                "catalogue",
-                subject,
-                "invocable",
-                Verdict.MISMATCH,
-                f"ProviderError({error.failure.value})",
-            )
+            detail = _failure(error)
         except AssertionError as error:
-            REPORT.record("catalogue", subject, "invocable", Verdict.MISMATCH, str(error))
-        if not invocable:
+            detail = str(error) or "the chat check failed"
+        if detail:
+            REPORT.record("catalogue", subject, "invocable", Verdict.MISMATCH, detail)
             return
         REPORT.record("catalogue", subject, "invocable", Verdict.MATCH)
         if caps.tools:
-            await _guard(subject, "tools", check_tools(binding, subject))
+            await verify_tools(subject, check_tools(binding, subject))
         if caps.prompt_caching:
             explicit = entry.provider in EXPLICIT_CACHES
+            detail = ""
             try:
                 await check_caching(binding, subject, explicit=explicit, strict=False)
             except ProviderError as error:
-                REPORT.record(
-                    "catalogue",
-                    subject,
-                    "prompt caching",
-                    Verdict.MISMATCH,
-                    f"ProviderError({error.failure.value})",
-                )
+                detail = _failure(error)
             except AssertionError as error:
-                REPORT.record("catalogue", subject, "prompt caching", Verdict.MISMATCH, str(error))
+                detail = str(error) or "the caching check failed"
+            if detail:
+                REPORT.record("catalogue", subject, "prompt caching", Verdict.MISMATCH, detail)
         for declared, name, check in (
             (caps.structured_output, "structured output", check_structured_output),
             (caps.vision, "vision", check_vision),
         ):
-            gap = KNOWN_ADAPTER_GAPS.get((entry.provider, name))
-            if declared and gap is not None:
-                REPORT.record("catalogue", subject, name, Verdict.UNOBSERVED, gap)
-            elif declared:
+            if declared:
                 ok, why = await check(binding)
                 REPORT.record(
                     "catalogue", subject, name, Verdict.MATCH if ok else Verdict.MISMATCH, why
                 )
-    async with started(target, max_output_tokens=limit) as binding:
+    await verify_output_limit(entry, target, factories=factories)
+
+
+async def verify_output_limit(
+    entry: ModelEntry, target: Target, *, factories: Iterable[ProviderFactory] | None = None
+) -> None:
+    """Whether the provider accepts a request at the catalogued output limit."""
+    limit = entry.output_limit
+    if limit is None:
+        REPORT.record(
+            "catalogue", target.subject, "output limit", Verdict.UNOBSERVED, "no output limit"
+        )
+        return
+    async with started(target, max_output_tokens=limit, factories=factories) as binding:
         accepted, failure = await check_output_limit(binding, limit)
     REPORT.record(
         "catalogue",
-        subject,
+        target.subject,
         f"output limit {limit} accepted",
         Verdict.MATCH if accepted else Verdict.MISMATCH,
         failure,
     )
 
 
-def _compare(subject: str, check: str, catalogued: int | None, stated: int | None) -> None:
+def compare(subject: str, check: str, catalogued: int | None, stated: int | None) -> None:
+    """Record a catalogued number against what an API states."""
     if stated is None:
         REPORT.record("catalogue", subject, check, Verdict.UNOBSERVED, "not stated by the API")
     elif stated == catalogued:
@@ -243,20 +247,39 @@ def _compare(subject: str, check: str, catalogued: int | None, stated: int | Non
         )
 
 
+def compare_regions(subject: str, catalogued: frozenset[str], routed: frozenset[str]) -> None:
+    """Record a cross-region entry's region list against where its profile routes."""
+    missing = sorted(routed - catalogued)
+    extra = sorted(catalogued - routed)
+    if not missing and not extra:
+        REPORT.record(
+            "catalogue", subject, "profile region list", Verdict.MATCH, f"{len(routed)} regions"
+        )
+    else:
+        REPORT.record(
+            "catalogue",
+            subject,
+            "profile region list",
+            Verdict.MISMATCH,
+            f"routed but not catalogued: {', '.join(missing) or 'none'}; "
+            f"catalogued but not routed: {', '.join(extra) or 'none'}",
+        )
+
+
 async def verify_metadata(
-    entry: ModelEntry, target: Target, region: str | None, environ: Mapping[str, str]
+    entry: ModelEntry, target: Target, region: str | None, environ: LiveEnv
 ) -> None:
     subject = target.subject
     try:
         if entry.provider in ("anthropic", "gemini"):
             probe = anthropic_limits if entry.provider == "anthropic" else gemini_limits
             limits: Limits = await probe(entry.model_id, environ)
-            _compare(subject, "context window", entry.context_window, limits.context_window)
+            compare(subject, "context window", entry.context_window, limits.context_window)
             if entry.kind == "chat":
-                _compare(subject, "output limit", entry.output_limit, limits.output_limit)
+                compare(subject, "output limit", entry.output_limit, limits.output_limit)
         elif entry.provider == "ollama":
             stated = await ollama_context(entry.model_id, environ)
-            _compare(subject, "context window", entry.context_window, stated)
+            compare(subject, "context window", entry.context_window, stated)
         elif entry.provider == "bedrock" and region is not None:
             await _verify_bedrock(entry, subject, region, environ)
         else:
@@ -265,9 +288,7 @@ async def verify_metadata(
         REPORT.record("catalogue", subject, "metadata", Verdict.UNOBSERVED, f"probe: {failed}")
 
 
-async def _verify_bedrock(
-    entry: ModelEntry, subject: str, region: str, environ: Mapping[str, str]
-) -> None:
+async def _verify_bedrock(entry: ModelEntry, subject: str, region: str, environ: LiveEnv) -> None:
     client = await bedrock_control_client(region, environ)
     if entry.residency_scope is ResidencyScope.IN_REGION:
         exists = await bedrock_model_exists(client, entry.model_id)
@@ -288,34 +309,31 @@ async def _verify_bedrock(
             f"routes to {len(routed)} region(s)",
         )
         return
-    missing = sorted(routed - entry.regions)
-    extra = sorted(entry.regions - routed)
-    if not missing and not extra:
-        REPORT.record(
-            "catalogue", subject, "profile region list", Verdict.MATCH, f"{len(routed)} regions"
-        )
-    else:
-        REPORT.record(
-            "catalogue",
-            subject,
-            "profile region list",
-            Verdict.MISMATCH,
-            f"routed but not catalogued: {', '.join(missing) or 'none'}; "
-            f"catalogued but not routed: {', '.join(extra) or 'none'}",
-        )
+    compare_regions(subject, entry.regions, routed)
+
+
+def fail_on_mismatches(subjects: Iterable[str]) -> None:
+    """Fail, naming each check, if any of ``subjects`` recorded a mismatch."""
+    wanted = set(subjects)
+    mismatched = sorted(
+        f"{line.subject} :: {line.check}"
+        for line in REPORT.lines
+        if line.verdict is Verdict.MISMATCH and line.subject in wanted
+    )
+    count = len(mismatched)
+    assert count == 0, "catalogue mismatches: " + "; ".join(mismatched)
 
 
 @pytest.mark.parametrize("entry", [_param(entry) for entry in ENTRIES])
 async def test_default_catalogue_entry(entry: ModelEntry) -> None:
-    environ = os.environ
-    found = routes(entry, environ)
+    found = routes(entry, live_env())
     if not found:
         pytest.skip(
             f"{entry.provider}:{entry.model_id} is not offered in any region this run covers"
         )
     if entry.provider == "ollama":
         try:
-            await ollama_context(entry.model_id, environ)
+            await ollama_context(entry.model_id, live_env())
         except ProbeFailed as failed:
             pytest.skip(f"{entry.model_id} on the Ollama server: {failed}")
     for target, region in found:
@@ -327,20 +345,9 @@ async def test_default_catalogue_entry(entry: ModelEntry) -> None:
                     await check_embeddings(binding, target.subject, own)
             except ProviderError as error:
                 REPORT.record(
-                    "catalogue",
-                    target.subject,
-                    "embeddings",
-                    Verdict.MISMATCH,
-                    f"ProviderError({error.failure.value})",
+                    "catalogue", target.subject, "embeddings", Verdict.MISMATCH, _failure(error)
                 )
         else:
             await verify_chat(entry, target)
-        await verify_metadata(entry, target, region, environ)
-    subjects = {target.subject for target, _ in found}
-    mismatched = sorted(
-        f"{line.subject} :: {line.check}"
-        for line in REPORT.lines
-        if line.verdict is Verdict.MISMATCH and line.subject in subjects
-    )
-    count = len(mismatched)
-    assert count == 0, "catalogue mismatches: " + "; ".join(mismatched)
+        await verify_metadata(entry, target, region, live_env())
+    fail_on_mismatches(target.subject for target, _ in found)

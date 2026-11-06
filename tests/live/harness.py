@@ -19,14 +19,14 @@ import math
 import secrets
 import struct
 import zlib
-from collections.abc import AsyncIterator, Iterable, Mapping
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from typing import Any
 
 from conduit.core.catalogue import CatalogueOverlay
-from conduit.core.errors import ProviderError
+from conduit.core.errors import ProviderError, ProviderFailure, ResidencyRefused
 from conduit.core.registry import ProviderFactory
-from conduit.core.residency import ResidencyPolicy
+from conduit.core.residency import ResidencyPolicy, ResidencyScope
 from conduit.core.runtime import ConduitSettings, TaskBinding, start
 from conduit.core.settings import AssignmentSettings
 from conduit.core.streaming import (
@@ -52,6 +52,7 @@ from conduit.core.types import (
 )
 from conduit.embeddings import EmbeddingBinding, builtin_embedding_factories, start_embeddings
 from conduit.providers import builtin_factories
+from tests.live.needs import LiveEnv, live_env
 from tests.live.report import REPORT, Verdict
 from tests.live.targets import Target, resolver
 
@@ -69,7 +70,7 @@ async def started(
     residency: ResidencyPolicy | None = None,
     overlays: Iterable[CatalogueOverlay] = (),
     max_output_tokens: int | None = DEFAULT_OUTPUT_BUDGET,
-    environ: Mapping[str, str] | None = None,
+    environ: LiveEnv | None = None,
     factories: Iterable[ProviderFactory] | None = None,
 ) -> AsyncIterator[TaskBinding]:
     """A running conduit for ``target``'s model, closed on the way out.
@@ -92,7 +93,7 @@ async def started(
         settings,
         task_classes=[TaskClass(name=LIVE_TASK)],
         factories=builtin_factories() if factories is None else factories,
-        secrets=resolver(environ),
+        secrets=resolver(environ if environ is not None else live_env()),
     )
     try:
         yield runtime.for_task(LIVE_TASK)
@@ -105,7 +106,7 @@ async def started_embeddings(
     target: Target,
     *,
     dimensions: int | None = None,
-    environ: Mapping[str, str] | None = None,
+    environ: LiveEnv | None = None,
 ) -> AsyncIterator[EmbeddingBinding]:
     """A running conduit for ``target``'s embedding model, closed on the way out."""
     settings = ConduitSettings.model_validate(
@@ -121,13 +122,45 @@ async def started_embeddings(
         settings,
         task_classes=[TaskClass(name=LIVE_EMBEDDING_TASK, floor=CapabilityFloor(kind="embedding"))],
         factories=builtin_embedding_factories(),
-        secrets=resolver(environ),
+        secrets=resolver(environ if environ is not None else live_env()),
         dimensions={LIVE_EMBEDDING_TASK: dimensions} if dimensions is not None else None,
     )
     try:
         yield runtime.for_task(LIVE_EMBEDDING_TASK)
     finally:
         await runtime.aclose()
+
+
+def in_region_policy(region: str) -> ResidencyPolicy:
+    """In-region processing only, in ``region``."""
+    return ResidencyPolicy(
+        scopes=frozenset({ResidencyScope.IN_REGION}), regions=frozenset({region})
+    )
+
+
+async def check_residency_refusal(
+    target: Target,
+    region: str,
+    subject: str,
+    *,
+    factories: Iterable[ProviderFactory] | None = None,
+) -> None:
+    """``start`` refuses ``target``'s model under an in-region policy for ``region``,
+    before any client exists, with a refusal that keeps no exception it was raised for."""
+    refused: ResidencyRefused | None = None
+    try:
+        async with started(target, residency=in_region_policy(region), factories=factories):
+            pass
+    except ResidencyRefused as error:
+        refused = error
+    assert refused is not None, "the model was not refused under the in-region policy"
+    cause = refused.__cause__
+    context = refused.__context__
+    assert cause is None, "the refusal keeps a cause"
+    assert context is None, "the refusal keeps a context"
+    REPORT.record(
+        "residency", subject, "cross-region refused under in-region policy", Verdict.MATCH
+    )
 
 
 # Shapes ---------------------------------------------------------------------------------
@@ -196,6 +229,10 @@ async def check_chat(binding: TaskBinding, subject: str) -> Usage:
     return final.usage
 
 
+class NoToolCall(AssertionError):
+    """The model chose not to call the tool: a model's choice, not an adapter defect."""
+
+
 LOOKUP_TOOL = ToolSpec(
     name="lookup_reference",
     description=(
@@ -231,11 +268,23 @@ async def check_tools(binding: TaskBinding, subject: str) -> int:
                 counted["finished"] += 1
             yield event
 
-    first = await collect(counting(), model=first_request.model)
+    # collect refuses a stream with an unfinished call as PROTOCOL; the counts are checked
+    # first, so that defect is named, and any other failure goes on (unchained) after.
+    failure: ProviderFailure | None = None
+    collected: ModelResponse | None = None
+    try:
+        collected = await collect(counting(), model=first_request.model)
+    except ProviderError as error:
+        failure = error.failure
     started_calls = counted["started"]
     finished_calls = counted["finished"]
-    assert started_calls >= 1, "no ToolCallStarted event was streamed"
+    if started_calls == 0 and failure is None:
+        raise NoToolCall("no ToolCallStarted event was streamed")
     assert finished_calls == started_calls, "a started tool call was not finished"
+    if failure is not None:
+        raise ProviderError(failure)
+    assert collected is not None
+    first = collected
     stop = first.stop_reason
     calls = first.tool_uses
     call_count = len(calls)

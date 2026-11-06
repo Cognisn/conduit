@@ -42,7 +42,14 @@ LIVE_MODULES = frozenset(
     }
 )
 #: Modules that run offline in the default suite: never integration, never gated.
-OFFLINE_MODULES = frozenset({"test_skip_reasons.py", "test_harness.py"})
+OFFLINE_MODULES = frozenset(
+    {
+        "test_skip_reasons.py",
+        "test_harness.py",
+        "test_catalogue_logic.py",
+        "test_redaction.py",
+    }
+)
 
 
 def without_live_variables() -> dict[str, str]:
@@ -118,6 +125,19 @@ def test_the_live_suite_collects_from_every_module(collected: list[dict[str, Any
     entries = sum(1 for e in default_catalogue() if e.provider != "stub")
     catalogue_items = sum(1 for i in collected if "test_default_catalogue_entry" in i["nodeid"])
     assert catalogue_items == entries, "the catalogue pass does not cover every declared model"
+
+
+def test_every_catalogue_item_needs_the_opt_in(collected: list[dict[str, Any]]) -> None:
+    """The catalogue pass never runs on credentials alone: CONDUIT_LIVE_CATALOGUE too."""
+    opt_in = needs.CATALOGUE_PASS.variables()
+    items = [item for item in collected if "test_default_catalogue_entry" in item["nodeid"]]
+    without = [
+        item["nodeid"]
+        for item in items
+        if not any(opt_in <= need.variables() for need in _needs(item))
+    ]
+    assert len(items) > 0
+    assert without == [], "catalogue items that run without CONDUIT_LIVE_CATALOGUE"
 
 
 def test_every_live_test_is_integration_and_states_its_needs(
