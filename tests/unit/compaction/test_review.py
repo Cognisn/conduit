@@ -170,10 +170,16 @@ async def test_a_forced_compaction_is_applied_even_above_the_threshold() -> None
 
 
 @pytest.mark.parametrize("use_summary", [False, True])
-async def test_a_run_whose_prefix_is_over_the_threshold_compacts_nothing(use_summary: bool) -> None:
+async def test_a_run_whose_prefix_is_over_the_threshold_compacts_only_past_the_window(
+    use_summary: bool,
+) -> None:
+    # The prefix alone is over the threshold, so while the prompt fits the window no
+    # compaction is tried; once it no longer fits, compacting is needed and is applied
+    # whenever its result fits. Every call the model receives therefore fits.
     log = _script(12)
     summariser = summary_script()
     rt = await runtime(log, summariser)
+    budget = rt.assignments["chat"].max_output_tokens
     store, sink = MemoryTranscriptStore(), Sink()
     strategy = (
         Summarise(rt, task_class="summary", threshold=0.5, keep_turns=1)
@@ -193,10 +199,18 @@ async def test_a_run_whose_prefix_is_over_the_threshold_compacts_nothing(use_sum
     )
     result = await runner.run(task)
     assert result.text == "All items are checked."
-    assert _events(sink, "compacted") == []
-    assert summariser.requests == []
-    assert len(sink.of(CompactionEvent)) <= len(log.requests)
-    assert {e.reason for e in sink.of(CompactionEvent)} <= {"prefix_too_large"}
+    for sent in log.requests:
+        size = estimate_tokens(system=sent.system, tools=sent.tools, messages=sent.messages)
+        assert size + budget <= SMALL_WINDOW
+    compacted = _events(sink, "compacted")
+    skipped = _events(sink, "skipped")
+    assert compacted and skipped
+    assert all(e.tokens_before + budget > SMALL_WINDOW for e in compacted)
+    assert all((e.tokens_after or 0) + budget <= SMALL_WINDOW for e in compacted)
+    assert all(e.tokens_before + budget <= SMALL_WINDOW for e in skipped)
+    assert {e.reason for e in skipped} == {"prefix_too_large"}
+    assert len(summariser.requests) == (len(compacted) if use_summary else 0)
+    assert _events(sink, "failed") == []
 
 
 async def test_in_a_run_each_compaction_lands_below_its_threshold_and_holds() -> None:

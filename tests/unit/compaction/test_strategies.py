@@ -175,7 +175,7 @@ async def test_summarise_calls_the_summary_task_class() -> None:
     assert sent.model == "stub-summary"
     assert sent.task_class == "summary"
     assert sent.run_id == "run_x"
-    assert sent.tools == ()
+    assert [t.name for t in sent.tools] == ["lookup"]  # a minimal definition: the run gave none
     first = sent.messages[0].content[0]
     assert isinstance(first, TextBlock)
     assert first.text == "Please check the example.com release items."

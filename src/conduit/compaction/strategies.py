@@ -24,8 +24,12 @@ replaces with its own.
   their own blocks (each result trimmed) and the instructions added to the last user
   turn. The provider registry therefore holds the call's tool content to the capture
   policy's tool-content setting, as for any call (C19). Because the request carries tool
-  blocks it also carries the conversation's tool definitions, so the default floor asks
-  for a model with tools.
+  blocks it also carries the definitions of the tools those turns used (the run's own,
+  or a minimal one, an object with any properties, for a tool the run no longer offers,
+  after a hand-off for example), so the default floor asks for a model with tools.
+  Requests have no tool choice, so a summary model may still answer with a tool call
+  rather than text; that is reported as ``summary_empty`` and the compaction is tried
+  again on a later call.
 
 A strategy may also declare ``summary_allowance``: about how many tokens its summary may
 take. The ``Compactor`` counts it, with the fixed prefix and the kept tail, before
@@ -247,6 +251,22 @@ def summary_messages(
     return tuple(messages)
 
 
+def _used_tools(messages: Sequence[Message], known: Sequence[ToolSpec]) -> tuple[ToolSpec, ...]:
+    """A definition for every tool ``messages`` call, in order of first use: the run's own,
+    or a minimal one for a tool it does not offer."""
+    specs = {spec.name: spec for spec in known}
+    used: dict[str, ToolSpec] = {}
+    for message in messages:
+        for block in message.content:
+            if isinstance(block, ToolUseBlock) and block.name not in used:
+                used[block.name] = specs.get(block.name) or ToolSpec(
+                    name=block.name,
+                    description="A tool used earlier in the conversation.",
+                    input_schema={"type": "object"},
+                )
+    return tuple(used.values())
+
+
 class Summarise:
     """Summarise the older turns with the model assigned to ``task_class``.
 
@@ -316,7 +336,7 @@ class Summarise:
         has_tools = any(
             isinstance(b, ToolUseBlock | ToolResultBlock) for m in messages for b in m.content
         )
-        tools = context.tools if has_tools else ()
+        tools = _used_tools(messages, context.tools) if has_tools else ()
         if estimate_tokens(tools=tools, messages=messages) + output > (
             assignment.entry.context_window
         ):

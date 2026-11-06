@@ -20,6 +20,7 @@ REASONS = frozenset(
         "summary_failed",
         "summary_empty",
         "summary_too_large",
+        "result_too_large",
         "transcript_mismatch",
         "store_failed",
         "strategy_failed",
@@ -46,6 +47,9 @@ class CompactionFailed(CompactionError):
     - ``summary_empty``: the summary model answered with no text;
     - ``summary_too_large``: the conversation to summarise does not fit the summary
       model's context window;
+    - ``result_too_large``: the prompt no longer fits the context window, and no
+      compaction by this strategy could make it fit (the fixed prefix and the kept tail
+      alone, or the compacted result, leave no room for the output budget);
     - ``transcript_mismatch``: the stored transcript's active conversation is not the
       conversation the hook was shown, so no compaction point can be placed;
     - ``store_failed``: the transcript store failed (``error_class`` names the error);

@@ -9,14 +9,27 @@ threshold at or below the prompt's share of the window) is tried; below every th
 nothing changes. ``force`` makes the next call of a session compact whatever its size,
 which is how a terminal interface offers a compaction command.
 
-**A compaction must bring the prompt under its threshold.** Before anything is asked
-of a strategy, the fixed prefix (system and tools), the kept tail and the strategy's
-``summary_allowance`` are estimated together: if they already reach the threshold, no
-compaction could get under it, so none is tried (``skipped``, ``prefix_too_large``). A
-compaction whose result is still at or over the threshold is not applied either
-(``skipped``, ``not_below_threshold``). So a conversation is never compacted again and
-again on every call, and no summary is paid for that could not help. A forced compaction
-skips both checks: it is applied whenever there is something to replace.
+**While the prompt fits, a compaction must bring it under its threshold.** "Fits" means
+the prompt and the assignment's output budget together are within the context window.
+While they are, before anything is asked of a strategy, the fixed prefix (system and
+tools), the kept tail and the strategy's ``summary_allowance`` are estimated together:
+if they already reach the threshold, no compaction could get under it, so none is tried
+(``skipped``, ``prefix_too_large``). A compaction whose result is still at or over the
+threshold is not applied either (``skipped``, ``not_below_threshold``). So a conversation
+is never compacted again and again on every call, and no summary is paid for that could
+not help.
+
+**Once the prompt no longer fits, a compaction is needed**, so it is applied whenever its
+result fits, even above the threshold. If the fixed prefix, the kept tail and the
+allowance already leave no room for the output budget, it fails before any summary is
+asked for, and a result that still does not fit fails too (``result_too_large``, raised,
+since the call could not succeed). A forced compaction skips all of these checks: it is
+applied whenever there is something to replace.
+
+The estimate counts about four characters a token. It undercounts some text (Chinese,
+Japanese and Korean, for example, take more tokens a character), so a prompt it judges
+to fit may still be refused by the provider for its length; pass ``estimate`` with the
+model's own count where that matters.
 
 **The cached prefix stays stable (C19).** The hook returns messages only: the system
 prompt, the tools and the loaded skills (which the skills layer places in the system
@@ -47,8 +60,11 @@ fit the context window, the hook returns ``None`` and the call goes ahead uncomp
 the exception it was raised for (D0040), and cancellation always propagates unchanged.
 
 **Forced compactions** wait, per session, until one succeeds or finds nothing to
-replace; a failed one is tried again on the next call. At most ``max_forced`` sessions
-wait at once: forcing another drops the one waiting longest.
+replace. A call claims its session's request when it starts, so concurrent calls do not
+run it twice; a failed or cancelled attempt puts it back for the next call, unless the
+session was forced again meanwhile, and a force made during an attempt is kept for the
+next call whatever that attempt's outcome. At most ``max_forced`` sessions wait at once:
+forcing another drops the one waiting longest.
 
 One compactor may serve many runs at once: it keeps no per-run state, only the forced
 compactions waiting for their sessions.
@@ -187,6 +203,9 @@ class Compactor:
         waits until a compaction succeeds or finds nothing to replace."""
         if strategy is not None and strategy not in self._names:
             raise ConfigurationError(f"no strategy named {strategy!r}")
+        self._queue(session_id, strategy)
+
+    def _queue(self, session_id: str | None, strategy: str | None) -> None:
         if session_id not in self._forced and len(self._forced) >= self._max_forced:
             del self._forced[next(iter(self._forced))]  # the one waiting longest
         self._forced[session_id] = strategy
@@ -215,20 +234,40 @@ class Compactor:
 
     async def before_model_call(self, request: CompactionContext) -> tuple[Message, ...] | None:
         """The compacted conversation, or ``None`` to send it unchanged."""
+        session = request.session_id
+        if session not in self._forced:
+            result, _ = await self._attempt(request, None, claimed=False)
+            return result
+        # Claimed now, so concurrent calls of the session do not run it too; put back
+        # unless it was used, and unless a newer force has arrived meanwhile.
+        name = self._forced.pop(session)
+        used = False
+        try:
+            result, used = await self._attempt(request, name, claimed=True)
+        finally:
+            if not used and session not in self._forced:
+                self._queue(session, name)
+        return result
+
+    async def _attempt(
+        self, request: CompactionContext, forced: str | None, *, claimed: bool
+    ) -> tuple[tuple[Message, ...] | None, bool]:
+        """The compacted conversation or ``None``, and whether a forced request was used
+        (it compacted, or found nothing to replace)."""
         messages = tuple(request.messages)
         assignment = request.assignment
         window = assignment.entry.context_window
+        budget = assignment.max_output_tokens
         tokens = self._tokens(request)
-        fits = tokens + assignment.max_output_tokens <= window
+        fits = tokens + budget <= window
         trigger: CompactionTrigger
-        session = request.session_id
-        if session in self._forced:
-            strategy = self._named(self._forced[session])
+        if claimed:
+            strategy = self._named(forced)
             trigger = "forced"
         else:
             found = self._by_threshold(tokens, window)
             if found is None:
-                return None
+                return None, False
             strategy, trigger = found, "threshold"
         event: dict[str, Any] = {
             "run_id": request.run_id,
@@ -242,16 +281,21 @@ class Compactor:
         cut = find_cut(messages, strategy.keep_turns)
         if cut is None:
             if trigger == "forced":
-                self._forced.pop(session, None)
                 await self._skip(event, "nothing_to_compact")
-            return None
+                return None, True
+            return None, False
         tail = messages[cut:]
         if trigger == "threshold":
             least = self._estimate(system=request.system, tools=request.tools, messages=tail)
-            if (least + _allowance(strategy)) / window >= strategy.threshold:
-                await self._skip(event, "prefix_too_large")
-                return None
+            least += _allowance(strategy)
+            if fits:
+                if least / window >= strategy.threshold:
+                    await self._skip(event, "prefix_too_large")
+                    return None, False
+            elif least + budget > window:
+                return await self._failed(event, CompactionFailed("result_too_large"), fits), False
 
+        session = request.session_id
         # Where the compaction point goes, checked before any summary is asked for.
         store = self._transcripts
         sequence: list[int] | None = None
@@ -264,28 +308,33 @@ class Compactor:
             except Exception as error:
                 error_class = type(error).__name__
             if loaded is None:
-                return await self._failed(
-                    event, CompactionFailed("store_failed", error_class=error_class), fits
-                )
+                failed = CompactionFailed("store_failed", error_class=error_class)
+                return await self._failed(event, failed, fits), False
             sequence = _sequence_numbers(loaded, messages)
             if sequence is None:
-                return await self._failed(event, CompactionFailed("transcript_mismatch"), fits)
+                return await self._failed(
+                    event, CompactionFailed("transcript_mismatch"), fits
+                ), False
             point = loaded.latest_compaction()
             previous = point.replaces_through if point is not None else 0
 
         text, failure = await self._summary(strategy, messages[:cut], request)
         if failure is not None or text is None:
-            failed = failure or CompactionFailed("strategy_failed")
-            return await self._failed(event, failed, fits)
+            return await self._failed(
+                event, failure or CompactionFailed("strategy_failed"), fits
+            ), False
         summary_content: tuple[ContentBlock, ...] = (TextBlock(text=text),)
         if self._cache_summary:
             summary_content = (*summary_content, CacheBreakpoint())
         summary = Message(role="user", content=summary_content)
         replacement = (summary, *tail)
         after = self._estimate(system=request.system, tools=request.tools, messages=replacement)
-        if trigger == "threshold" and after / window >= strategy.threshold:
-            await self._skip(event, "not_below_threshold", tokens_after=after)
-            return None
+        if trigger == "threshold":
+            if fits and after / window >= strategy.threshold:
+                await self._skip(event, "not_below_threshold", tokens_after=after)
+                return None, False
+            if not fits and after + budget > window:
+                return await self._failed(event, CompactionFailed("result_too_large"), fits), False
 
         through: int | None = None
         replaced = cut
@@ -311,12 +360,9 @@ class Compactor:
             except Exception as error:
                 failed_class = type(error).__name__
             if not stored:
-                return await self._failed(
-                    event, CompactionFailed("store_failed", error_class=failed_class), fits
-                )
+                failed = CompactionFailed("store_failed", error_class=failed_class)
+                return await self._failed(event, failed, fits), False
 
-        if trigger == "forced":
-            self._forced.pop(session, None)
         await self._sink.emit(
             CompactionEvent(
                 **event,
@@ -335,7 +381,7 @@ class Compactor:
             tokens,
             after,
         )
-        return replacement
+        return replacement, True
 
     async def _summary(
         self,
