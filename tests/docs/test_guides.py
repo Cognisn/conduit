@@ -44,6 +44,7 @@ EXPECTED_EXAMPLES: dict[str, int] = {
     "docs/guides/observability.md": 3,
     "docs/guides/providers.md": 9,
     "docs/guides/skills.md": 2,
+    "docs/guides/terminal.md": 2,
 }
 
 #: Documents that must always be checked, whatever discovery finds.
