@@ -34,7 +34,7 @@ from tests.unit.cli.helpers import cli, console, lines, stub_conduit, write_conf
 ESC_CSI = "\x1b[2J"
 OSC_8 = "\x1b]8;;http://example.com\x07link\x1b]8;;\x07"
 C1_CSI = "\x9b31m"
-BIDI = "‮"
+BIDI = "\u202e"
 FORBIDDEN = ("\x1b", "\x9b", "\x07", BIDI)
 
 
