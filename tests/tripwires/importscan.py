@@ -62,6 +62,8 @@ OPTIONAL_LIBRARIES: Mapping[str, tuple[str, ...]] = {
     "konfig": ("conduit.integrations.konfig",),
     "warden": ("conduit.integrations.warden",),
     "opentelemetry": ("conduit.integrations.otel",),
+    # The cli extra's terminal rendering (Q0040).
+    "rich": ("conduit.cli",),
 }
 
 
