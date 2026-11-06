@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.6",
+  "version": "2026.11.7",
   "models": [
     {
       "model_id": "claude-fable-5-1",
@@ -103,7 +103,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -125,7 +125,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -149,7 +149,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -167,7 +167,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -185,7 +185,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -200,7 +200,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -222,7 +222,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -246,7 +246,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -264,7 +264,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -279,7 +279,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -298,7 +298,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -320,7 +320,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -344,7 +344,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -362,7 +362,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -380,7 +380,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -395,7 +395,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -417,7 +417,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -435,7 +435,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -459,7 +459,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -477,7 +477,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -495,7 +495,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -510,7 +510,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 128000
@@ -527,7 +527,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 64000
@@ -549,7 +549,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 64000
@@ -573,7 +573,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 64000
@@ -592,7 +592,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 64000
@@ -610,7 +610,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 64000
@@ -625,7 +625,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 1000000,
       "output_limit": 64000
@@ -646,7 +646,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 200000,
       "output_limit": 64000
@@ -670,7 +670,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 200000,
       "output_limit": 64000
@@ -689,7 +689,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 200000,
       "output_limit": 64000
@@ -707,7 +707,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 200000,
       "output_limit": 64000
@@ -725,7 +725,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 200000,
       "output_limit": 64000
@@ -740,7 +740,7 @@
         "tools": true,
         "vision": true,
         "prompt_caching": true,
-        "structured_output": true
+        "structured_output": false
       },
       "context_window": 200000,
       "output_limit": 64000
