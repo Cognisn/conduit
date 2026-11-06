@@ -100,7 +100,7 @@ Import the core's names (types, settings, events, errors, tools, transcript entr
 
 - [Integrating conduit](https://github.com/Cognisn/conduit/blob/main/docs/guides/integration.md): settings, start-up, task classes, catalogue overlays, residency, events and capture, the agent runner and the sync facade.
 - [Setting up providers](https://github.com/Cognisn/conduit/blob/main/docs/guides/providers.md) and [embeddings](https://github.com/Cognisn/conduit/blob/main/docs/guides/embeddings.md).
-- [Writing backends](https://github.com/Cognisn/conduit/blob/main/docs/guides/backends.md) and their conformance suites.
+- [Writing backends](https://github.com/Cognisn/conduit/blob/main/docs/guides/backends.md), their conformance suites, and evaluating agent tasks.
 - [Skills](https://github.com/Cognisn/conduit/blob/main/docs/guides/skills.md), [MCP servers](https://github.com/Cognisn/conduit/blob/main/docs/guides/mcp.md), [compaction](https://github.com/Cognisn/conduit/blob/main/docs/guides/compaction.md), [audit and telemetry](https://github.com/Cognisn/conduit/blob/main/docs/guides/observability.md) and [the terminal interface](https://github.com/Cognisn/conduit/blob/main/docs/guides/terminal.md).
 - [Adoption notes](https://github.com/Cognisn/conduit/blob/main/docs/guides/adoption.md) for products moving onto conduit.
 

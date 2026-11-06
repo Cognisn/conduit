@@ -48,7 +48,8 @@ src/conduit/
     provider.py    the provider protocol and BaseProvider; the embedding request, response
                    and provider protocol
     registry.py    the provider registry, MeteredProvider and MeteredEmbedder, the model
-                   call and embedding call events
+                   call and embedding call events, and guarded_client (the client
+                   construction guard)
     runtime.py     ConduitSettings, start, Runtime and TaskBinding
     settings.py    ProviderSettings and AssignmentSettings; credential and echo rules
     catalogue.py   the catalogue, its entries and overlays; data/catalogue.json
@@ -84,9 +85,10 @@ src/conduit/
                    Alembic chain), behind the sql extra
   integrations/    konfig/ (load_settings, KonfigSecretResolver), warden/
                    (WardenAuditSink), otel/ (OtelEventSink), each behind its extra
-  testing/         replay (recorded responses and scrub checks) and conformance/ (the
-                   transcript store, token store and skill source suites, a pytest
-                   plugin)
+  testing/         replay (recorded responses and scrub checks), conformance/ (the
+                   transcript store, token store, skill source, secret resolver,
+                   event sink and approval handler suites, a pytest plugin) and
+                   evaluation (agent task cases, checks, stub and live harnesses)
   cli/             the terminal interface, behind the cli extra: main (the conduit
                    console script and python -m conduit.cli), app (commands and
                    options), config (the configuration file), setup, status
