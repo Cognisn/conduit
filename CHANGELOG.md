@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b3] - 2026-11-06
+
+Wave 7, second merge: conformance suites and the evaluation harness (`feat/0.1.0-testing-suites`).
+
+### Added
+
+- Conformance suites for the secret resolver (`SecretResolverSuite`), the event sink (`EventSinkSuite`) and the approval handler (`ApprovalHandlerSuite`, with `ApprovalCall`) in `conduit.testing.conformance`, run against conduit's own resolvers and sinks.
+- The evaluation harness, `conduit.testing.evaluation`: cases with a task, a stub script and tools, judged by checks over the run's result, events and executed tools; `StubHarness` for the default test run and `LiveHarness` for a configured runtime in tests marked integration; a report of outcomes, passes, skips and a score.
+
+### Changed
+
+- Every conformance scenario is bounded by `scenario_timeout_s` (60 seconds by default, with a `scenario_cancel_grace_s` grace after cancelling), so a backend that hangs fails rather than hanging the test run.
+
 ## [0.1.0b2] - 2026-11-06
 
 Wave 7, first merge: guarded client construction (`fix/0.1.0-client-construction`).
