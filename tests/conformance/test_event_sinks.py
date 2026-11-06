@@ -13,6 +13,7 @@ import pytest
 
 from conduit.core.events import Event, EventSink, FanOutSink, MemoryEventSink
 from conduit.testing.conformance import EventSinkSuite
+from tests.conformance.meta import fails, passes
 
 
 def _memory_records(sink: MemoryEventSink) -> list[dict[str, Any]]:
@@ -235,12 +236,12 @@ def _suite(sink: type[_Kept], *, slow: bool = False) -> EventSinkSuite:
     ],
 )
 def test_the_suite_fails_a_broken_sink(broken: type[_Kept], scenario: str) -> None:
-    with pytest.raises(AssertionError):
+    with fails():
         getattr(_suite(broken), scenario)()
 
 
 def test_the_suite_fails_a_sink_that_never_returns() -> None:
-    with pytest.raises(AssertionError, match="did not return"):
+    with fails(match="did not return"):
         _suite(_NeverReturns, slow=True).test_an_emit_returns_promptly()
 
 
@@ -256,7 +257,7 @@ def test_the_suite_fails_a_sink_whose_record_holds_withheld_content() -> None:
             # A record that kept the content: what an unenforced path would deliver.
             return json.dumps(self.withheld_markers())
 
-    with pytest.raises(AssertionError, match="withheld"):
+    with fails(match="withheld"):
         Suite().test_withheld_content_never_reaches_the_sink()
 
 
@@ -286,7 +287,7 @@ def test_a_sink_that_keeps_no_record_fails_unless_it_opts_out() -> None:
         async def recorded(self, made: EventSink) -> Sequence[Mapping[str, Any]]:
             return None  # type: ignore[return-value]  # what a no-op sink's suite returns
 
-    with pytest.raises(AssertionError, match="keeps_records = False"):
+    with fails(match="keeps_records = False"):
         Suite().test_every_event_is_recorded_in_order()
 
 
@@ -317,7 +318,7 @@ class _ReordersWhenEmitsOverlap(_Kept):
 def test_the_suite_fails_a_sink_that_reorders_only_under_concurrency() -> None:
     suite = _suite(_ReordersWhenEmitsOverlap)
     suite.test_every_event_is_recorded_in_order()  # sound one emit at a time
-    with pytest.raises(AssertionError, match="out of order"):
+    with fails(match="out of order"):
         suite.test_concurrent_emits_are_each_recorded_once_in_order()
 
 
@@ -336,7 +337,7 @@ def test_a_records_filter_that_keeps_nothing_is_refused() -> None:
         Suite().test_every_event_is_recorded_in_order,
         Suite().test_concurrent_emits_are_each_recorded_once_in_order,
     ):
-        with pytest.raises(AssertionError, match="keeps none of the suite's events"):
+        with fails(match="keeps none of the suite's events"):
             scenario()
 
 
@@ -345,9 +346,25 @@ def test_a_records_filter_that_keeps_nothing_is_refused() -> None:
     [name for name in dir(EventSinkSuite) if name.startswith("test_")],
 )
 def test_every_scenario_passes_a_sound_sink(scenario: str) -> None:
-    getattr(_suite(_Kept), scenario)()
+    passes(getattr(_suite(_Kept), scenario))
 
 
 def test_an_unconfigured_suite_says_what_to_override() -> None:
     with pytest.raises(NotImplementedError, match="make_sink"):
         EventSinkSuite().test_an_unknown_event_type_is_accepted()
+
+
+@pytest.mark.parametrize(
+    "suite", [TestMemoryEventSink, TestFanOutSink, TestFanOutSinkBesideAFailingSink]
+)
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "test_every_event_is_recorded_in_order",
+        "test_concurrent_emits_are_each_recorded_once_in_order",
+    ],
+)
+def test_a_suite_that_keeps_records_runs_its_order_scenarios(
+    suite: type[EventSinkSuite], scenario: str
+) -> None:
+    passes(getattr(suite(), scenario))

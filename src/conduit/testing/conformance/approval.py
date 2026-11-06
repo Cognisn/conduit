@@ -150,8 +150,10 @@ class ApprovalHandlerSuite(ConformanceSuite):
         handler: ApprovalHandler,
     ) -> AgentRunner:
         """The runner the runner scenarios use: conduit's own, with ``handler`` as its
-        approvals. Products leave this alone; the suite's own tests replace it with a
-        runner that forgives a failing handler, to prove those scenarios would fail it."""
+        approvals. Products leave this alone: overriding it voids the raise and stall
+        scenarios, which guard conduit's runner, not the handler. The suite's own tests
+        replace it with a runner that forgives a failing handler, to prove those two
+        scenarios would fail it."""
         return AgentRunner(runtime, tools=dict(tools), approvals=handler)
 
     async def _run(

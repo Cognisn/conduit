@@ -4,7 +4,9 @@ stated reason within ``scenario_timeout_s``, rather than hanging the test run.""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
+import unittest
 from collections.abc import Mapping, Sequence
 from typing import ClassVar
 
@@ -37,6 +39,7 @@ from conduit.testing.conformance import (
 )
 
 BOUND = 0.3
+GRACE = 0.3
 
 
 async def _forever() -> None:
@@ -45,11 +48,18 @@ async def _forever() -> None:
 
 def _fails_within_the_bound(scenario: object) -> None:
     began = time.monotonic()
-    with pytest.raises(AssertionError, match=f"did not finish within {BOUND} s") as failed:
+    raised: BaseException | None = None
+    try:
         scenario()  # type: ignore[operator]
-    assert time.monotonic() - began < BOUND + 5.0
-    assert failed.value.__cause__ is None
-    assert failed.value.__context__ is None
+    except unittest.SkipTest as skip:
+        pytest.fail(f"the scenario skipped instead of failing: {skip}")
+    except AssertionError as error:
+        raised = error
+    assert raised is not None, "the scenario did not fail"
+    assert f"did not finish within {BOUND} s" in str(raised)
+    assert time.monotonic() - began < BOUND + GRACE + 5.0
+    assert raised.__cause__ is None
+    assert raised.__context__ is None
 
 
 def test_the_default_bound_is_set_for_every_suite() -> None:
@@ -59,6 +69,7 @@ def test_the_default_bound_is_set_for_every_suite() -> None:
 def test_a_hanging_scenario_fails_with_a_stated_reason_within_the_bound() -> None:
     class Suite(ConformanceSuite):
         scenario_timeout_s: ClassVar[float] = BOUND
+        scenario_cancel_grace_s: ClassVar[float] = GRACE
 
     _fails_within_the_bound(lambda: Suite().run(_forever))
 
@@ -134,6 +145,7 @@ class _HangingSkills:
 
 class _ResolverSuite(SecretResolverSuite):
     scenario_timeout_s: ClassVar[float] = BOUND
+    scenario_cancel_grace_s: ClassVar[float] = GRACE
 
     async def make_resolver(self, secrets: Mapping[str, str]) -> SecretResolver:
         return _HangingResolver()
@@ -141,6 +153,7 @@ class _ResolverSuite(SecretResolverSuite):
 
 class _SinkSuite(EventSinkSuite):
     scenario_timeout_s: ClassVar[float] = BOUND
+    scenario_cancel_grace_s: ClassVar[float] = GRACE
     emit_deadline_s: ClassVar[float] = 30.0
 
     async def make_sink(self) -> EventSink:
@@ -149,6 +162,7 @@ class _SinkSuite(EventSinkSuite):
 
 class _RecordedHangs(EventSinkSuite):
     scenario_timeout_s: ClassVar[float] = BOUND
+    scenario_cancel_grace_s: ClassVar[float] = GRACE
 
     async def make_sink(self) -> EventSink:
         return MemoryEventSink()
@@ -160,6 +174,7 @@ class _RecordedHangs(EventSinkSuite):
 
 class _HandlerSuite(ApprovalHandlerSuite):
     scenario_timeout_s: ClassVar[float] = BOUND
+    scenario_cancel_grace_s: ClassVar[float] = GRACE
 
     async def make_handler(self) -> ApprovalHandler:
         return _HangingHandler()
@@ -173,6 +188,7 @@ class _HandlerSuite(ApprovalHandlerSuite):
 
 class _TokenSuite(TokenStoreSuite):
     scenario_timeout_s: ClassVar[float] = BOUND
+    scenario_cancel_grace_s: ClassVar[float] = GRACE
 
     async def make_store(self) -> TokenStore:
         return _HangingTokens()
@@ -180,6 +196,7 @@ class _TokenSuite(TokenStoreSuite):
 
 class _TranscriptSuite(TranscriptStoreSuite):
     scenario_timeout_s: ClassVar[float] = BOUND
+    scenario_cancel_grace_s: ClassVar[float] = GRACE
 
     async def make_store(self) -> TranscriptStore:
         return _HangingTranscripts()
@@ -187,6 +204,7 @@ class _TranscriptSuite(TranscriptStoreSuite):
 
 class _SkillSuite(SkillSourceSuite):
     scenario_timeout_s: ClassVar[float] = BOUND
+    scenario_cancel_grace_s: ClassVar[float] = GRACE
 
     async def make_source(self, skills: Sequence[Skill]) -> SkillSource:
         return _HangingSkills()
@@ -217,3 +235,48 @@ def test_a_scenarios_own_timeout_is_not_mistaken_for_the_bound() -> None:
 
     with pytest.raises(TimeoutError):
         ConformanceSuite().run(times_out_itself)
+
+
+def test_the_default_grace_after_cancelling_is_set() -> None:
+    assert ConformanceSuite.scenario_cancel_grace_s == 5.0
+
+
+class _Bounded(ConformanceSuite):
+    scenario_timeout_s: ClassVar[float] = BOUND
+    scenario_cancel_grace_s: ClassVar[float] = GRACE
+
+
+def test_a_close_that_hangs_after_the_bound_still_fails_within_the_grace() -> None:
+    async def hangs_and_hangs_on_close() -> None:
+        try:
+            await _forever()
+        finally:
+            await _forever()  # a close that hangs too
+
+    _fails_within_the_bound(lambda: _Bounded().run(hangs_and_hangs_on_close))
+
+
+def test_a_backend_that_swallows_cancellation_still_fails_within_the_grace() -> None:
+    async def swallows() -> None:
+        while True:
+            with contextlib.suppress(asyncio.CancelledError):  # the defect
+                await asyncio.sleep(10)
+
+    _fails_within_the_bound(lambda: _Bounded().run(swallows))
+
+
+class _TokensThatHangOnClose(_HangingTokens):
+    async def aclose(self) -> None:
+        await _forever()
+
+
+class _TokenSuiteHangingOnClose(TokenStoreSuite):
+    scenario_timeout_s: ClassVar[float] = BOUND
+    scenario_cancel_grace_s: ClassVar[float] = GRACE
+
+    async def make_store(self) -> TokenStore:
+        return _TokensThatHangOnClose()
+
+
+def test_a_suite_whose_backend_hangs_in_close_fails_within_the_grace() -> None:
+    _fails_within_the_bound(_TokenSuiteHangingOnClose().test_an_unknown_key_is_none)

@@ -23,6 +23,7 @@ from conduit.core.secrets import (
 )
 from conduit.integrations.konfig import KonfigSecretResolver
 from conduit.testing.conformance import SecretResolverSuite
+from tests.conformance.meta import fails, passes
 
 #: A master key for konfig's encrypted file in a temporary directory; never a real key.
 MASTER_KEY = "conduit-suite-master-key-dev-only"
@@ -225,7 +226,7 @@ def _suite(resolver: type[_Base]) -> SecretResolverSuite:
     ],
 )
 def test_the_suite_fails_a_broken_resolver(broken: type[_Base], scenario: str) -> None:
-    with pytest.raises(AssertionError):
+    with fails():
         getattr(_suite(broken), scenario)()
 
 
@@ -234,7 +235,7 @@ def test_the_suite_fails_a_broken_resolver(broken: type[_Base], scenario: str) -
     [name for name in dir(SecretResolverSuite) if name.startswith("test_")],
 )
 def test_every_scenario_passes_a_sound_resolver(scenario: str) -> None:
-    getattr(_suite(_ReprSafeLiteral), scenario)()
+    passes(getattr(_suite(_ReprSafeLiteral), scenario))
 
 
 class _ReprSafeLiteral(_Base):
@@ -259,7 +260,7 @@ class _ChainsAHarmlessCause(_Base):
 
 
 def test_the_suite_fails_a_resolver_that_chains_any_cause() -> None:
-    with pytest.raises(AssertionError, match="keeps a RuntimeError as its cause"):
+    with fails(match="keeps a RuntimeError as its cause"):
         _suite(_ChainsAHarmlessCause).test_an_unknown_reference_is_secret_unavailable()
 
 
@@ -277,5 +278,5 @@ class _AnswersTheWrongCaller(_Base):
 def test_the_suite_fails_a_resolver_that_answers_the_wrong_caller() -> None:
     suite = _suite(_AnswersTheWrongCaller)
     suite.test_a_known_reference_resolves_to_its_value()  # sound one call at a time
-    with pytest.raises(AssertionError):
+    with fails():
         suite.test_concurrent_references_resolve_to_their_own_values()

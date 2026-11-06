@@ -13,7 +13,12 @@ class ConformanceSuite:
     Each test method runs one async scenario on a fresh event loop from
     ``loop_factory`` (the default policy's loop when ``None``), bounded by
     ``scenario_timeout_s``: a backend that hangs fails the scenario, saying so, rather
-    than hanging the test run.
+    than hanging the test run. When the bound is reached the scenario is cancelled; if
+    it has still not finished ``scenario_cancel_grace_s`` later (a close that hangs as
+    well, or a backend that swallows the cancellation), the suite stops waiting for it,
+    abandons its event loop and fails the same way. The bound works through the event
+    loop, so a backend that blocks the loop itself (``time.sleep``, a synchronous
+    network call) is not bounded: run blocking work in a worker thread.
     """
 
     #: The interface the suite checks, for reports.
@@ -23,24 +28,41 @@ class ConformanceSuite:
     #: The longest one scenario may take, making and closing the backend included. Room
     #: for a database reached over a network; raise it for a slower backend.
     scenario_timeout_s: ClassVar[float] = 60.0
+    #: How long a scenario cancelled at the bound may take to finish before the suite
+    #: stops waiting for it.
+    scenario_cancel_grace_s: ClassVar[float] = 5.0
 
     def run(self, scenario: Callable[[], Awaitable[None]]) -> None:
-        bound = type(self).scenario_timeout_s
+        suite = type(self)
+        bound = suite.scenario_timeout_s
         expired = False
+        abandoned = False
 
         async def main() -> None:
-            nonlocal expired
-            scope = asyncio.timeout(bound)
-            try:
-                async with scope:
-                    await scenario()
-            except TimeoutError:
-                if not scope.expired():
-                    raise  # the scenario's own timeout, not the bound
-                expired = True
+            nonlocal expired, abandoned
+            task = asyncio.ensure_future(scenario())
+            done, _ = await asyncio.wait({task}, timeout=bound)
+            if task in done:
+                await task  # the scenario's own outcome, its failures and timeouts included
+                return
+            expired = True
+            task.cancel()
+            done, _ = await asyncio.wait({task}, timeout=suite.scenario_cancel_grace_s)
+            if task not in done:
+                abandoned = True
+            elif not task.cancelled():
+                task.exception()  # retrieved, so the loop does not report it as unread
 
-        with asyncio.Runner(loop_factory=type(self).loop_factory) as runner:
+        runner = asyncio.Runner(loop_factory=suite.loop_factory)
+        try:
             runner.run(main())
+        finally:
+            if abandoned:
+                # Closing the runner would cancel the stuck scenario again and wait for it
+                # without end; close only the loop, leaving the scenario behind.
+                runner.get_loop().close()
+            else:
+                runner.close()
         # Raised here, outside every handler, so it keeps no timeout as its context.
         if expired:
             raise AssertionError(

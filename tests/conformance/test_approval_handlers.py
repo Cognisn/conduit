@@ -16,6 +16,7 @@ from conduit.core.backends import ApprovalDecision, ApprovalHandler, ApprovalReq
 from conduit.core.tools import TaskTools
 from conduit.testing.conformance import ApprovalHandlerSuite
 from conduit.testing.conformance.approval import ApprovalCall
+from tests.conformance.meta import fails, passes
 
 
 class AllowListApprovals:
@@ -135,7 +136,7 @@ def _suite(handler: type[_Base]) -> ApprovalHandlerSuite:
     ],
 )
 def test_the_suite_fails_a_broken_handler(broken: type[_Base], scenario: str) -> None:
-    with pytest.raises(AssertionError):
+    with fails():
         getattr(_suite(broken), scenario)()
 
 
@@ -144,7 +145,7 @@ def test_the_suite_fails_a_broken_handler(broken: type[_Base], scenario: str) ->
     [name for name in dir(ApprovalHandlerSuite) if name.startswith("test_")],
 )
 def test_every_scenario_passes_a_sound_handler(scenario: str) -> None:
-    getattr(_suite(_Sound), scenario)()
+    passes(getattr(_suite(_Sound), scenario))
 
 
 def test_a_call_must_be_a_tool_name_and_its_arguments() -> None:
@@ -171,7 +172,7 @@ class _AnswersTheWrongCaller(_Base):
 def test_the_suite_fails_a_handler_that_answers_the_wrong_caller() -> None:
     suite = _suite(_AnswersTheWrongCaller)
     suite.test_each_call_gets_its_decision()  # sound one request at a time
-    with pytest.raises(AssertionError):
+    with fails():
         suite.test_concurrent_requests_get_their_own_decisions()
 
 
@@ -219,12 +220,12 @@ def _forgiving(wrapper: type[_ForgivesARaise] | type[_ForgivesAStall]) -> Approv
 
 
 def test_the_raise_scenario_fails_a_runner_that_approves_on_a_raise() -> None:
-    with pytest.raises(AssertionError):
+    with fails():
         _forgiving(_ForgivesARaise).test_a_handler_that_raises_is_a_refusal()
 
 
 def test_the_stall_scenario_fails_a_runner_that_approves_on_a_stall() -> None:
-    with pytest.raises(AssertionError):
+    with fails():
         _forgiving(
             _ForgivesAStall
         ).test_a_handler_still_deciding_when_the_budget_ends_is_a_refusal()

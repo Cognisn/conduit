@@ -10,6 +10,7 @@ import pytest
 from conduit.core.backends import TokenSet, TokenStore
 from conduit.stores.memory import MemoryTokenStore
 from conduit.testing.conformance import TokenStoreSuite
+from tests.conformance.meta import fails
 
 
 class TestMemoryTokenStore(TokenStoreSuite):
@@ -76,5 +77,5 @@ def _suite(store: type[MemoryTokenStore]) -> TokenStoreSuite:
     ],
 )
 def test_the_suite_fails_a_broken_store(broken: type[MemoryTokenStore], scenario: str) -> None:
-    with pytest.raises((AssertionError, KeyError)):
+    with fails(AssertionError, KeyError):
         getattr(_suite(broken), scenario)()
