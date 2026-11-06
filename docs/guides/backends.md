@@ -29,8 +29,7 @@ from collections.abc import Mapping
 
 from pydantic import SecretStr
 
-from conduit import SecretRef
-from conduit.core.errors import SecretUnavailable
+from conduit import SecretRef, SecretUnavailable
 
 
 class VaultSecretResolver:
@@ -107,8 +106,7 @@ from collections.abc import Sequence
 
 from pydantic import TypeAdapter, ValidationError
 
-from conduit import Transcript
-from conduit.core.transcript import TranscriptEntry
+from conduit import Transcript, TranscriptEntry
 
 ENTRY: TypeAdapter[TranscriptEntry] = TypeAdapter(TranscriptEntry)
 
@@ -203,7 +201,7 @@ Running the suite against your backend is how you show it conforms; there is no 
 The MCP client's OAuth tokens (and its dynamic client registrations) are held only in the product's token store, under keys such as `mcp:<server>` and `mcp:<server>:client`. `get` returns a `TokenSet` or `None`, `put` overwrites, `delete` removes. Store the mapping `TokenSet.to_storage()` returns (it reveals the token values for storage) and rebuild with `TokenSet.from_storage`. Tokens are credentials: encrypt them at rest, and never log them.
 
 ```python
-from conduit.core.backends import TokenSet
+from conduit import TokenSet
 from conduit.testing.conformance import TokenStoreSuite
 
 
@@ -235,7 +233,7 @@ assert "test_a_deleted_key_is_gone" in run_suite(TestDictTokenStore())
 `list_skills()` returns each skill's `SkillSummary` (name, description and version); `load_skill(name)` returns the `Skill` (its summary, its `SKILL.md` body, and its resources by relative path) and raises `LookupError` for one it does not hold. Validation of names, versions and resource paths is the skills layer's, so it applies to every source alike.
 
 ```python
-from conduit.core.backends import Skill, SkillSummary
+from conduit import Skill, SkillSummary
 from conduit.testing.conformance import SkillSourceSuite
 
 
@@ -266,7 +264,7 @@ assert "test_an_absent_skill_is_a_lookup_error" in run_suite(TestDictSkillSource
 The agent runner sends a tool call the product marks as needing approval (a tool with a true `requires_approval` attribute, by default) to the handler first. `decide(request)` returns an `ApprovalDecision`; a refusal, a missing handler or a handler that raises becomes a tool result the model sees, and the tool never runs. How a person is asked (a terminal prompt, a queue in a web interface, a chat message) is the product's.
 
 ```python
-from conduit.core.backends import ApprovalDecision, ApprovalRequest
+from conduit import ApprovalDecision, ApprovalRequest
 
 
 class ChangeWindowApprovals:
@@ -302,8 +300,7 @@ The `sql` extra's `SqlTranscriptStore` and `SqlTokenStore` keep their tables in 
 ```python
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from conduit import Message
-from conduit.core.transcript import MessageEntry
+from conduit import Message, MessageEntry
 from conduit.stores.sql import SqlTranscriptStore, current_revision, head_revision, migrate
 
 

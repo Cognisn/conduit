@@ -94,6 +94,8 @@ assert asyncio.run(main()) == "Hello from example.com"
 
 To call a real model, configure its provider (for example `{"kind": "bedrock", "region": "eu-west-2"}`), assign one of its models, and use an `EnvironmentSecretResolver` or your own resolver for its credentials.
 
+Import the core's names (types, settings, events, errors, tools, transcript entries and backend models) from `conduit` itself, and each layer's names from its package: `conduit.agent`, `conduit.stores`, `conduit.mcp`, `conduit.providers.bedrock` and so on. Importing `conduit` loads the core alone.
+
 ## Guides
 
 - [Integrating conduit](https://github.com/Cognisn/conduit/blob/main/docs/guides/integration.md): settings, start-up, task classes, catalogue overlays, residency, events and capture, the agent runner and the sync facade.

@@ -27,14 +27,14 @@ from conduit import (
     Event,
     LiteralSecretResolver,
     Message,
+    MessageEntry,
     TaskClass,
     start,
 )
 from conduit.agent import AgentRunner, AgentTask, RunStatus
 from conduit.compaction import Compactor, DropToolResults, KeepLastTurns, Summarise
-from conduit.core.transcript import MessageEntry
 from conduit.providers.stub import StubFactory, StubTurn
-from conduit.stores.memory import MemoryTranscriptStore
+from conduit.stores import MemoryTranscriptStore
 
 
 class ListSink:

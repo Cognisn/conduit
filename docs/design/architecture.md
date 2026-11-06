@@ -37,7 +37,8 @@ The layout as built. Each layer's package docstring describes it in more detail.
 
 ```text
 src/conduit/
-  __init__.py      the top-level public API (the core's contracts, start and start_sync)
+  __init__.py      the top-level public API: every core name an integration uses, with
+                   start and start_sync
   _version.txt     the version, written only by scripts/stamp_version.py
   core/
     types.py       messages, content blocks (text, image, tool use, tool result, provider
@@ -78,7 +79,8 @@ src/conduit/
   mcp/             settings (transports and authentication), client (McpConnection),
                    oauth (OAuthClient), signin (SignInHook, LoopbackSignIn), bridge
                    (McpToolBridge), events, errors; behind the mcp extra
-  stores/          memory and json (transcript and token stores); sql/ (models,
+  stores/          memory and json (transcript and token stores, exported from
+                   conduit.stores); sql/ (models,
                    stores, migration and the Alembic chain), behind the sql extra
   integrations/    konfig/ (load_settings, KonfigSecretResolver), warden/
                    (WardenAuditSink), otel/ (OtelEventSink), each behind its extra
@@ -93,7 +95,7 @@ src/conduit/
                    demonstration script and tools)
 ```
 
-Hatchling reads `_version.txt` for the distribution metadata, and `conduit.__version__` reads it at import. The public API is whatever is importable from `conduit`, or from a layer's package (`conduit.agent`, `conduit.mcp`, `conduit.providers.bedrock`), without a leading underscore.
+Hatchling reads `_version.txt` for the distribution metadata, and `conduit.__version__` reads it at import. The public API is whatever is importable from `conduit` without a leading underscore. Every core name an integration needs (the types, protocols, events, errors, tools, transcript entries, backend models and the sync facade's `LoopThread`) is re-exported from `conduit` itself, and is imported from there rather than from the `conduit.core` submodule it lives in. Each other layer exports its names from its package (`conduit.agent`, `conduit.stores`, `conduit.mcp`, `conduit.providers.bedrock`), which is the import path to use; the top level never imports a layer, so importing `conduit` loads the core alone. `tests/test_package.py` pins both sets of exports, and the documentation's examples are checked to import each name from the package that exports it.
 
 ## 4. Dependency direction
 

@@ -77,13 +77,15 @@ from conduit import (
     LiteralSecretResolver,
     Message,
     TaskClass,
+    TaskTools,
     TextBlock,
+    ToolCallContext,
     ToolCatalogue,
+    ToolOutcome,
     ToolResultBlock,
     start,
 )
 from conduit.agent import AgentRunner, AgentTask, RunStatus
-from conduit.core.tools import TaskTools, ToolCallContext, ToolOutcome
 from conduit.mcp import McpConnection, McpToolBridge
 from conduit.providers.stub import StubFactory, StubToolCall, StubTurn, answer_tool_results
 
@@ -184,7 +186,7 @@ With `auth: {"type": "oauth"}`, conduit's OAuth 2.1 client obtains tokens for th
 
 ```python
 from conduit.mcp import LoopbackSignIn
-from conduit.stores.memory import MemoryTokenStore
+from conduit.stores import MemoryTokenStore
 
 wiki = McpServerSettings.model_validate(
     {
