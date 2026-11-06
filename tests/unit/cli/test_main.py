@@ -5,10 +5,12 @@ from __future__ import annotations
 import importlib.util
 import subprocess
 import sys
+from importlib import metadata
 from io import StringIO
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
 import conduit
 from conduit import ConfigurationError
@@ -129,3 +131,22 @@ class TestConfigurationErrors:
         with pytest.raises(ConfigurationError) as caught:
             load_config(tmp_path / "absent.json")
         assert caught.value.__cause__ is None and caught.value.__context__ is None
+
+
+def _extra(extra: str) -> set[str]:
+    found: set[str] = set()
+    for spec in metadata.requires("cognisn-conduit") or []:
+        requirement = Requirement(spec)
+        if requirement.marker is not None and requirement.marker.evaluate({"extra": extra}):
+            requirement.marker = None
+            found.add(str(requirement))
+    return found
+
+
+def test_the_cli_extra_brings_rich_and_the_mcp_extra() -> None:
+    # Q0039: the uvx form connects MCP servers as it is; provider SDKs stay in their extras.
+    # The build writes the mcp extra's own requirements in place of the self-reference.
+    rich = {r for r in _extra("cli") if Requirement(r).name == "rich"}
+    assert len(rich) == 1
+    assert _extra("mcp")
+    assert _extra("cli") == rich | _extra("mcp")

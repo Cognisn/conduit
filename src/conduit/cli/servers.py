@@ -7,8 +7,8 @@ back to ``http://127.0.0.1:<callback_port>/callback``. Tokens are held in memory
 session unless the person names a token directory (``--tokens``). A token, code or
 client secret is never shown.
 
-The mcp extra is needed only when servers are configured; without it the interface says
-which extra to install and carries on without them.
+The cli extra includes the mcp extra (Q0039). Installed some other way without it, the
+interface says which extra to install and carries on without the servers.
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ if TYPE_CHECKING:
     from conduit.mcp import McpConnection, McpTool
 
 MISSING_EXTRA = (
-    "MCP servers need the mcp extra: install cognisn-conduit[cli,mcp] "
-    '(uvx --from "cognisn-conduit[cli,mcp]" conduit).'
+    "MCP servers need the mcp extra, which the cli extra includes: install "
+    'cognisn-conduit[cli] (uvx --from "cognisn-conduit[cli]" conduit).'
 )
 
 

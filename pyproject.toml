@@ -76,8 +76,9 @@ konfig = ["cognisn-konfig>=0.5,<1"]
 # Its audit recorder needs psycopg (LGPL-3.0), a named licence exception (Q0036).
 warden = ["cognisn-warden>=0.1.0b8,<0.2"]
 otel = ["opentelemetry-api>=1.30,<2"]
-# The terminal interface (C10): rich for its output.
-cli = ["rich>=14,<16"]
+# The terminal interface (C10): rich for its output, and the mcp extra so the uvx form
+# connects MCP servers as it is (Q0039). Provider SDKs stay behind their own extras.
+cli = ["rich>=14,<16", "cognisn-conduit[mcp]"]
 # Development only; never a runtime dependency.
 dev = [
     "pytest>=8",

@@ -86,7 +86,7 @@ class TestStdioServer:
         monkeypatch.setitem(sys.modules, "conduit.mcp", None)
         path = write_config(tmp_path, {"mcp": {"servers": [stdio_server()]}})
         result = await cli("chat", "--config", path, stdin=lines("hello"))
-        assert "install cognisn-conduit[cli,mcp]" in result.output
+        assert "MCP servers need the mcp extra" in result.output
         assert "hello" in result.output
 
 
