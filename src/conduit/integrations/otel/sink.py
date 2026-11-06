@@ -223,15 +223,22 @@ class OtelEventSink:
 
     async def emit(self, event: Event) -> None:
         failed: str | None = None
+        ending: list[tuple[Span, int | None]] = []
+        ended_failed: str | None = None
         try:
-            with self._lock:
-                try:
-                    self._handle(event)
-                finally:
-                    ending, self._ending = self._ending, []
-            failed = self._end_all(ending)
-        except Exception as error:
-            failed = type(error).__name__
+            try:
+                with self._lock:
+                    try:
+                        self._handle(event)
+                    finally:
+                        ending, self._ending = self._ending, []
+            except Exception as error:
+                failed = type(error).__name__
+        finally:
+            # Spans the handler already finished are ended even when it failed or was
+            # cancelled part-way: they are no longer tracked as open.
+            ended_failed = self._end_all(ending)
+        failed = failed or ended_failed
         if failed is not None:
             logger.warning("OpenTelemetry sink failed on %s: %s", event.type, failed)
 

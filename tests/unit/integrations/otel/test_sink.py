@@ -838,6 +838,28 @@ class TestLifecycle:
         assert len(held) == len(telemetry.spans()) >= 12
         assert not any(held)
 
+    async def test_spans_already_finished_are_ended_when_a_handler_fails_part_way(
+        self, telemetry: Telemetry, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        target = sink(telemetry)
+
+        class Failing:
+            def record(self, *args: Any, **kwargs: Any) -> None:
+                raise RuntimeError("histogram unavailable")
+
+        await emit_all(target, [run_started(0), tool_started(1)])
+        target._duration = Failing()  # type: ignore[assignment]
+        with caplog.at_level(logging.WARNING, logger="conduit.integrations.otel"):
+            await target.emit(run_finished(5))  # ends both spans, then records latency
+        assert "RuntimeError" in caplog.text
+        tool = telemetry.span("conduit.tool_call")
+        assert tool.end_time == ns(at(5))
+        assert tool.status.status_code is StatusCode.ERROR  # left open: incomplete
+        run = telemetry.span("conduit.run")
+        assert run.end_time == ns(at(5))
+        assert run.status.status_code is StatusCode.UNSET
+        assert target.open_spans == 0
+
     async def test_concurrent_runs_keep_their_spans_apart(self, telemetry: Telemetry) -> None:
         target = sink(telemetry)
 
