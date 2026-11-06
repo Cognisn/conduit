@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a16] - 2026-11-05
+
+Wave 5, first merge: Bedrock key logging (`fix/0.1.0-bedrock-key-logging`).
+
+### Changed
+
+- Short-term Bedrock API keys for the bedrock and bedrock-mantle providers now come from one presign step, `conduit.providers.bedrock.auth.short_term_keys`. It presigns with botocore's SigV4 query signer, caps the key's lifetime at the credentials' expiry, refreshes within a margin, and generates the first key at start-up.
+- The bedrock provider keeps its API keys out of botocore's DEBUG records, in both key modes. botocore.auth `Signature:` records are dropped, and botocore.endpoint records are turned into fixed text when they are logged. Both filters are installed once per process, even when clients are created from several threads. The bedrock auth module documents what a product gives up by removing them, and that botocore's own credential-refresh logging cannot be filtered, so products keep botocore above DEBUG in production.
+- `SignatureRecordFilter`, `SIGNER_LOGGER` and `keep_signatures_out_of_logs` have moved from `conduit.providers.bedrock_mantle.auth` to `conduit.providers.bedrock.auth` (the last is now `keep_keys_out_of_logs`).
+- bedrock-mantle's refusal when no AWS credentials are found now names `NoCredentialsError`, as the bedrock provider's does.
+- The repository working agreement names the shared `devwork` Kvasir library for new project knowledge.
+
 ## [0.1.0a15] - 2026-11-05
 
 Wave 4, sixth and last merge: the bedrock-mantle adapter (`feat/0.1.0-provider-bedrock-mantle`). Milestone M3 (agent runner, skills, MCP client and embeddings).
