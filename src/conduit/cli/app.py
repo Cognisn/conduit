@@ -161,7 +161,7 @@ def main(
             known, _ = parser().parse_known_args(args)
             logging.getLogger("conduit").setLevel(known.log_level.upper())
     context = Context(
-        screen=Screen(console or Console()),
+        screen=Screen(console or Console(emoji=False)),
         stdin=sys.stdin,
         environ=dict(os.environ),
         factories=interface_factories(),

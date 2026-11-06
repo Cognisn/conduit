@@ -18,6 +18,9 @@ import pytest
 
 pytest.importorskip("mcp")
 
+from conduit.cli.servers import token_store
+from conduit.stores.json import JsonTokenStore
+from conduit.stores.memory import MemoryTokenStore
 from tests.unit.cli.helpers import STDIO_SERVER, cli, lines, write_config
 from tests.unit.mcp.fake_auth import FakeAuthServer
 from tests.unit.mcp.servers import PORT_BASE, LoopbackServer, build_server
@@ -159,6 +162,12 @@ class TestOAuthSignIn:
             assert value not in result.output
         # Without --tokens the tokens were held in memory: nothing was written.
         assert [p for p in work.rglob("*")] == []
+
+    def test_tokens_are_held_in_memory_unless_a_directory_is_named(self, tmp_path: Path) -> None:
+        assert isinstance(token_store(None), MemoryTokenStore)
+        named = token_store(str(tmp_path / "tokens"))
+        assert isinstance(named, JsonTokenStore)
+        assert named.directory == (tmp_path / "tokens").resolve()
 
     async def test_tokens_are_kept_only_where_asked(
         self, fake: FakeAuthServer, tmp_path: Path

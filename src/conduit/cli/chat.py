@@ -22,6 +22,8 @@ else is written anywhere.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import threading
 import uuid
 from contextlib import aclosing
 from dataclasses import dataclass
@@ -49,7 +51,7 @@ from conduit.cli.config import CHAT, SUMMARY, CliConfig
 from conduit.cli.demo import DEMO_TOOLS, demo_executor
 from conduit.cli.output import EventPrinter, describe_error, usage_text
 from conduit.cli.servers import bridged_tools, close_servers, connect_servers, token_store
-from conduit.cli.setup import Context, task_classes
+from conduit.cli.setup import Context, LineSource, task_classes
 from conduit.compaction import (
     CompactionStrategy,
     Compactor,
@@ -88,6 +90,39 @@ class ChatOptions:
     max_tool_calls: int | None = None
     max_tokens: int | None = None
     max_wall_time_s: float | None = None
+
+
+async def read_line(stdin: LineSource) -> str:
+    """One line of input, read on a daemon thread of its own.
+
+    A blocking read cannot be cancelled. Read in the default executor, it would hold
+    ``asyncio.run`` at shutdown (which waits for that executor) until the person pressed
+    Enter, so Ctrl-C at the prompt would not end the interface. A daemon thread is never
+    waited for: cancelling this read returns at once, and the thread ends with the process.
+    """
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[str] = loop.create_future()
+
+    def deliver(line: str | None, error: BaseException | None) -> None:
+        if future.done():
+            return
+        if error is not None:
+            future.set_exception(error)
+        else:
+            future.set_result(line or "")
+
+    def read() -> None:
+        line: str | None = None
+        error: BaseException | None = None
+        try:
+            line = stdin.readline()
+        except Exception as raised:  # handed to the waiting coroutine
+            error = raised
+        with contextlib.suppress(RuntimeError):  # the loop has closed: nobody is waiting
+            loop.call_soon_threadsafe(deliver, line, error)
+
+    threading.Thread(target=read, name="conduit-stdin", daemon=True).start()
+    return await future
 
 
 def run_budget(config: CliConfig, options: ChatOptions) -> RunBudget:
@@ -225,7 +260,7 @@ class Chat:
         stdin = self.context.stdin
         if stdin.isatty():
             self.screen.console.print("you> ", end="", markup=False, highlight=False)
-        line = await asyncio.to_thread(stdin.readline)
+        line = await read_line(stdin)
         return None if line == "" else line.rstrip("\r\n")
 
     async def _loop(self) -> int:

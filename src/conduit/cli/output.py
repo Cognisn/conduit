@@ -7,7 +7,8 @@
 - **Text from outside is shown as text.** Model output, tool results and anything else
   the interface did not write goes through ``sanitise_untrusted`` (control, escape and
   invisible characters become visible markers, so it cannot drive the terminal) and is
-  printed without rich markup, so brackets in it are never read as styles.
+  printed without rich markup or emoji codes, so brackets and ``:name:`` in it are shown
+  as written. Every line goes through ``Screen``, table cells and titles included.
 - **Events are shown as metadata.** Usage, cache reads and writes, compactions, skill
   loads and MCP calls are shown by their counts, names and outcomes, as conduit's events
   carry them.
@@ -67,14 +68,24 @@ class Screen:
         """A line the interface wrote itself (it may name configuration)."""
         self.end_line()
         self.console.print(
-            sanitise_untrusted(text), style=style, markup=False, highlight=False, soft_wrap=True
+            sanitise_untrusted(text),
+            style=style,
+            markup=False,
+            emoji=False,
+            highlight=False,
+            soft_wrap=True,
         )
 
     def stream(self, text: str) -> None:
         """A piece of streamed model output, left on an open line."""
         if text:
             self.console.print(
-                sanitise_untrusted(text), end="", markup=False, highlight=False, soft_wrap=True
+                sanitise_untrusted(text),
+                end="",
+                markup=False,
+                emoji=False,
+                highlight=False,
+                soft_wrap=True,
             )
             self._open = True
 

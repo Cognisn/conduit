@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, TextIO
+from typing import Any, Protocol
 
 from conduit import CapabilityFloor, EnvironmentSecretResolver, ProviderFactory, TaskClass
 from conduit.cli.config import CHAT, SUMMARY, CliConfig
@@ -12,6 +12,14 @@ from conduit.cli.demo import demo_script
 from conduit.cli.output import Screen
 from conduit.providers import builtin_factories
 from conduit.providers.stub import StubFactory
+
+
+class LineSource(Protocol):
+    """Where the person's input comes from: standard input, or a test's."""
+
+    def readline(self) -> str: ...
+
+    def isatty(self) -> bool: ...
 
 
 @dataclass
@@ -23,7 +31,7 @@ class Context:
     """
 
     screen: Screen
-    stdin: TextIO
+    stdin: LineSource
     environ: Mapping[str, str]
     factories: Sequence[ProviderFactory]
     open_url: Callable[[str], Any] | None = None
