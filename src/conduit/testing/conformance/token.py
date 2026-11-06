@@ -28,6 +28,17 @@ def _tokens(n: int = 0, *, full: bool = True) -> TokenSet:
     )
 
 
+#: A token type as long as conduit's MCP client may store: a registration bound to an
+#: issuer with a long address (``registration:<method>;iss=<issuer>``), 2,100 characters.
+LONG_TOKEN_TYPE = "registration:client_secret_basic;iss=https://auth.example.com/tenants/" + "t" * (
+    2_100 - 70
+)
+
+
+def _long(n: int) -> TokenSet:
+    return _tokens(n).model_copy(update={"token_type": LONG_TOKEN_TYPE})
+
+
 def _revealed(tokens: TokenSet | None) -> dict[str, object] | None:
     # TokenSet compares its secrets by value, but compare the revealed form too so a
     # failure shows which field the store lost.
@@ -35,7 +46,8 @@ def _revealed(tokens: TokenSet | None) -> dict[str, object] | None:
 
 
 class TokenStoreSuite(ConformanceSuite):
-    """Round trip, overwrite, delete, unknown keys and concurrent keys."""
+    """Round trip (a long token type included), overwrite, delete, unknown keys and
+    concurrent keys."""
 
     interface: ClassVar[str] = "token_store"
     #: Keys written at once in the concurrency scenario.
@@ -70,12 +82,16 @@ class TokenStoreSuite(ConformanceSuite):
         async def body(store: TokenStore) -> None:
             await store.put("mcp:full", _tokens(1))
             await store.put("mcp:minimal", _tokens(2, full=False))
+            await store.put("mcp:long:client", _long(3))
             again = await self.reopen_store(store)
             full, minimal = await again.get("mcp:full"), await again.get("mcp:minimal")
             assert _revealed(full) == _revealed(_tokens(1))
             assert full == _tokens(1)
             assert _revealed(minimal) == _revealed(_tokens(2, full=False))
             assert minimal is not None and minimal.refresh_token is None
+            long = await again.get("mcp:long:client")
+            assert long is not None and long.token_type == LONG_TOKEN_TYPE
+            assert _revealed(long) == _revealed(_long(3))
 
         self._scenario(body)
 
