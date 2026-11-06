@@ -12,17 +12,28 @@ digits, ``_``, ``.`` and ``-`` (at most 128 characters). It is lower-cased and e
 run of other characters becomes one ``_``; server names never hold ``__``, so the
 name splits one way. A name the catalogue cannot hold (over 64 characters) is left
 out, and two tools of one server that reach the same name are both left out rather
-than one shadowing the other. A tool's description is the server's, so it is
-marked with its source.
+than one shadowing the other.
+
+Descriptions are untrusted. A tool's description is the server's, so it is marked
+with its source, and it reaches the model in the tool catalogue: it is made safe by
+the rules below, then its whitespace collapsed to single spaces. The descriptions and
+titles inside its input schema are made safe the same way.
 
 Results are untrusted. A result goes back to the model inside an
 ``<untrusted-content>`` frame naming the server and tool, with a fresh nonce on both
 its opening and closing markers that never appears in the body. The body is made
-safe first, by the same rules as the agent runner's framing: carriage returns become
-newlines; control and format characters (zero-width, bidirectional overrides, the
-BOM) and the line and paragraph separators become visible ``[U+XXXX]`` markers;
-anything resembling a frame marker, in any case and with any spacing, is escaped;
-and a result over ``max_result_chars`` is cut, with a note of how much was dropped.
+safe first, by the agent runner's rules: carriage returns become newlines; control
+and format characters (zero-width, bidirectional overrides, the BOM) and the line and
+paragraph separators become visible ``[U+XXXX]`` markers; anything resembling a frame
+marker (this frame's, or the runner's ``<<UNTRUSTED`` and ``<<END UNTRUSTED``), in any
+case and with any spacing, is escaped; and a result over ``max_result_chars`` is cut,
+with a note of how much was dropped. Unlike the runner, the bridge does not replace
+long base64 runs: a result is kept as the server sent it, but for those changes.
+
+A result is framed here exactly once: every ``McpTool`` declares ``untrusted_framed``,
+so the agent runner sends it as it is rather than framing it again. Give ``McpTool``
+only to the bridge's executor (``McpToolBridge.executor``), which is what that
+declaration promises.
 
 Every call emits one ``McpCallEvent`` to the product's sink, however it ends,
 with the arguments and result as hashes and sizes; their text only when the
@@ -41,7 +52,7 @@ import time
 import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import ValidationError
 
@@ -60,9 +71,12 @@ _REMOTE_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 _CATALOGUE_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _SEPARATOR = "__"
 _DESCRIPTION_LIMIT = 1024
-#: Anything that could read as a frame marker: ``<`` and ``untrusted`` with any
-#: spacing and an optional ``/`` between them, in any case.
-_FRAME_MARKER = re.compile(r"<\s*/?\s*untrusted", re.IGNORECASE)
+#: Anything that could read as a frame marker, in any case: ``<`` and ``untrusted``
+#: with any spacing and an optional ``/`` between them, or the agent runner's
+#: ``<<UNTRUSTED`` and ``<<END UNTRUSTED``.
+_FRAME_MARKER = re.compile(r"<<\s*(?:END\s+)?UNTRUSTED|<\s*/?\s*untrusted", re.IGNORECASE)
+#: The schema keys whose text a model reads as prose.
+_SCHEMA_PROSE = frozenset({"description", "title"})
 _ESCAPED_MARKER = "[escaped delimiter]"
 _KEPT_CONTROLS = frozenset({"\n", "\t"})
 _MARKED_SEPARATORS = frozenset({"\u2028", "\u2029"})
@@ -118,15 +132,31 @@ def frame_untrusted(server: str, tool: str, text: str, *, max_length: int | None
     )
 
 
+def _safe_schema(value: Any) -> Any:
+    """``value`` with every description and title made safe, at any depth."""
+    if isinstance(value, Mapping):
+        return {
+            key: (
+                sanitise(item)
+                if key in _SCHEMA_PROSE and isinstance(item, str)
+                else _safe_schema(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_safe_schema(item) for item in value]
+    return value
+
+
 def _schema(remote: RemoteTool) -> dict[str, Any]:
     schema = remote.input_schema
     if isinstance(schema, Mapping) and schema.get("type") == "object":
-        return dict(schema)
+        return dict(_safe_schema(schema))
     return {"type": "object"}
 
 
 def _description(server: str, remote: RemoteTool) -> str:
-    text = " ".join(remote.description.split())
+    text = " ".join(sanitise(remote.description).split())
     if not text:
         text = f"Tool {remote.name}."
     described = f"[MCP server {server}] {text}"
@@ -135,7 +165,14 @@ def _description(server: str, remote: RemoteTool) -> str:
 
 @dataclass(frozen=True, eq=False)
 class McpTool:
-    """One MCP server tool, declared for the catalogue."""
+    """One MCP server tool, declared for the catalogue.
+
+    ``untrusted_framed`` tells the agent runner that the bridge frames its results as
+    untrusted itself, so they are framed once (``conduit.agent.tool_results_preframed``).
+    """
+
+    #: The bridge frames this tool's results; the runner sends them as they are.
+    untrusted_framed: ClassVar[bool] = True
 
     name: str
     description: str
