@@ -734,17 +734,29 @@ def _readme_row(extra: str) -> str:
     return rows[0]
 
 
-def test_the_readme_counts_what_the_warden_extra_installs() -> None:
-    # The licence audit counts the installed tree, so this runs where warden is installed.
-    require_extras("```python\nimport conduit.integrations.warden\n```\n")
-    core = len(audit().checked) - 1
+_WARDEN_TEXT = "```python\nimport conduit.integrations.warden\n```\n"
+
+
+def test_the_readme_names_the_warden_extras_licence_exception() -> None:
+    # The licence audit reads the installed tree, so this runs where warden is installed.
+    require_extras(_WARDEN_TEXT)
     report = audit(extras=["warden"])
-    total = len(report.checked) - 1
-    row = _readme_row("warden")
-    assert f"installs {total - core} runtime packages beyond the core's {core}" in row, row
-    assert f"({total} in all" in row, row
     assert "psycopg" in {package.name for package in report.excepted}
+    row = _readme_row("warden")
     assert "psycopg (LGPL-3.0) under its named licence exception" in row, row
+
+
+def test_the_readme_counts_what_the_warden_extra_installs_on_linux() -> None:
+    # Platform markers change the tree (keyring's backends, greenlet on arm64, tzdata on
+    # Windows), so the README gives the count on Linux, where CI's licence job audits.
+    if not sys.platform.startswith("linux"):
+        pytest.skip("the README counts the warden extra's packages on Linux")
+    require_extras(_WARDEN_TEXT)
+    core = len(audit().checked) - 1
+    total = len(audit(extras=["warden"]).checked) - 1
+    row = _readme_row("warden")
+    assert f"installs {total - core} runtime packages on Linux beyond the core's {core}" in row
+    assert f"({total} in all" in row, row
 
 
 # The documents ----------------------------------------------------------------------

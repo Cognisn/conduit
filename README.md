@@ -48,7 +48,7 @@ The core install and the stub provider need no extra. [Setting up providers](htt
 | `mcp` | MCP client over the official SDK (stdio, streamable HTTP and SSE), with static credentials and an OAuth 2.1 client |
 | `sql` | SQL transcript and token stores (SQLAlchemy; Postgres and SQLite) with their own schema and migrations |
 | `konfig` | konfig settings loader and secret resolver |
-| `warden` | Records conduit events in warden's audit trail (metadata only). The extra installs 32 runtime packages beyond the core's 5 (37 in all, as `python scripts/licence_audit.py --extra warden` counts them), including psycopg (LGPL-3.0) under its named licence exception in the licence audit |
+| `warden` | Records conduit events in warden's audit trail (metadata only). The extra installs 32 runtime packages on Linux beyond the core's 5 (37 in all, as `python scripts/licence_audit.py --extra warden` counts them; a few fewer on macOS), including psycopg (LGPL-3.0) under its named licence exception in the licence audit |
 | `otel` | OpenTelemetry spans and metrics (the OpenTelemetry API; the product supplies the SDK and exporters) |
 | `cli` | The `conduit` terminal interface demonstrating the public API (`uvx --from "cognisn-conduit[cli]" conduit`); installs rich and the `mcp` extra |
 
