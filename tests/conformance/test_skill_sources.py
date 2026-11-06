@@ -16,6 +16,7 @@ from conduit.skills.filesystem import FilesystemSkillSource
 from conduit.skills.memory import MemorySkillSource
 from conduit.testing.conformance import SkillSourceSuite
 from conduit.testing.conformance.skill import SUITE_SKILLS
+from tests.conformance.meta import fails
 
 
 class TestMemorySkillSource(SkillSourceSuite):
@@ -121,7 +122,7 @@ def _suite(source: type[MemorySkillSource]) -> SkillSourceSuite:
     ],
 )
 def test_the_suite_fails_a_broken_source(broken: type[MemorySkillSource], scenario: str) -> None:
-    with pytest.raises(AssertionError):
+    with fails():
         getattr(_suite(broken), scenario)()
 
 
