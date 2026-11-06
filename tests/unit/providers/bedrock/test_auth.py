@@ -296,8 +296,14 @@ class TestPresigning:
     def test_a_key_is_replaced_within_its_margin_of_the_credentials_expiry(self) -> None:
         clock = Clock(1_000.0)
         credentials = self.credentials(expiry=1_700.0)
+        resolved: list[int] = []
+
+        def resolve() -> Any:
+            resolved.append(1)
+            return credentials
+
         keys = short_term_keys(
-            lambda: credentials,
+            resolve,
             region="eu-west-2",
             lifetime_s=900,
             refresh_before_s=60,
@@ -313,6 +319,8 @@ class TestPresigning:
         # Presigned again. (botocore signs with the wall clock, so a key presigned in
         # the same second can be identical; the presign count is what shows it.)
         assert credentials.reads == 2
+        # Resolved once: refreshable credentials renew themselves when read.
+        assert resolved == [1]
 
     def test_missing_credentials_are_refused_at_once_naming_only_the_class(self) -> None:
         with pytest.raises(ConfigurationError, match="NoCredentialsError") as raised:

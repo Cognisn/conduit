@@ -392,7 +392,16 @@ class TestLogging:
             [f for f in signer.filters if not isinstance(f, SignatureRecordFilter)],
         )
         caplog.set_level(logging.DEBUG)
-        for name in ("anthropic", "httpx", "httpx2", "httpcore", "conduit", "botocore"):
+        for name in (
+            "anthropic",
+            "httpx",
+            "httpx2",
+            "httpcore",
+            "conduit",
+            "botocore",
+            "botocore.auth",
+            "botocore.endpoint",
+        ):
             caplog.set_level(logging.DEBUG, logger=name)
         busy = (529, {"retry-after-ms": "5"}, b'{"type": "error"}')
         server = Server(busy, (200, {}, HELLO))
