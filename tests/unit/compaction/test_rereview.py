@@ -96,7 +96,7 @@ async def test_past_the_window_with_no_room_for_the_tail_it_fails_before_any_sum
     rt = await runtime(summariser=log)
     sink = Sink()
     strategy = Summarise(rt, task_class="summary", threshold=0.5, keep_turns=1)
-    system = (TextBlock(text=filler(14_000, "sys")),)  # about 3,500 tokens
+    system = (TextBlock(text=filler(15_200, "sys")),)  # about 3,800 tokens: no room left
     shown = request(rt.assignments["chat"], conversation(4), system=system)
     with pytest.raises(CompactionFailed) as raised:
         await Compactor([strategy], events=sink).before_model_call(shown)
@@ -335,3 +335,35 @@ async def test_a_forced_compaction_ignores_the_prefix_check_while_the_prompt_fit
     [event] = sink.of(CompactionEvent)
     assert event.tokens_before + assignment.max_output_tokens <= SMALL_WINDOW  # it fits
     assert (event.outcome, event.trigger) == ("compacted", "forced")
+
+
+# M11: past the window, the allowance does not refuse a summary that would fit ----------
+
+
+async def test_past_the_window_a_short_summary_is_not_refused_for_its_allowance() -> None:
+    class Brief:
+        name = "brief"
+        threshold = 0.5
+        keep_turns = 1
+        summary_allowance = 512  # what the summary might take, not what it does
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def summarise(self, replaced: Sequence[Message], context: StrategyContext) -> str:
+            self.calls += 1
+            return "SUMMARY"
+
+    assignment = await _chat()
+    budget = assignment.max_output_tokens
+    messages = conversation(4)
+    tail = SMALL_WINDOW - budget - 100  # room for a short summary, not for 512 tokens
+    sizes = Sizes(messages, total=SMALL_WINDOW, tail=tail, after=tail + 20)
+    brief = Brief()
+    sink = Sink()
+    compactor = Compactor([brief], estimate=sizes, events=sink)
+    assert await compactor.before_model_call(request(assignment, messages)) is not None
+    assert brief.calls == 1
+    [event] = sink.of(CompactionEvent)
+    assert event.outcome == "compacted"
+    assert (event.tokens_after or 0) + budget <= SMALL_WINDOW

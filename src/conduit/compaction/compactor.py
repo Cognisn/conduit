@@ -20,10 +20,11 @@ is never compacted again and again on every call, and no summary is paid for tha
 not help.
 
 **Once the prompt no longer fits, a compaction is needed**, so it is applied whenever its
-result fits, even above the threshold. If the fixed prefix, the kept tail and the
-allowance already leave no room for the output budget, it fails before any summary is
-asked for, and a result that still does not fit fails too (``result_too_large``, raised,
-since the call could not succeed). A forced compaction skips all of these checks: it is
+result fits, even above the threshold. If the fixed prefix and the kept tail alone
+already leave no room for the output budget, it fails before any summary is asked for;
+the summary allowance is not counted here, since a shorter summary may still fit. A
+result that does not fit fails too (``result_too_large``, raised, since the call could
+not succeed). A forced compaction skips all of these checks: it is
 applied whenever there is something to replace.
 
 The estimate counts about four characters a token. It undercounts some text (Chinese,
@@ -287,11 +288,12 @@ class Compactor:
         tail = messages[cut:]
         if trigger == "threshold":
             least = self._estimate(system=request.system, tools=request.tools, messages=tail)
-            least += _allowance(strategy)
             if fits:
-                if least / window >= strategy.threshold:
+                if (least + _allowance(strategy)) / window >= strategy.threshold:
                     await self._skip(event, "prefix_too_large")
                     return None, False
+            # Past the window the allowance is not counted: it is what a summary might
+            # take, and a shorter one may still fit. The result is checked once built.
             elif least + budget > window:
                 return await self._failed(event, CompactionFailed("result_too_large"), fits), False
 
