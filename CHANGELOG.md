@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b4] - 2026-11-06
+
+Wave 7, third and last merge: top-level re-exports and guide text (`feat/0.1.0-public-exports`).
+
+### Added
+
+- The top-level `conduit` package re-exports every core name an integration needs: transcript entries (`TranscriptEntry`, `MessageEntry`, `CompactionPoint`, `SkillUse`), backend models (`TokenSet`, `Skill`, `SkillSummary`, `ApprovalRequest`, `ApprovalDecision`), tool call types (`TaskTools`, `ToolCallContext`, `ToolOutcome`, `ToolExecutor`), `LoopThread`, the remaining errors (`UnknownTaskClass`, `SecretUnavailable`, `FacadeError`, `UnknownTool`, `ToolRegistrationError`, `ReplayMismatch`), the event classes and sinks (`ModelCallStartedEvent`, `ModelCallFinishedEvent`, `ToolCallEvent`, `MemoryEventSink`, `NullEventSink`, `ContentKind`, `CapturedContent`), `Capabilities`, `refusals`, `resolve_assignments`, `Assignments`, `ResolvedAssignment` and `guarded_client`.
+- `conduit.stores` exports the in-memory and JSON transcript and token stores and `StoreError`.
+- Guide text for building provider clients under the construction guard, the secret resolver, event sink and approval handler conformance suites with their scenario bounds, and evaluating agent tasks.
+
+### Changed
+
+- The guides, README and architecture document import core names from `conduit` and layer names from their package, and the documentation test refuses an example that imports a name from a submodule a parent package covers, imports a core module as a module, or uses `import *`.
+
 ## [0.1.0b3] - 2026-11-06
 
 Wave 7, second merge: conformance suites and the evaluation harness (`feat/0.1.0-testing-suites`).
