@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b1] - 2026-11-06
+
+Wave 6, third and last merge: the live provider suite (`test/0.1.0-live-providers`). Feature complete.
+
+### Added
+
+- A live provider suite (`tests/live`), marked `integration` and deselected by default. It covers:
+  - streaming chat, tool loops with provider state, usage with cached second calls, and embeddings;
+  - Bedrock (every authentication mode, and a residency refusal of a cross-region profile under an in-region policy), bedrock-mantle, Anthropic and Claude in Foundry, OpenAI, X.AI, Foundry (API key and Entra ID), Gemini, Ollama and local embeddings;
+  - a verification pass over the default catalogue that reports each observable mismatch.
+- Credentials for the live suite come only from `CONDUIT_LIVE_` variables through `EnvironmentSecretResolver`, and never appear in failure output. The default suite proves that every live test skips with its variables named, and proves every live check against the stub.
+
+### Changed
+
+- Catalogue 2026.11.7: the bedrock chat entries no longer declare structured output, because the adapter does not map an output schema to Converse yet. A capability floor that needs structured output now refuses them at start-up. bedrock-mantle is unchanged.
+
 ## [0.1.0a20] - 2026-11-06
 
 Wave 6, second merge: guides and documentation (`docs/0.1.0-guides`).
