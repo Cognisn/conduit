@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a19] - 2026-11-05
+
+Wave 6, first merge: the terminal interface (`feat/0.1.0-cli`).
+
+### Added
+
+- The terminal interface: the `conduit` command in the `cli` extra, run with `uvx --from "cognisn-conduit[cli]" conduit`.
+  - `providers` lists the adapters, their extras and the configured providers with their authentication modes; `models` lists the catalogue with overlays.
+  - `check` builds every configured provider (Bedrock authentication modes included) and resolves every assignment, showing each residency or capability refusal, without calling a model.
+  - `mcp` connects the configured MCP servers, signing in with OAuth on a loopback callback.
+  - `chat` streams a conversation with tool use under the run budget, skills, MCP tools, forced compaction with its size before and after, and per-call usage with cache reads and writes.
+  - It runs on the stub provider without a configuration, uses conduit's public API only, keeps no conversation or token unless `--transcripts` or `--tokens` names a directory, and never prints a secret. Text from models, tools, servers and skills is shown as written, without letting it drive the terminal, and `--log-level` raises only conduit's own loggers.
+- The code graph in `graphify-out/`.
+
+### Changed
+
+- The `cli` extra installs rich and the `mcp` extra.
+- The import tripwire names `conduit.cli` as rich's only importer.
+
 ## [0.1.0a18] - 2026-11-05
 
 Wave 5, third and last merge: audit and telemetry (`feat/0.1.0-audit-telemetry`). Milestone M4 (compaction and audit).
