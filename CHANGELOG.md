@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a17] - 2026-11-05
+
+Wave 5, second merge: compaction (`feat/0.1.0-compaction`).
+
+### Added
+
+- Compaction (`conduit.compaction`), the agent runner's compaction hook:
+  - strategies drop old tool results, keep the last turns, or summarise through a product-declared task class, whose capability floor is checked at start-up;
+  - each strategy is triggered at a share of the assigned model's context window. While the prompt fits, a compaction is applied only when it brings the prompt under its threshold. Once the prompt no longer fits, a compaction is applied whenever its result fits, and fails with a fixed reason when nothing can;
+  - a compaction can be forced per session, and runs once even under concurrent calls.
+- Cache-stable compaction: the system prompt, tools and loaded skills are never touched, and the summary follows the cached prefix with its own cache breakpoint, so cache reads continue after a compaction.
+- Summary requests keep tool calls and results in tool blocks, so the capture policy's tool-content setting applies to them, and they carry only the tools those turns used.
+- Compaction points written through the transcript store, with tokens before and after, reloading to the compacted conversation.
+- Compaction events carrying strategy, trigger, outcome, tokens and entries replaced, with the summary only as captured prompt content.
+- Compaction failures carry fixed reasons only, and leave a conversation that still fits unchanged.
+
+### Changed
+
+- CI's postgres job also runs the compaction store tests against a real Postgres.
+
 ## [0.1.0a16] - 2026-11-05
 
 Wave 5, first merge: Bedrock key logging (`fix/0.1.0-bedrock-key-logging`).
