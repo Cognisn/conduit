@@ -7,9 +7,11 @@ the configured region and authentication mode, and returns it:
   resolved access keys) signs every request with SigV4.
 - ``short_term_api_key`` and ``long_term_api_key``: the client is unsigned, and a
   ``before-send`` handler sets ``Authorization: Bearer <key>`` on every attempt,
-  retries included. Short-term keys are presigned here with botocore's SigV4 query
-  signer and refreshed by ``ShortTermKeySource`` before they expire; the first key is
-  generated at once, so missing credentials are refused at start-up.
+  retries included. Short-term keys come from ``conduit.providers.bedrock.auth``'s
+  presign step (``short_term_keys``), signed with credentials resolved here and
+  replaced before they expire; the first key is generated at once, so missing
+  credentials are refused at start-up. In both modes botocore's DEBUG records are kept
+  free of the key (``keep_keys_out_of_logs``; see that module for what it covers).
 
 The process environment (``AWS_BEARER_TOKEN_BEDROCK``) is never read or written: two
 providers in one process can use different keys.
@@ -33,15 +35,10 @@ from conduit.core.errors import ConfigurationError
 from conduit.core.provider import Provider
 from conduit.core.settings import ProviderSettings
 from conduit.providers.bedrock.auth import (
-    KEY_ACTION,
-    KEY_HOST,
-    KEY_SIGNING_NAME,
-    KEY_URL,
-    IssuedKey,
     KeySource,
-    ShortTermKeySource,
     StaticKeySource,
-    encode_short_term_key,
+    keep_keys_out_of_logs,
+    short_term_keys,
 )
 from conduit.providers.bedrock.provider import BedrockProvider
 from conduit.providers.bedrock.settings import (
@@ -86,13 +83,9 @@ class BedrockFactory:
             )
         boto3 = importlib.import_module("boto3")
         botocore = importlib.import_module("botocore")
-        botocore_auth = importlib.import_module("botocore.auth")
         botocore_config = importlib.import_module("botocore.config")
-        botocore_exceptions = importlib.import_module("botocore.exceptions")
-        awsrequest = importlib.import_module("botocore.awsrequest")
         auth = bedrock.auth
         region = bedrock.region
-        clock = self._clock
 
         def secret(path: str) -> str:
             try:
@@ -114,45 +107,16 @@ class BedrockFactory:
         key_source: KeySource | None = None
         if isinstance(auth, ShortTermApiKeyAuth):
             signing_session = session_for(auth.source, "auth.source.")
-
-            def issue(lifetime_s: int) -> IssuedKey:
-                credentials = signing_session.get_credentials()
-                if credentials is None:
-                    raise botocore_exceptions.NoCredentialsError()
-                frozen = credentials.get_frozen_credentials()
-                request = awsrequest.AWSRequest(
-                    method="POST",
-                    url=KEY_URL,
-                    headers={"host": KEY_HOST},
-                    params={"Action": KEY_ACTION},
-                )
-                signer = botocore_auth.SigV4QueryAuth(
-                    frozen, KEY_SIGNING_NAME, region, expires=lifetime_s
-                )
-                signer.add_auth(request)
-                expires_at = clock() + lifetime_s
-                credentials_expiry = getattr(credentials, "_expiry_time", None)
-                if credentials_expiry is not None:
-                    expires_at = min(expires_at, credentials_expiry.timestamp())
-                return IssuedKey(value=encode_short_term_key(request.url), expires_at=expires_at)
-
-            key_source = ShortTermKeySource(
-                issue,
+            key_source = short_term_keys(
+                signing_session.get_credentials,
+                region=region,
                 lifetime_s=auth.lifetime_s,
                 refresh_before_s=auth.refresh_before_s,
-                clock=clock,
+                clock=self._clock,
             )
-            refused: str | None = None
-            try:
-                key_source.current()  # refuse missing credentials at start-up
-            except Exception as error:
-                refused = type(error).__name__
-            if refused is not None:
-                raise ConfigurationError(
-                    f"a short-term Bedrock API key cannot be generated: {refused}"
-                )
             session = boto3.session.Session(region_name=region)
         elif isinstance(auth, LongTermApiKeyAuth):
+            keep_keys_out_of_logs()
             key_source = StaticKeySource(secret("auth.api_key"))
             session = boto3.session.Session(region_name=region)
         else:

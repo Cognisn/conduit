@@ -26,13 +26,12 @@ from conduit.core.registry import ProviderRegistry
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.core.streaming import StreamStopped, TextDelta
 from conduit.core.types import Message, ModelRequest, Usage
-from conduit.providers.bedrock.auth import SHORT_TERM_PREFIX
+from conduit.providers.bedrock.auth import SHORT_TERM_PREFIX, SIGNER_LOGGER, SignatureRecordFilter
 from conduit.providers.bedrock_mantle import (
     BedrockMantleFactory,
     BedrockMantleProvider,
     BedrockMantleSettings,
 )
-from conduit.providers.bedrock_mantle.auth import SIGNER_LOGGER, SignatureRecordFilter
 
 from ..anthropic.fakes import message_end, message_start, text_block, usage
 
@@ -393,7 +392,16 @@ class TestLogging:
             [f for f in signer.filters if not isinstance(f, SignatureRecordFilter)],
         )
         caplog.set_level(logging.DEBUG)
-        for name in ("anthropic", "httpx", "httpx2", "httpcore", "conduit", "botocore"):
+        for name in (
+            "anthropic",
+            "httpx",
+            "httpx2",
+            "httpcore",
+            "conduit",
+            "botocore",
+            "botocore.auth",
+            "botocore.endpoint",
+        ):
             caplog.set_level(logging.DEBUG, logger=name)
         busy = (529, {"retry-after-ms": "5"}, b'{"type": "error"}')
         server = Server(busy, (200, {}, HELLO))

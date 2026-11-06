@@ -18,12 +18,11 @@ The mantle client does not read ``ANTHROPIC_CUSTOM_HEADERS``. ``ANTHROPIC_LOG=de
 makes the SDK log whole request bodies on the ``anthropic`` logger, so a client is
 refused while it is set. The process environment is never written.
 
-Short-term keys are presigned here with botocore's SigV4 query signer, exactly as the
-bedrock adapter makes them (a ``CallWithBearerToken`` URL on ``bedrock.amazonaws.com``,
-encoded by ``conduit.providers.bedrock.auth.encode_short_term_key``), and refreshed by
-``ShortTermKeySource`` before they expire. The first key is generated at once, so
-missing credentials are refused at start-up. botocore's ``Signature:`` debug records are
-dropped, since a presigned key can be rebuilt from them. Long-term keys are refused here
+Short-term keys come from the bedrock adapter's presign step,
+``conduit.providers.bedrock.auth.short_term_keys``, signed with credentials resolved
+here, and are replaced before they expire. The first key is generated at once, so
+missing credentials are refused at start-up. The step keeps botocore's signature records
+out of the logs, since a presigned key can be rebuilt from them. Long-term keys are refused here
 unless ``allow_long_term_api_keys`` is exactly ``True``, and the Region and any
 ``endpoint_url`` are checked again, however the settings were made.
 
@@ -49,15 +48,9 @@ from conduit.core.errors import ConfigurationError
 from conduit.core.provider import Provider
 from conduit.core.settings import ProviderSettings
 from conduit.providers.bedrock.auth import (
-    KEY_ACTION,
-    KEY_HOST,
-    KEY_SIGNING_NAME,
-    KEY_URL,
-    IssuedKey,
     KeySource,
-    ShortTermKeySource,
     StaticKeySource,
-    encode_short_term_key,
+    short_term_keys,
 )
 from conduit.providers.bedrock.settings import (
     REGION_PATTERN,
@@ -66,10 +59,7 @@ from conduit.providers.bedrock.settings import (
     LongTermApiKeyAuth,
     ShortTermApiKeyAuth,
 )
-from conduit.providers.bedrock_mantle.auth import (
-    bearer_client_class,
-    keep_signatures_out_of_logs,
-)
+from conduit.providers.bedrock_mantle.auth import bearer_client_class
 from conduit.providers.bedrock_mantle.provider import KIND, BedrockMantleProvider
 from conduit.providers.bedrock_mantle.settings import BedrockMantleSettings, mantle_base_url
 
@@ -143,7 +133,6 @@ class BedrockMantleFactory:
             raise _missing_extra()
         auth = mantle.auth
         region = mantle.region
-        clock = self._clock
 
         def secret(path: str) -> str:
             value = secrets.get(path)
@@ -154,15 +143,10 @@ class BedrockMantleFactory:
         keys: KeySource
         if isinstance(auth, ShortTermApiKeyAuth):
             botocore_session: Any = None
-            botocore_auth: Any = None
-            awsrequest: Any = None
             with contextlib.suppress(ImportError):
                 botocore_session = importlib.import_module("botocore.session")
-                botocore_auth = importlib.import_module("botocore.auth")
-                awsrequest = importlib.import_module("botocore.awsrequest")
-            if awsrequest is None:
+            if botocore_session is None:
                 raise _missing_extra()
-            keep_signatures_out_of_logs()
             source = auth.source
 
             def signing_credentials() -> Any:
@@ -176,49 +160,15 @@ class BedrockMantleFactory:
                         secret("auth.source.secret_access_key"),
                         token,
                     )
-                credentials = session.get_credentials()
-                if credentials is None:
-                    raise ConfigurationError("no AWS credentials were found")
-                return credentials
+                return session.get_credentials()
 
-            credentials: Any = None
-
-            def issue(lifetime_s: int) -> IssuedKey:
-                nonlocal credentials
-                if credentials is None:
-                    credentials = signing_credentials()
-                frozen = credentials.get_frozen_credentials()
-                request = awsrequest.AWSRequest(
-                    method="POST",
-                    url=KEY_URL,
-                    headers={"host": KEY_HOST},
-                    params={"Action": KEY_ACTION},
-                )
-                signer = botocore_auth.SigV4QueryAuth(
-                    frozen, KEY_SIGNING_NAME, region, expires=lifetime_s
-                )
-                signer.add_auth(request)
-                expires_at = clock() + lifetime_s
-                credentials_expiry = getattr(credentials, "_expiry_time", None)
-                if credentials_expiry is not None:
-                    expires_at = min(expires_at, credentials_expiry.timestamp())
-                return IssuedKey(value=encode_short_term_key(request.url), expires_at=expires_at)
-
-            keys = ShortTermKeySource(
-                issue,
+            keys = short_term_keys(
+                signing_credentials,
+                region=region,
                 lifetime_s=auth.lifetime_s,
                 refresh_before_s=auth.refresh_before_s,
-                clock=clock,
+                clock=self._clock,
             )
-            refused: str | None = None
-            try:
-                keys.current()  # refuse missing credentials at start-up
-            except Exception as error:
-                refused = type(error).__name__
-            if refused is not None:
-                raise ConfigurationError(
-                    f"a short-term Bedrock API key cannot be generated: {refused}"
-                )
         else:
             keys = StaticKeySource(secret("auth.api_key"))
 
