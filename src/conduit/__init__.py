@@ -63,7 +63,12 @@ from conduit.core.facade import (
     sync,
 )
 from conduit.core.provider import BaseProvider, Provider
-from conduit.core.registry import MeteredProvider, ProviderFactory, ProviderRegistry
+from conduit.core.registry import (
+    MeteredProvider,
+    ProviderFactory,
+    ProviderRegistry,
+    guarded_client,
+)
 from conduit.core.residency import ResidencyPolicy, ResidencyScope
 from conduit.core.runtime import ConduitSettings, Runtime, TaskBinding, start
 from conduit.core.secrets import (
@@ -223,6 +228,7 @@ __all__ = [
     "__version__",
     "collect",
     "default_catalogue",
+    "guarded_client",
     "refusals",
     "resolve_assignments",
     "start",

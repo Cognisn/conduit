@@ -136,7 +136,12 @@ REEXPORTS: dict[str, tuple[str, ...]] = {
         "FacadeError",
         "ReplayMismatch",
     ),
-    "conduit.core.registry": ("MeteredProvider", "ProviderFactory", "ProviderRegistry"),
+    "conduit.core.registry": (
+        "MeteredProvider",
+        "ProviderFactory",
+        "ProviderRegistry",
+        "guarded_client",
+    ),
     "conduit.core.runtime": ("ConduitSettings", "Runtime", "TaskBinding", "start"),
     "conduit.core.settings": ("AssignmentSettings", "ProviderSettings", "refusals"),
     "conduit.core.secrets": (
