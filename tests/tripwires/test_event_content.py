@@ -275,6 +275,7 @@ EVENT_MODULES = (
     "conduit.core.events",
     "conduit.core.registry",
     "conduit.agent.events",
+    "conduit.compaction.events",
     "conduit.skills.events",
     "conduit.mcp.events",
 )
@@ -390,10 +391,13 @@ class TestEveryEventClass:
             "TextDeltaEvent",
             "ToolCallStartedEvent",
             "RunFinishedEvent",
+            "CompactionEvent",
         } <= with_content
         # conduit.mcp.events imports nothing from the mcp SDK, so it is always scanned.
         assert "McpCallEvent" in with_content
         assert {"ToolCallEvent", "ToolCallStartedEvent", "McpCallEvent"} <= with_tool_content
+        # A compaction summary is prompt content, held to the prompts setting.
+        assert "CompactionEvent" not in with_tool_content
 
     async def test_with_capture_off_no_class_carries_content_to_a_sink(self) -> None:
         leaks = []
