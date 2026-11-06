@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a20] - 2026-11-06
+
+Wave 6, second merge: guides and documentation (`docs/0.1.0-guides`).
+
+### Added
+
+- Guides in `docs/guides/`:
+  - integrating conduit;
+  - setting up each provider, with install lines for each installer and CPU-only torch;
+  - embeddings;
+  - writing backends, with their conformance suites;
+  - skills;
+  - MCP with OAuth sign-in;
+  - compaction;
+  - the warden and otel extras;
+  - the terminal interface.
+- Adoption notes for VOR, SPARK and Termograph.
+- A test that runs every Python example in the README, the architecture document and the guides, and refuses any fence an example could escape the run through.
+
+### Changed
+
+- The README and the architecture document describe the library as built, including the bedrock-mantle and cli extras.
+
 ## [0.1.0a19] - 2026-11-05
 
 Wave 6, first merge: the terminal interface (`feat/0.1.0-cli`).
