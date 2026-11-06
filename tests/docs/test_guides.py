@@ -345,6 +345,23 @@ def test_the_guard_refuses_a_module_import_that_bypasses_the_public_path(
     assert any(reason in problem for problem in problems), problems
 
 
+def test_the_guard_finds_a_submodule_not_yet_imported(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A submodule nothing has imported is not yet an attribute of its package, so the
+    # guard imports it by name to tell it from an exported name.
+    package = importlib.import_module("conduit.mcp")
+    importlib.import_module("conduit.mcp.client")
+    monkeypatch.delattr(package, "client")
+    monkeypatch.delitem(sys.modules, "conduit.mcp.client")
+    assert _submodule("conduit.mcp", "client") == "conduit.mcp.client"
+    monkeypatch.delattr(package, "client")
+    monkeypatch.delitem(sys.modules, "conduit.mcp.client")
+    problems = import_problems("```python\nfrom conduit.mcp import client\n```\n")
+    assert any(
+        "import conduit.mcp.client: use the names conduit.mcp exports" in problem
+        for problem in problems
+    ), problems
+
+
 def test_the_guard_allows_a_layer_module_its_package_does_not_cover() -> None:
     # conduit.providers exports builtin_factories only, so the stub module is the path.
     text = "```python\nimport conduit.providers.stub\nimport conduit.agent\nimport conduit\n```\n"
