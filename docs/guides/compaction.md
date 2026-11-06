@@ -1,0 +1,161 @@
+# Compaction
+
+A long conversation eventually outgrows the model's context window, and well before that it costs more on every call. The compaction layer replaces the older part of a conversation with something shorter (a notice, the older turns without their tool results, or a summary written by a model) and keeps the most recent turns as they were. It is part of the core install.
+
+## The compactor
+
+`Compactor` is the agent runner's compaction hook: pass it as `AgentRunner(compaction=...)`. Before every model call it estimates the prompt's size, compares it with the assigned model's context window, and tries the most aggressive strategy whose threshold is reached. Below every threshold nothing changes.
+
+Three strategies ship with conduit. Each keeps the last `keep_turns` turns and replaces what comes before:
+
+| Strategy | Replaces the older turns with | Default threshold |
+|---|---|---|
+| `DropToolResults` | their words as text, with every tool result left out | 0.6 of the window |
+| `Summarise` | a summary written by the model assigned to a task class the product declares | 0.8 |
+| `KeepLastTurns` | a short notice that earlier turns were dropped | 0.9 |
+
+A threshold is a share of the context window. With all three, a conversation is first trimmed of its tool results, then summarised, and as a last resort cut.
+
+`compactor.force(session_id)` makes the next model call of that session compact whatever its size (with a named strategy, or the most aggressive one), which is how a product offers a "compact now" command. A forced compaction waits until one succeeds or finds nothing to replace.
+
+```python
+import asyncio
+
+from conduit import (
+    CapabilityFloor,
+    ConduitSettings,
+    Event,
+    LiteralSecretResolver,
+    Message,
+    TaskClass,
+    start,
+)
+from conduit.agent import AgentRunner, AgentTask, RunStatus
+from conduit.compaction import Compactor, DropToolResults, KeepLastTurns, Summarise
+from conduit.core.transcript import MessageEntry
+from conduit.providers.stub import StubFactory, StubTurn
+from conduit.stores.memory import MemoryTranscriptStore
+
+
+class ListSink:
+    def __init__(self) -> None:
+        self.events: list[Event] = []
+
+    async def emit(self, event: Event) -> None:
+        self.events.append(event)
+
+
+def summariser(request: object, index: int) -> StubTurn:
+    return StubTurn(text="The user asked about mail delays to example.org; they are resolved.")
+
+
+settings = ConduitSettings.model_validate(
+    {
+        "providers": {
+            "chat": {"kind": "stub", "not_for_production": True},
+            "summaries": {"kind": "stub", "script": "summariser", "not_for_production": True},
+        },
+        "assignments": {
+            "assistant": {"provider": "chat", "model": "stub-echo"},
+            "conversation_summary": {"provider": "summaries", "model": "stub-echo"},
+        },
+    }
+)
+TASK_CLASSES = [
+    TaskClass(name="assistant", floor=CapabilityFloor(tools=True)),
+    TaskClass(name="conversation_summary"),
+]
+
+history = [
+    Message.user(f"Question {n} about mail to example.org?")
+    if n % 2 == 0
+    else Message.assistant(f"Answer {n}: delivery to example.org is delayed.")
+    for n in range(12)
+]
+
+
+async def compacted_run() -> tuple[list[Event], int]:
+    runtime = await start(
+        settings,
+        task_classes=TASK_CLASSES,
+        factories=[StubFactory(scripts={"summariser": summariser})],
+        secrets=LiteralSecretResolver({}),
+    )
+    store = MemoryTranscriptStore()
+    sink = ListSink()
+    try:
+        # The product stored the conversation so far; the run continues it.
+        await store.append("sess_mail", [MessageEntry(message=m) for m in history])
+        compactor = Compactor(
+            [
+                DropToolResults(keep_turns=2),
+                Summarise(
+                    runtime,
+                    task_class="conversation_summary",
+                    floor=CapabilityFloor(),
+                    keep_turns=2,
+                ),
+                KeepLastTurns(keep_turns=2),
+            ],
+            transcripts=store,
+            events=sink,
+            capture=settings.capture,
+        )
+        runner = AgentRunner(runtime, transcripts=store, compaction=compactor)
+
+        compactor.force("sess_mail", strategy="summarise")
+        transcript = await store.load("sess_mail")
+        result = await runner.run(
+            AgentTask(
+                task_class="assistant",
+                session_id="sess_mail",
+                history=transcript.active_messages(),
+                messages=(Message.user("Is it fixed now?"),),
+            )
+        )
+        assert result.status is RunStatus.COMPLETED
+
+        reloaded = await store.load("sess_mail")
+        return sink.events, len(reloaded.active_messages())
+    finally:
+        await runtime.aclose()
+
+
+events, active = asyncio.run(compacted_run())
+(compaction,) = [e for e in events if e.type == "compaction"]
+assert (compaction.strategy, compaction.trigger, compaction.outcome) == (
+    "summarise",
+    "forced",
+    "compacted",
+)
+assert compaction.summary is not None and compaction.summary.text is None  # hash and size only
+assert active < len(history)  # a reload gives the compacted conversation
+```
+
+## Keeping the cached prefix stable
+
+The hook returns messages only. The system prompt, the tool definitions and the loaded skills (which the skills layer places in the system blocks, before their cache breakpoint) are never touched, so they stay byte-identical and the provider keeps reading them from its cache. The summary becomes the first message after that prefix, and by default it ends with a cache breakpoint of its own (`cache_summary=True`), so from the call after a compaction the summary is read from the cache too.
+
+Some providers limit how many breakpoints one request may carry: Anthropic allows four. With tools, the system prompt and loaded skills already using three or more, the summary's breakpoint can push one out. A product near that limit passes `Compactor(..., cache_summary=False)`.
+
+## When a compaction is applied
+
+- **While the prompt fits** (the prompt and the assignment's output budget are within the window), a compaction must bring the prompt under its threshold. If the fixed prefix, the kept tail and the strategy's allowance for a summary already reach it, nothing is tried (`skipped`, `prefix_too_large`), and a result still at or over the threshold is not applied (`skipped`, `not_below_threshold`). A conversation is therefore never compacted again on every call, and no summary is paid for that could not help.
+- **Once the prompt no longer fits**, a compaction is needed, so it is applied whenever its result fits, even above the threshold. A result that cannot fit fails (`result_too_large`).
+- **A forced compaction** skips these checks and is applied whenever there is something to replace.
+
+A failure (`CompactionFailed`, with a fixed reason) leaves the conversation as it was. While the prompt still fits, the call goes ahead uncompacted and the next call tries again; once it no longer fits, the hook raises, since the call could not succeed. Every attempt, skip or failure emits a `CompactionEvent` with the strategy, trigger, outcome, reason and token estimates before and after.
+
+## The summary call
+
+`Summarise` sends the older turns, rendered as text with long tool results cut down, to the model assigned to the task class the product names. The product declares that task class, with its own floor (a model with tools by default) and assignment, like any other: a smaller, cheaper model often serves well. Tool content in the older turns is cut to `tool_result_chars` and is never sent as tool calls.
+
+The summary call is metered by the provider registry like every model call, and its events carry the run's id, but its tokens are **not charged to the run's own budget**: the run's budget meter belongs to the runner, which the hook cannot reach. Budget summaries through the usage events if they matter.
+
+## The token estimate
+
+The compactor estimates about four characters a token, and takes the larger of that and the previous call's reported usage. The estimate undercounts some text (Chinese, Japanese and Korean, for example, take more tokens a character), so a prompt it judges to fit may still be refused by the provider for its length. Where that matters, pass `estimate=` with the model's own count: a function from the prompt's system blocks, tools and messages to a token count.
+
+## Transcripts
+
+With a transcript store and a session, the compactor checks that the stored transcript's active conversation is exactly the conversation it was shown (the runner appends every message it adds, so they agree when both share a store), then appends a `CompactionPoint` replacing through the last message before the kept tail, with the token estimates before and after. A reload gives the compacted conversation (`Transcript.active_messages()`), summary first, byte for byte as it was sent.
