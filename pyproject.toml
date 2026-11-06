@@ -76,7 +76,8 @@ konfig = ["cognisn-konfig>=0.5,<1"]
 # Its audit recorder needs psycopg (LGPL-3.0), a named licence exception (Q0036).
 warden = ["cognisn-warden>=0.1.0b8,<0.2"]
 otel = ["opentelemetry-api>=1.30,<2"]
-cli = []
+# The terminal interface (C10): rich for its output.
+cli = ["rich>=14,<16"]
 # Development only; never a runtime dependency.
 dev = [
     "pytest>=8",
@@ -94,6 +95,10 @@ dev = [
     # platform. LGPL-3.0; dev is never licence-audited (Q0036, Q0038).
     "psycopg[binary]>=3.2",
 ]
+
+[project.scripts]
+# The terminal interface; without the cli extra it names the extra to install.
+conduit = "conduit.cli.main:main"
 
 [project.urls]
 Homepage = "https://github.com/Cognisn/conduit"
