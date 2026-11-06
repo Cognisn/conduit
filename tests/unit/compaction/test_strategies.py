@@ -260,3 +260,18 @@ def test_a_strategy_name_fits_a_compaction_point() -> None:
     assert KeepLastTurns(name="n" * 128).name == "n" * 128
     with pytest.raises(ConfigurationError):
         KeepLastTurns(name="n" * 129)
+
+
+async def test_the_summary_output_budget_counts_towards_the_window() -> None:
+    log = summary_script("ok summary")
+    rt = await runtime(summariser=log)
+    context = StrategyContext(run_id="run_x", assignment=rt.assignments["chat"])
+    # A prompt of about 558 tokens fits the 600-token window with 16 tokens of output,
+    # but not with the assignment's 64.
+    replaced = (Message.user(filler(2_150)), Message.assistant("ok"))
+    roomy = Summarise(rt, task_class="tiny", instructions="S.", max_summary_tokens=16)
+    assert (await roomy.summarise(replaced, context)).endswith("ok summary")
+    tight = Summarise(rt, task_class="tiny", instructions="S.")
+    with pytest.raises(CompactionFailed) as raised:
+        await tight.summarise(replaced, context)
+    assert raised.value.reason == "summary_too_large"

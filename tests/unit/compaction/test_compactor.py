@@ -562,3 +562,20 @@ async def test_a_strategys_own_chained_failure_reaches_the_caller_unchained() ->
         await Compactor([Chained()]).before_model_call(request(assignment, conversation(3)))
     assert (raised.value.reason, raised.value.error_class) == ("summary_failed", "KeyError")
     _clean(raised.value)
+
+
+async def test_the_event_leaves_the_compactor_already_within_the_policy(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The fan-out sink strips disallowed content and warns when it has to; the compactor
+    # must never give it the summary text to strip.
+    assignment = await _chat_assignment()
+    sink = Sink()
+    compactor = Compactor(
+        [KeepLastTurns(threshold=0.01, keep_turns=1, notice="SECRET-NOTICE")], events=sink
+    )
+    with caplog.at_level("WARNING", logger="conduit.events"):
+        await compactor.before_model_call(request(assignment, conversation(3)))
+    assert [r for r in caplog.records if r.name == "conduit.events"] == []
+    [event] = sink.of(CompactionEvent)
+    assert event.summary is not None and event.summary.text is None
