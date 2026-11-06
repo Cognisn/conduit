@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
@@ -58,6 +59,24 @@ MARKER = "zz synthetic otel content marker 6181 zz"
 CAPTURE_ALL = CapturePolicy(prompts=True, tool_content=True)
 T0 = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+#: The only attribute keys a metric data point may carry: low-cardinality identifiers.
+METRIC_ATTRIBUTES = frozenset(
+    {
+        "conduit.operation",
+        "conduit.provider",
+        "conduit.kind",
+        "conduit.model",
+        "conduit.task_class",
+        "conduit.outcome",
+        "conduit.token.type",
+        "conduit.error.type",
+        "conduit.budget",
+        "conduit.from_task_class",
+        "conduit.to_task_class",
+    }
+)
+#: Values that would make a metric unbounded: event and call ids, and content hashes.
+UNBOUNDED = re.compile(r"^(?:evt|call|tool|run|corr|appr|emb)_[0-9a-f]+$|^[0-9a-f]{64}$")
 RUN: dict[str, Any] = {"run_id": "run_1", "correlation_id": "corr_1", "task_class": "chat"}
 
 
@@ -678,6 +697,49 @@ class TestMetrics:
         text = data.to_json()
         for identifier in ("run_1", "corr_1", "call_1", "tool_1", "appr_1"):
             assert identifier not in text
+
+    async def test_metric_attributes_come_only_from_the_low_cardinality_set(
+        self, telemetry: Telemetry
+    ) -> None:
+        # Every kind of event that records a metric, succeeding and failing.
+        events = [
+            *full_run(),
+            model_finished(200, "call_8", failed=True),
+            mcp_call(201, "tool_8", failed=True),
+            tool_finished(202, "tool_8", failed=True),
+            SkillRefusedEvent(**RUN, reason="skill_unknown"),
+            BudgetExhaustedEvent(**RUN, budget=BudgetKind.TOKENS, limit=1, used=2),
+            ApprovalDecidedEvent(
+                **RUN, request_id="appr_8", call_id="tool_8", tool="lookup", outcome="failed"
+            ),
+            EmbeddingCallFinishedEvent(
+                call_id="emb_1",
+                provider="embed",
+                kind="stub",
+                model="stub-embed",
+                outcome="ok",
+                usage=usage(12, 0),
+                duration_ms=3,
+                dimensions=8,
+            ),
+            run_finished(300, failed=True),
+        ]
+        await emit_all(sink(telemetry), events)
+        data = telemetry.reader.get_metrics_data()
+        assert data is not None
+        points = [
+            (metric.name, point)
+            for resource in data.resource_metrics
+            for scope in resource.scope_metrics
+            for metric in scope.metrics
+            for point in metric.data.data_points
+        ]
+        assert {name for name, _ in points} == set(METRIC_NAMES)
+        for name, point in points:
+            attributes = dict(point.attributes or {})
+            assert set(attributes) <= METRIC_ATTRIBUTES, (name, sorted(attributes))
+            for value in attributes.values():
+                assert not UNBOUNDED.search(str(value)), (name, value)
 
     async def test_the_metric_names_are_published(self, telemetry: Telemetry) -> None:
         await emit_all(sink(telemetry), full_run())
