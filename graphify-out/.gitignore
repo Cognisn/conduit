@@ -1,0 +1,7 @@
+# Machine-local graphify state: interpreter path, scan root and extraction cache.
+.graphify_python
+.graphify_root
+.graphify_uncached.txt
+.graphify_*.json
+!.graphify_labels.json
+cache/
