@@ -26,13 +26,12 @@ from conduit.core.registry import ProviderRegistry
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.core.streaming import StreamStopped, TextDelta
 from conduit.core.types import Message, ModelRequest, Usage
-from conduit.providers.bedrock.auth import SHORT_TERM_PREFIX
+from conduit.providers.bedrock.auth import SHORT_TERM_PREFIX, SIGNER_LOGGER, SignatureRecordFilter
 from conduit.providers.bedrock_mantle import (
     BedrockMantleFactory,
     BedrockMantleProvider,
     BedrockMantleSettings,
 )
-from conduit.providers.bedrock_mantle.auth import SIGNER_LOGGER, SignatureRecordFilter
 
 from ..anthropic.fakes import message_end, message_start, text_block, usage
 

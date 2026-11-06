@@ -16,15 +16,14 @@ after the handler so nothing is chained to it (the underlying error can name a p
 carry credential text); the SDK passes it through unchanged and does not retry it.
 Cancellation is never caught.
 
-botocore's SigV4 signer logs each signature at DEBUG on the ``botocore.auth`` logger. For
-a presigned short-term key the signature, with the other values it logs, is the key, so
-``SignatureRecordFilter`` drops those records from that logger.
+Short-term keys are presigned by ``conduit.providers.bedrock.auth.short_term_keys``, the
+step the bedrock adapter uses too, which keeps botocore's signature records out of the
+logs.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Any
 
 from conduit.core.errors import ProviderError, ProviderFailure
@@ -32,9 +31,6 @@ from conduit.providers.bedrock.auth import KeySource
 
 #: Header names that carry a credential, compared in lower case.
 CREDENTIAL_HEADERS = frozenset({"authorization", "x-api-key"})
-
-#: The logger botocore's SigV4 signer writes its signatures to.
-SIGNER_LOGGER = "botocore.auth"
 
 
 async def current_key(keys: KeySource) -> str:
@@ -65,17 +61,3 @@ def bearer_client_class(base: type[Any], keys: KeySource) -> type[Any]:
         await set_bearer(request, keys)
 
     return type("BearerMantleClient", (base,), {"_prepare_request": _prepare_request})
-
-
-class SignatureRecordFilter(logging.Filter):
-    """Drops botocore's ``Signature:`` debug records; every other record passes."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        return not (isinstance(record.msg, str) and record.msg.startswith("Signature:"))
-
-
-def keep_signatures_out_of_logs() -> None:
-    """Install ``SignatureRecordFilter`` on botocore's signer logger, once."""
-    logger = logging.getLogger(SIGNER_LOGGER)
-    if not any(isinstance(f, SignatureRecordFilter) for f in logger.filters):
-        logger.addFilter(SignatureRecordFilter())
