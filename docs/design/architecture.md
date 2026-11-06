@@ -97,7 +97,7 @@ The version lives only in `src/conduit/_version.txt`. Hatchling reads it for the
 | `sql` | `conduit.stores.sql` | SQLAlchemy and Alembic |
 | `konfig` | `conduit.integrations.konfig` | cognisn-konfig |
 | `warden` | `conduit.integrations.warden` | cognisn-warden |
-| `otel` | `conduit.integrations.otel` | the OpenTelemetry API and SDK |
+| `otel` | `conduit.integrations.otel` | the OpenTelemetry API (the product supplies the SDK and exporters) |
 | `cli` | `conduit.cli` | the terminal interface's dependencies |
 
 Every extra is declared empty in `pyproject.toml` and filled by the workstream that builds its layer. Every runtime extra's dependency tree is held to the licence policy (`scripts/licence_audit.py --all-extras`).
