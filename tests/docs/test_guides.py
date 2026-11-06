@@ -19,7 +19,13 @@ The guard has three parts, each of which fails rather than silently checking les
   fence holding a line that reads as Python (an import, an assert, a definition).
 
 Examples also show the public import path: a name exported from ``conduit``, or from a
-layer's package, is never imported from the submodule it lives in.
+layer's package, is never imported from the submodule it lives in, and no example
+imports a private module path (a segment with a leading underscore), aliased or not.
+
+A document whose examples import a layer behind an extra that is not installed locally
+is skipped, naming the extra. CI installs every extra, so nothing is skipped there;
+``CONDUIT_REQUIRE_ALL_EXTRAS=1`` turns that skip into a failure, and makes a check fail
+when any runtime extra is missing.
 """
 
 from __future__ import annotations
@@ -27,12 +33,19 @@ from __future__ import annotations
 import ast
 import functools
 import importlib
+import importlib.metadata
+import os
 import re
 import sys
 import types
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
+
+from licence_audit import audit
+from tests.tripwires.importscan import OPTIONAL_LIBRARIES
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -111,6 +124,14 @@ def fence_problems(text: str) -> list[str]:
     return problems
 
 
+def _private_path(name: str) -> bool:
+    """Whether a dotted name has a segment with a leading underscore (dunders aside)."""
+    return any(
+        part.startswith("_") and not (part.startswith("__") and part.endswith("__"))
+        for part in name.split(".")
+    )
+
+
 @functools.cache
 def _exports(package: str) -> frozenset[str]:
     """The names ``package`` exports in its ``__all__``."""
@@ -167,16 +188,27 @@ def import_problems(text: str) -> list[str]:
             where = f"line {start + getattr(node, 'lineno', 1) - 1}"
             if isinstance(node, ast.Import):
                 for alias in node.names:
+                    if _private_path(alias.name):
+                        problems.append(f"{where}: {alias.name} is a private module path")
+                        continue
                     problem = _module_problem(alias.name)
                     if problem:
                         problems.append(f"{where}: {problem}")
                 continue
             if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
                 continue
+            if _private_path(node.module):
+                problems.append(f"{where}: {node.module} is a private module path")
+                continue
             parts = node.module.split(".")
+            for alias in node.names:
+                if _private_path(alias.name):
+                    problems.append(f"{where}: {node.module}.{alias.name} is a private module path")
             if parts[0] != "conduit":
                 continue
             for alias in node.names:
+                if _private_path(alias.name):
+                    continue
                 if alias.name == "*":
                     problems.append(f"{where}: import * from {node.module}: name each import")
                     continue
@@ -194,6 +226,121 @@ def import_problems(text: str) -> list[str]:
                         )
                         break
     return problems
+
+
+#: Set to ``1`` (as CI does) to fail, not skip, a document whose extra is missing.
+REQUIRE_ALL_EXTRAS = "CONDUIT_REQUIRE_ALL_EXTRAS"
+
+#: The extra each conduit layer behind one needs, by module prefix.
+LAYER_EXTRAS: dict[str, str] = {
+    "conduit.providers.bedrock": "bedrock",
+    "conduit.providers.bedrock_mantle": "bedrock-mantle",
+    "conduit.providers.anthropic": "anthropic",
+    "conduit.providers.openai_compat": "openai",
+    "conduit.providers.gemini": "gemini",
+    "conduit.providers.ollama": "ollama",
+    "conduit.embeddings.bedrock": "bedrock",
+    "conduit.embeddings.openai_compat": "openai",
+    "conduit.embeddings.gemini": "gemini",
+    "conduit.embeddings.ollama": "ollama",
+    "conduit.embeddings.local": "local-embeddings",
+    "conduit.mcp": "mcp",
+    "conduit.stores.sql": "sql",
+    "conduit.integrations.konfig": "konfig",
+    "conduit.integrations.warden": "warden",
+    "conduit.integrations.otel": "otel",
+    "conduit.cli": "cli",
+}
+
+
+def _longest_prefix(module: str, prefixes: Iterable[str]) -> str | None:
+    matches = [p for p in prefixes if module == p or module.startswith(f"{p}.")]
+    return max(matches, key=len, default=None)
+
+
+def _layer_extra(module: str) -> str | None:
+    """The extra the conduit module ``module`` needs, if it is behind one."""
+    prefix = _longest_prefix(module, LAYER_EXTRAS)
+    return None if prefix is None else LAYER_EXTRAS[prefix]
+
+
+def _library_extras(module: str) -> tuple[str, ...]:
+    """The extras, any one of which installs the optional library ``module`` is in."""
+    library = _longest_prefix(module, OPTIONAL_LIBRARIES)
+    if library is None:
+        return ()
+    extras = {_layer_extra(owner) for owner in OPTIONAL_LIBRARIES[library]}
+    return tuple(sorted(extra for extra in extras if extra is not None))
+
+
+def extras_needed(text: str) -> list[tuple[str, ...]]:
+    """The extras ``text``'s Python examples import, each as the extras any of which do."""
+    modules: set[str] = set()
+    for language, _start, code in _blocks(text):
+        if language != "python":
+            continue
+        for node in ast.walk(ast.parse(code)):
+            if isinstance(node, ast.Import):
+                modules.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                modules.add(node.module)
+                modules.update(f"{node.module}.{alias.name}" for alias in node.names)
+    needed: set[tuple[str, ...]] = set()
+    for module in modules:
+        if module.split(".")[0] == "conduit":
+            extra = _layer_extra(module)
+            if extra is not None:
+                needed.add((extra,))
+        elif extras := _library_extras(module):
+            needed.add(extras)
+    return sorted(needed)
+
+
+@functools.cache
+def _conduit_requires() -> tuple[str, ...]:
+    return tuple(importlib.metadata.requires("cognisn-conduit") or ())
+
+
+def extra_installed(extra: str) -> bool:
+    """Whether every distribution ``extra`` names is installed (an unknown extra is not)."""
+    found = False
+    for line in _conduit_requires():
+        requirement = Requirement(line)
+        marker = requirement.marker
+        if marker is None or "extra" not in str(marker) or not marker.evaluate({"extra": extra}):
+            continue
+        found = True
+        if requirement.name == "cognisn-conduit":
+            if not all(extra_installed(inner) for inner in requirement.extras):
+                return False
+            continue
+        try:
+            importlib.metadata.version(requirement.name)
+        except importlib.metadata.PackageNotFoundError:
+            return False
+    return found
+
+
+def require_extras(text: str) -> None:
+    """Skip, naming the extra, when ``text`` imports a layer whose extra is missing.
+
+    With ``CONDUIT_REQUIRE_ALL_EXTRAS=1`` (CI installs every extra) it fails instead, so
+    a run that should check every document cannot quietly check fewer.
+    """
+    missing = [
+        extras
+        for extras in extras_needed(text)
+        if not any(extra_installed(extra) for extra in extras)
+    ]
+    if not missing:
+        return
+    named = ", ".join(
+        f'the {" or ".join(extras)} extra (pip install "cognisn-conduit[{extras[0]}]")'
+        for extras in missing
+    )
+    if os.environ.get(REQUIRE_ALL_EXTRAS) == "1":
+        pytest.fail(f"needs {named}, not installed, and {REQUIRE_ALL_EXTRAS}=1 requires it")
+    pytest.skip(f"needs {named}, not installed")
 
 
 def _name(path: Path) -> str:
@@ -345,9 +492,68 @@ def test_the_guard_refuses_a_module_import_that_bypasses_the_public_path(
     assert any(reason in problem for problem in problems), problems
 
 
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        (
+            "```python\nfrom conduit.core._hidden import thing\n```\n",
+            "line 2: conduit.core._hidden is a private module path",
+        ),
+        (
+            "```python\nimport conduit.core._hidden\n```\n",
+            "conduit.core._hidden is a private module path",
+        ),
+        (
+            "```python\nimport conduit.core._hidden as hidden\n```\n",
+            "conduit.core._hidden is a private module path",
+        ),
+        (
+            "```python\nfrom conduit import _version\n```\n",
+            "conduit._version is a private module path",
+        ),
+        (
+            "```python\nfrom conduit.agent import _runner as runner\n```\n",
+            "conduit.agent._runner is a private module path",
+        ),
+        (
+            "```python\nfrom conduit._private.deep import name as alias\n```\n",
+            "conduit._private.deep is a private module path",
+        ),
+        (
+            "```python\ndef f():\n    import json._private\n```\n",
+            "json._private is a private module path",
+        ),
+        (
+            "```python\nfrom importlib._bootstrap import spec_from_loader\n```\n",
+            "importlib._bootstrap is a private module path",
+        ),
+    ],
+    ids=[
+        "from-private",
+        "import-private",
+        "import-private-as",
+        "from-package-import-private",
+        "from-package-import-private-as",
+        "from-private-deep-as",
+        "nested-non-conduit",
+        "standard-library-private",
+    ],
+)
+def test_the_guard_refuses_a_private_module_path(text: str, reason: str) -> None:
+    # The private path is refused before anything is imported: such a module may not
+    # exist, and nothing in it is public whether or not it does.
+    problems = import_problems(text)
+    assert any(reason in problem for problem in problems), problems
+
+
+def test_a_dunder_module_is_not_private() -> None:
+    assert import_problems("```python\nfrom __future__ import annotations\n```\n") == []
+
+
 def test_the_guard_finds_a_submodule_not_yet_imported(monkeypatch: pytest.MonkeyPatch) -> None:
     # A submodule nothing has imported is not yet an attribute of its package, so the
     # guard imports it by name to tell it from an exported name.
+    require_extras("```python\nimport conduit.mcp\n```\n")
     package = importlib.import_module("conduit.mcp")
     importlib.import_module("conduit.mcp.client")
     monkeypatch.delattr(package, "client")
@@ -366,6 +572,179 @@ def test_the_guard_allows_a_layer_module_its_package_does_not_cover() -> None:
     # conduit.providers exports builtin_factories only, so the stub module is the path.
     text = "```python\nimport conduit.providers.stub\nimport conduit.agent\nimport conduit\n```\n"
     assert import_problems(text) == []
+
+
+# Extras a document needs ----------------------------------------------------------
+
+
+def _provided_extras() -> set[str]:
+    return set(importlib.metadata.metadata("cognisn-conduit").get_all("Provides-Extra") or [])
+
+
+def test_every_extra_is_mapped_to_its_layer() -> None:
+    # A new extra fails here until a document importing its layer can name it.
+    assert set(LAYER_EXTRAS.values()) == _provided_extras() - {"dev", "all-providers"}
+
+
+def test_every_layer_behind_an_optional_library_is_mapped() -> None:
+    for library, owners in OPTIONAL_LIBRARIES.items():
+        for owner in owners:
+            assert _layer_extra(owner) is not None, f"{owner} (for {library}) has no extra"
+
+
+@pytest.mark.parametrize(
+    ("text", "needed"),
+    [
+        ("```python\nimport json\nfrom conduit import start\n```\n", []),
+        ("```python\nfrom conduit.providers.stub import StubFactory\n```\n", []),
+        ("```python\nfrom conduit.mcp import McpConnection\n```\n", [("mcp",)]),
+        ("```python\nfrom conduit.stores.sql import SqlTranscriptStore\n```\n", [("sql",)]),
+        ("```python\nimport conduit.integrations.otel\n```\n", [("otel",)]),
+        ("```python\nfrom conduit.integrations import warden\n```\n", [("warden",)]),
+        ("```python\nfrom conduit.cli.main import main\n```\n", [("cli",)]),
+        ("```python\nfrom warden.audit import AuditRecorder\n```\n", [("warden",)]),
+        ("```python\nfrom sqlalchemy.ext.asyncio import create_async_engine\n```\n", [("sql",)]),
+        ("```python\ndef f():\n    import httpx\n```\n", [("mcp", "ollama")]),
+        ("```text\nfrom conduit.mcp import McpConnection\n```\n", []),
+    ],
+    ids=[
+        "core",
+        "stub",
+        "layer",
+        "nested-layer",
+        "module-import",
+        "layer-by-name",
+        "cli",
+        "library",
+        "library-submodule",
+        "shared-library",
+        "not-python",
+    ],
+)
+def test_the_extras_a_document_needs_are_read_from_its_imports(
+    text: str, needed: list[tuple[str, ...]]
+) -> None:
+    assert extras_needed(text) == needed
+
+
+def test_an_extra_is_installed_when_every_requirement_is(monkeypatch: pytest.MonkeyPatch) -> None:
+    requires = (
+        "pytest; extra == 'a'",
+        "cognisn-conduit[b]; extra == 'a'",
+        "pytest>=1; extra == 'b'",
+        "no-such-distribution-for-conduit; extra == 'c'",
+        "cognisn-conduit[c]; extra == 'd'",
+        "pytest; extra == 'e'",
+        "no-such-distribution-for-conduit; extra == 'e'",
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_conduit_requires", lambda: requires)
+    assert extra_installed("a")
+    assert extra_installed("b")
+    assert not extra_installed("c")
+    assert not extra_installed("d")
+    assert not extra_installed("e")
+    assert not extra_installed("unknown"), "an extra with no requirements is not installed"
+
+
+_OTEL_TEXT = "```python\nfrom conduit.integrations.otel import OtelEventSink\n```\n"
+
+
+def _outcome(text: str) -> BaseException | None:
+    """What ``require_extras`` raised for ``text``, caught here so that a skip it raises
+    by mistake fails the calling test instead of skipping it."""
+    try:
+        require_extras(text)
+    except BaseException as stopped:  # skip and fail are BaseExceptions
+        return stopped
+    return None
+
+
+def test_a_missing_extra_skips_the_document_naming_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(REQUIRE_ALL_EXTRAS, raising=False)
+    monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: extra != "otel")
+    stopped = _outcome(_OTEL_TEXT)
+    assert isinstance(stopped, pytest.skip.Exception), stopped
+    assert re.search(r"the otel extra .*cognisn-conduit\[otel\]", str(stopped)), stopped
+
+
+def test_a_missing_shared_library_names_each_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(REQUIRE_ALL_EXTRAS, raising=False)
+    monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: False)
+    stopped = _outcome("```python\nimport httpx\n```\n")
+    assert isinstance(stopped, pytest.skip.Exception), stopped
+    assert "the mcp or ollama extra" in str(stopped)
+
+
+def test_one_extra_of_a_shared_library_is_enough(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(REQUIRE_ALL_EXTRAS, raising=False)
+    monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: extra == "ollama")
+    assert _outcome("```python\nimport httpx\n```\n") is None
+
+
+def test_a_missing_extra_fails_when_every_extra_is_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(REQUIRE_ALL_EXTRAS, "1")
+    monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: extra != "otel")
+    stopped = _outcome(_OTEL_TEXT)
+    assert isinstance(stopped, pytest.fail.Exception), stopped
+    assert re.search(f"the otel extra .*{REQUIRE_ALL_EXTRAS}", str(stopped)), stopped
+
+
+def test_only_the_value_1_requires_every_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(REQUIRE_ALL_EXTRAS, "0")
+    monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: extra != "otel")
+    assert isinstance(_outcome(_OTEL_TEXT), pytest.skip.Exception)
+
+
+def test_an_installed_extra_runs_the_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(REQUIRE_ALL_EXTRAS, "1")
+    monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: True)
+    assert _outcome(_OTEL_TEXT) is None
+
+
+def test_a_run_requiring_every_extra_has_every_extra() -> None:
+    # CI installs every runtime extra; with the switch set, as CI's test jobs are to set
+    # it, this fails if an extra did not install, so nothing is quietly skipped.
+    if os.environ.get(REQUIRE_ALL_EXTRAS) != "1":
+        pytest.skip(f"set {REQUIRE_ALL_EXTRAS}=1 to check that every extra is installed")
+    missing = sorted(e for e in _provided_extras() - {"dev"} if not extra_installed(e))
+    assert missing == []
+
+
+def test_a_document_needing_a_missing_extra_is_skipped_before_it_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv(REQUIRE_ALL_EXTRAS, raising=False)
+    monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: extra != "warden")
+    document = ROOT / "docs" / "guides" / "observability.md"
+    with pytest.raises(pytest.skip.Exception, match="the warden extra"):
+        test_every_example_imports_from_the_public_path(document)
+    with pytest.raises(pytest.skip.Exception, match="the warden extra"):
+        test_every_python_example_runs(document, tmp_path, monkeypatch)
+
+
+def _readme_row(extra: str) -> str:
+    rows = [
+        line
+        for line in (ROOT / "README.md").read_text(encoding="utf-8").splitlines()
+        if line.startswith(f"| `{extra}` |")
+    ]
+    assert len(rows) == 1, f"the README's extras table has {len(rows)} rows for {extra}"
+    return rows[0]
+
+
+def test_the_readme_counts_what_the_warden_extra_installs() -> None:
+    # The licence audit counts the installed tree, so this runs where warden is installed.
+    require_extras("```python\nimport conduit.integrations.warden\n```\n")
+    core = len(audit().checked) - 1
+    report = audit(extras=["warden"])
+    total = len(report.checked) - 1
+    row = _readme_row("warden")
+    assert f"installs {total - core} runtime packages beyond the core's {core}" in row, row
+    assert f"({total} in all" in row, row
+    assert "psycopg" in {package.name for package in report.excepted}
+    assert "psycopg (LGPL-3.0) under its named licence exception" in row, row
 
 
 # The documents ----------------------------------------------------------------------
@@ -389,19 +768,23 @@ def test_no_example_can_escape_the_run(document: Path) -> None:
 
 @pytest.mark.parametrize("document", DOCUMENTS, ids=_name)
 def test_every_example_imports_from_the_public_path(document: Path) -> None:
-    assert import_problems(document.read_text(encoding="utf-8")) == []
+    text = document.read_text(encoding="utf-8")
+    require_extras(text)
+    assert import_problems(text) == []
 
 
 @pytest.mark.parametrize("document", DOCUMENTS, ids=_name)
 def test_every_python_example_runs(
     document: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    text = document.read_text(encoding="utf-8")
+    require_extras(text)
     monkeypatch.chdir(tmp_path)
     # A real module, registered while it runs, so dataclasses and pickling find it.
     module = types.ModuleType(f"conduit_guide_{document.stem.replace('-', '_')}")
     monkeypatch.setitem(sys.modules, module.__name__, module)
     module.__dict__[_COUNTER] = 0
-    examples = [b for b in _blocks(document.read_text(encoding="utf-8")) if b[0] == "python"]
+    examples = [b for b in _blocks(text) if b[0] == "python"]
     for _language, line, code in examples:
         # Pad with blank lines so a traceback names the line in the document, and count
         # the example only once its last line has run.

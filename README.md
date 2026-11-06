@@ -48,7 +48,7 @@ The core install and the stub provider need no extra. [Setting up providers](htt
 | `mcp` | MCP client over the official SDK (stdio, streamable HTTP and SSE), with static credentials and an OAuth 2.1 client |
 | `sql` | SQL transcript and token stores (SQLAlchemy; Postgres and SQLite) with their own schema and migrations |
 | `konfig` | konfig settings loader and secret resolver |
-| `warden` | Records conduit events in warden's audit trail (metadata only). 37 runtime packages with the core, including psycopg (LGPL-3.0, a reviewed licence exception) |
+| `warden` | Records conduit events in warden's audit trail (metadata only). The extra installs 32 runtime packages beyond the core's 5 (37 in all, as `python scripts/licence_audit.py --extra warden` counts them), including psycopg (LGPL-3.0) under its named licence exception in the licence audit |
 | `otel` | OpenTelemetry spans and metrics (the OpenTelemetry API; the product supplies the SDK and exporters) |
 | `cli` | The `conduit` terminal interface demonstrating the public API (`uvx --from "cognisn-conduit[cli]" conduit`); installs rich and the `mcp` extra |
 
@@ -118,7 +118,7 @@ python scripts/licence_audit.py
 python scripts/licence_audit.py --all-extras
 ```
 
-The default test run never calls a live model or service. Tests marked `integration` need live providers and are skipped by default. Every Python example in this README and in the guides is executed by `tests/docs/test_guides.py`.
+The default test run never calls a live model or service. Tests marked `integration` need live providers and are skipped by default. Every Python example in this README and in the guides is executed by `tests/docs/test_guides.py`; a guide whose examples need an extra you have not installed is skipped, naming the extra. Set `CONDUIT_REQUIRE_ALL_EXTRAS=1` to fail instead, as a run with every extra installed should.
 
 ## Licence
 
