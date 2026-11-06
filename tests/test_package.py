@@ -146,13 +146,20 @@ REEXPORTS: dict[str, tuple[str, ...]] = {
         "SecretResolver",
     ),
     "conduit.core.catalogue": (
+        "Capabilities",
         "Catalogue",
         "CatalogueOverlay",
         "ModelEntry",
         "ModelKey",
         "default_catalogue",
     ),
-    "conduit.core.tasks": ("CapabilityFloor", "TaskClass", "resolve_assignments"),
+    "conduit.core.tasks": (
+        "CapabilityFloor",
+        "TaskClass",
+        "resolve_assignments",
+        "Assignments",
+        "ResolvedAssignment",
+    ),
     "conduit.core.residency": ("ResidencyPolicy", "ResidencyScope"),
     "conduit.core.events": (
         "CaptureAs",

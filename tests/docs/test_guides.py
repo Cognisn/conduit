@@ -117,30 +117,80 @@ def _exports(package: str) -> frozenset[str]:
     return frozenset(getattr(importlib.import_module(package), "__all__", ()))
 
 
+def _submodule(package: str, name: str) -> str | None:
+    """``package.name`` when it is a module, else None."""
+    if isinstance(getattr(importlib.import_module(package), name, None), types.ModuleType):
+        return f"{package}.{name}"
+    try:
+        importlib.import_module(f"{package}.{name}")
+    except ModuleNotFoundError:
+        return None
+    return f"{package}.{name}"
+
+
+def _module_problem(module: str) -> str | None:
+    """Why importing the module ``module`` itself bypasses the public path, if it does.
+
+    The core and its submodules are never imported as modules: conduit exports their
+    names. A layer's submodule is refused when its package exports any of its names.
+    """
+    if module == "conduit.core" or module.startswith("conduit.core."):
+        return f"import {module}: use the names conduit exports"
+    parts = module.split(".")
+    if parts[0] != "conduit":
+        return None
+    imported = importlib.import_module(module)
+    for depth in range(2, len(parts)):
+        package = ".".join(parts[:depth])
+        source = importlib.import_module(package)
+        if any(
+            getattr(imported, name, None) is getattr(source, name) for name in _exports(package)
+        ):
+            return f"import {module}: use the names {package} exports"
+    return None
+
+
 def import_problems(text: str) -> list[str]:
     """Imports in ``text``'s Python examples that bypass a package exporting the name.
 
     A name exported from ``conduit`` is imported from ``conduit``, and a name a layer's
     package exports (``conduit.stores``) from that package, never from the submodule
-    it lives in, so the guides show the public import path (Wave 6 ruling Q0044).
+    it lives in, so the guides show the public import path (Wave 6 ruling Q0044). The
+    same holds for importing such a submodule as a module, and every conduit import
+    names what it takes (no ``import *``).
     """
     problems: list[str] = []
     for language, start, code in _blocks(text):
         if language != "python":
             continue
         for node in ast.walk(ast.parse(code)):
+            where = f"line {start + getattr(node, 'lineno', 1) - 1}"
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    problem = _module_problem(alias.name)
+                    if problem:
+                        problems.append(f"{where}: {problem}")
+                continue
             if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
                 continue
             parts = node.module.split(".")
             if parts[0] != "conduit":
                 continue
             for alias in node.names:
+                if alias.name == "*":
+                    problems.append(f"{where}: import * from {node.module}: name each import")
+                    continue
+                submodule = _submodule(node.module, alias.name)
+                if submodule is not None:
+                    problem = _module_problem(submodule)
+                    if problem:
+                        problems.append(f"{where}: {problem}")
+                    continue
                 for depth in range(1, len(parts)):
                     package = ".".join(parts[:depth])
                     if alias.name in _exports(package):
                         problems.append(
-                            f"line {start + node.lineno - 1}: import {alias.name} from "
-                            f"{package}, not {node.module}"
+                            f"{where}: import {alias.name} from {package}, not {node.module}"
                         )
                         break
     return problems
@@ -234,6 +284,71 @@ def test_a_public_import_path_has_no_problems() -> None:
 def test_the_guard_refuses_an_import_that_bypasses_the_public_path(text: str, reason: str) -> None:
     problems = import_problems(text)
     assert any(reason in problem for problem in problems), problems
+
+
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        (
+            "```python\nimport conduit.core.tools as t\n```\n",
+            "line 2: import conduit.core.tools: use the names conduit exports",
+        ),
+        (
+            "```python\nimport conduit.core.tools\n```\n",
+            "import conduit.core.tools: use the names conduit exports",
+        ),
+        (
+            "```python\nimport conduit.core\n```\n",
+            "import conduit.core: use the names conduit exports",
+        ),
+        (
+            "```python\nfrom conduit.core import tools\n```\n",
+            "import conduit.core.tools: use the names conduit exports",
+        ),
+        (
+            "```python\nfrom conduit import core\n```\n",
+            "import conduit.core: use the names conduit exports",
+        ),
+        (
+            "```python\nfrom conduit.core.tools import *\n```\n",
+            "import * from conduit.core.tools: name each import",
+        ),
+        (
+            "```python\nfrom conduit.agent import *\n```\n",
+            "import * from conduit.agent: name each import",
+        ),
+        (
+            "```python\nimport conduit.stores.memory as memory\n```\n",
+            "import conduit.stores.memory: use the names conduit.stores exports",
+        ),
+        (
+            "```python\nfrom conduit.stores import memory\n```\n",
+            "import conduit.stores.memory: use the names conduit.stores exports",
+        ),
+    ],
+    ids=[
+        "import-core-submodule-as",
+        "import-core-submodule",
+        "import-core",
+        "from-core-import-submodule",
+        "from-conduit-import-core",
+        "star-from-core",
+        "star-from-layer",
+        "import-layer-submodule",
+        "from-layer-import-submodule",
+    ],
+)
+def test_the_guard_refuses_a_module_import_that_bypasses_the_public_path(
+    text: str, reason: str
+) -> None:
+    problems = import_problems(text)
+    assert any(reason in problem for problem in problems), problems
+
+
+def test_the_guard_allows_a_layer_module_its_package_does_not_cover() -> None:
+    # conduit.providers exports builtin_factories only, so the stub module is the path.
+    text = "```python\nimport conduit.providers.stub\nimport conduit.agent\nimport conduit\n```\n"
+    assert import_problems(text) == []
 
 
 # The documents ----------------------------------------------------------------------

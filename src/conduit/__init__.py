@@ -13,6 +13,7 @@ from conduit.core.backends import (
     TokenStore,
 )
 from conduit.core.catalogue import (
+    Capabilities,
     Catalogue,
     CatalogueOverlay,
     ModelEntry,
@@ -81,7 +82,13 @@ from conduit.core.streaming import (
     UsageReported,
     collect,
 )
-from conduit.core.tasks import CapabilityFloor, TaskClass, resolve_assignments
+from conduit.core.tasks import (
+    Assignments,
+    CapabilityFloor,
+    ResolvedAssignment,
+    TaskClass,
+    resolve_assignments,
+)
 from conduit.core.tools import (
     TaskTools,
     Tool,
@@ -120,8 +127,10 @@ __all__ = [
     "ApprovalRequest",
     "AssignmentRefused",
     "AssignmentSettings",
+    "Assignments",
     "BaseProvider",
     "CacheBreakpoint",
+    "Capabilities",
     "CapabilityFloor",
     "CapabilityRefused",
     "CaptureAs",
@@ -166,6 +175,7 @@ __all__ = [
     "ResidencyPolicy",
     "ResidencyRefused",
     "ResidencyScope",
+    "ResolvedAssignment",
     "Runtime",
     "SecretRef",
     "SecretResolver",
