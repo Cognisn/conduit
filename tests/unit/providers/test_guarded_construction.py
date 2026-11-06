@@ -21,6 +21,7 @@ import pytest
 from tests.unit.providers.construction_cases import (
     ALL_CASES,
     CHAT_CASES,
+    ISSUED_FILE_VARIABLE,
     Case,
     check_hidden,
     failure_of,
@@ -74,6 +75,8 @@ def test_construction_by_the_factory_fails(case, monkeypatch):
 def test_no_key_reaches_a_long_traceback_with_locals(tmp_path: Path) -> None:
     test_file = tmp_path / "test_synthetic_construction.py"
     test_file.write_text(CHILD, encoding="utf-8", newline="\n")
+    # The child appends each short-term key it presigns here (never the repository).
+    issued_file = tmp_path / "issued-keys.txt"
     result = subprocess.run(
         [
             sys.executable,
@@ -92,7 +95,7 @@ def test_no_key_reaches_a_long_traceback_with_locals(tmp_path: Path) -> None:
             str(test_file),
         ],
         cwd=REPO_ROOT,
-        env=dict(os.environ),
+        env=dict(os.environ) | {ISSUED_FILE_VARIABLE: str(issued_file)},
         capture_output=True,
         text=True,
         timeout=600,
@@ -100,7 +103,10 @@ def test_no_key_reaches_a_long_traceback_with_locals(tmp_path: Path) -> None:
     )
     # Reduced to booleans first: the output itself never reaches this test's report.
     output = result.stdout + result.stderr
-    leaked = leaks(output)
+    issued = issued_file.read_text(encoding="utf-8").split() if issued_file.exists() else []
+    leaked = leaks(output, issued)
+    presigned = len(issued) >= 2 * sum(case.presigns for case in ALL_CASES)
+    del issued
     all_failed = f"{2 * len(ALL_CASES)} failed" in output
     refused = output.count("could not be built") >= 2 * len(ALL_CASES)
     locals_shown = "case = Case(" in output
@@ -108,4 +114,5 @@ def test_no_key_reaches_a_long_traceback_with_locals(tmp_path: Path) -> None:
     assert all_failed, "not every synthetic construction failed"
     assert refused, "not every failure was the fixed refusal"
     assert locals_shown, "pytest printed no frame locals"
+    assert presigned, "the child did not report every short-term key it presigned"
     assert not leaked, "the key or the SDK's text reached pytest's failure output"

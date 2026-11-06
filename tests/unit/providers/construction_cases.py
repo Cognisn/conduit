@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 import sys
 import traceback
 import types
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -84,16 +85,29 @@ ACCESS_KEYS = {
 
 #: The short-term Bedrock keys presigned in the current case, in this process.
 ISSUED: list[str] = []
+#: Set by the parent of a child pytest run: the file (in the parent's pytest tmp path,
+#: never the repository) the child appends each key it presigns to, one per line.
+ISSUED_FILE_VARIABLE = "CONDUIT_TEST_ISSUED_KEYS_FILE"
+#: How much of the end of a key's body is looked for on its own.
+BODY_TAIL = 24
 
 
 def record_issued_keys(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Record every short-term key the presign step makes, so a test can look for it."""
+    """Record every short-term key the presign step makes, so a test can look for it.
+
+    In a child run, each key is also appended to the file the parent named, so the
+    parent can look for it in the child's output.
+    """
     ISSUED.clear()
     encode = auth.encode_short_term_key
+    shared = os.environ.get(ISSUED_FILE_VARIABLE)
 
     def recorded(presigned_url: str) -> str:
         key = encode(presigned_url)
         ISSUED.append(key)
+        if shared:
+            with open(shared, "a", encoding="utf-8", newline="\n") as found:
+                found.write(key + "\n")
         return key
 
     monkeypatch.setattr(auth, "encode_short_term_key", recorded)
@@ -462,12 +476,20 @@ def ids(cases: tuple[Case, ...]) -> list[str]:
     return [case.id for case in cases]
 
 
-def leaks(text: str) -> bool:
-    """Whether ``text`` holds the placeholder, the SDK's own text, or a short-term key
-    (any, by its prefix, and each one presigned in this process, whole)."""
+def key_marks(key: str) -> tuple[str, str]:
+    """What betrays ``key``: the key whole, and the end of its body on its own."""
+    body = key.removeprefix(auth.SHORT_TERM_PREFIX)
+    return key, body[-BODY_TAIL:]
+
+
+def leaks(text: str, keys: Sequence[str] | None = None) -> bool:
+    """Whether ``text`` holds the placeholder, the SDK's own text, or a short-term key:
+    any, by its prefix, and each of ``keys`` (by default those presigned in this
+    process) whole or by the end of its body alone."""
     if PLACEHOLDER in text or SDK_TEXT in text or auth.SHORT_TERM_PREFIX in text:
         return True
-    return any(key in text for key in ISSUED)
+    found = ISSUED if keys is None else keys
+    return any(mark in text for key in found for mark in key_marks(key))
 
 
 def watch_loggers(caplog: pytest.LogCaptureFixture) -> None:
