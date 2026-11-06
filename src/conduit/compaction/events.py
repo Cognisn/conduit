@@ -24,9 +24,12 @@ CompactionOutcome = Literal["compacted", "skipped", "failed"]
 class CompactionEvent(Event):
     """One compaction, or one attempt.
 
-    ``outcome`` is ``compacted``; ``skipped`` (a forced compaction found too little to
-    replace); or ``failed`` (``reason`` gives the ``CompactionFailed`` code, and the
-    conversation was left as it was). ``tokens_before`` is the estimate that was tested
+    ``outcome`` is ``compacted``; ``skipped``, with ``reason`` ``nothing_to_compact`` (a
+    forced compaction found too little to replace), ``prefix_too_large`` (the fixed
+    prefix, the kept tail and the summary allowance already reach the threshold) or
+    ``not_below_threshold`` (the result would still be at or over it); or ``failed``
+    (``reason`` gives the ``CompactionFailed`` code, and the conversation was left as it
+    was). ``tokens_before`` is the estimate that was tested
     against the threshold, ``tokens_after`` the estimate of the compacted prompt.
     ``entries_replaced`` counts the messages newly folded into the summary (an earlier
     summary is not counted again), and ``replaces_through`` is the sequence number the

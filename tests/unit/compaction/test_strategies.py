@@ -176,10 +176,18 @@ async def test_summarise_calls_the_summary_task_class() -> None:
     assert sent.task_class == "summary"
     assert sent.run_id == "run_x"
     assert sent.tools == ()
-    prompt = sent.messages[0].content[0]
-    assert isinstance(prompt, TextBlock)
-    assert prompt.text.startswith("Summarise this, please.")
-    assert "Looking up item 1." in prompt.text
+    first = sent.messages[0].content[0]
+    assert isinstance(first, TextBlock)
+    assert first.text == "Please check the example.com release items."
+    instructions = sent.messages[-1].content[-1]
+    assert isinstance(instructions, TextBlock)
+    assert instructions.text == "Summarise this, please."
+    assert sent.messages[-1].role == "user"
+    assert any(
+        isinstance(b, TextBlock) and b.text == "Looking up item 1."
+        for m in sent.messages
+        for b in m.content
+    )
     assert sent.max_output_tokens <= 512
 
 

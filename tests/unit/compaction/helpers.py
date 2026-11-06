@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from conduit.core.events import Event
+from conduit.core.events import CapturePolicy, Event, EventSink
 from conduit.core.runtime import ConduitSettings, Runtime, start
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.core.tasks import CapabilityFloor, ResolvedAssignment, TaskClass
@@ -52,9 +52,10 @@ def _entry(model_id: str, window: int, output: int) -> dict[str, Any]:
     }
 
 
-def settings() -> ConduitSettings:
+def settings(capture: CapturePolicy | None = None) -> ConduitSettings:
     return ConduitSettings.model_validate(
         {
+            "capture": (capture or CapturePolicy()).model_dump(),
             "providers": {
                 "primary": {"kind": "stub", "script": "primary", "not_for_production": True},
                 "summariser": {
@@ -102,16 +103,23 @@ def summary_script(text: str = "SUMMARY: the example.com release was discussed."
     return ScriptLog(lambda request, index: StubTurn(text=text))
 
 
-async def runtime(primary: StubScript = echo, summariser: StubScript | None = None) -> Runtime:
+async def runtime(
+    primary: StubScript = echo,
+    summariser: StubScript | None = None,
+    *,
+    events: EventSink | None = None,
+    capture: CapturePolicy | None = None,
+) -> Runtime:
     scripts: dict[str, StubScript] = {
         "primary": primary,
         "summariser": summariser if summariser is not None else summary_script(),
     }
     return await start(
-        settings(),
+        settings(capture),
         task_classes=[CHAT, SUMMARY, TINY],
         factories=[StubFactory(scripts=scripts)],
         secrets=LiteralSecretResolver({}),
+        events=events,
     )
 
 
@@ -191,6 +199,12 @@ def conversation(turns: int, *, result_chars: int = 400) -> tuple[Message, ...]:
     for i in range(turns):
         messages.extend(tool_turn(i, result_chars))
     return tuple(messages)
+
+
+def oversized() -> tuple[Message, ...]:
+    """About 5,100 tokens: more than ``stub-small``'s window holds with its output budget,
+    and a kept last turn of about 360 tokens."""
+    return conversation(14, result_chars=1_200)
 
 
 def chat(turns: int, chars: int = 300) -> tuple[Message, ...]:

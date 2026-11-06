@@ -19,6 +19,18 @@ replaces with its own.
   built, from the runtime's resolved assignment, so a summary model below it is refused
   at start-up and never part-way through a task (C18). The conversation must also fit
   the summary model's context window, or the compaction fails before any call.
+
+  The older turns are sent as they are, as messages, with tool calls and results in
+  their own blocks (each result trimmed) and the instructions added to the last user
+  turn. The provider registry therefore holds the call's tool content to the capture
+  policy's tool-content setting, as for any call (C19). Because the request carries tool
+  blocks it also carries the conversation's tool definitions, so the default floor asks
+  for a model with tools.
+
+A strategy may also declare ``summary_allowance``: about how many tokens its summary may
+take. The ``Compactor`` counts it, with the fixed prefix and the kept tail, before
+compacting, so it never asks for a summary that could not bring the prompt under the
+threshold. ``Summarise`` declares its output budget.
 """
 
 from __future__ import annotations
@@ -29,7 +41,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from conduit.compaction.conversation import estimate_tokens, render_messages
+from conduit.compaction.conversation import (
+    TOOL_RESULT_OMITTED,
+    estimate_tokens,
+    render_messages,
+    trim_text,
+)
 from conduit.compaction.errors import CompactionFailed
 from conduit.core.errors import (
     CapabilityRefused,
@@ -40,7 +57,18 @@ from conduit.core.errors import (
 from conduit.core.identifiers import IDENTIFIER_PATTERN
 from conduit.core.runtime import TaskBinding
 from conduit.core.tasks import CapabilityFloor, ResolvedAssignment
-from conduit.core.types import Message, ModelResponse
+from conduit.core.types import (
+    CacheBreakpoint,
+    ContentBlock,
+    ImageBlock,
+    Message,
+    ModelResponse,
+    ProviderStateBlock,
+    TextBlock,
+    ToolResultBlock,
+    ToolSpec,
+    ToolUseBlock,
+)
 
 __all__ = [
     "DEFAULT_INSTRUCTIONS",
@@ -52,6 +80,7 @@ __all__ = [
     "Summarise",
     "SummaryBindings",
     "check_strategy",
+    "summary_messages",
 ]
 
 DEFAULT_NOTICE = (
@@ -72,11 +101,13 @@ DEFAULT_INSTRUCTIONS = (
 
 @dataclass(frozen=True, slots=True)
 class StrategyContext:
-    """What a strategy knows about the call being compacted: the run, and the model the
-    conversation goes to (its catalogue entry gives the context window)."""
+    """What a strategy knows about the call being compacted: the run, the model the
+    conversation goes to (its catalogue entry gives the context window), and the tools
+    the conversation's tool calls were made with."""
 
     run_id: str | None
     assignment: ResolvedAssignment
+    tools: tuple[ToolSpec, ...] = ()
 
 
 @runtime_checkable
@@ -163,13 +194,67 @@ class SummaryBindings(Protocol):
     def for_task(self, task_class: str) -> TaskBinding: ...
 
 
+def _result_text(block: ToolResultBlock, limit: int | None) -> str:
+    if limit is None:
+        return TOOL_RESULT_OMITTED
+    parts = [c.text if isinstance(c, TextBlock) else "[image]" for c in block.content]
+    return trim_text(" ".join(parts), limit) or "[no content]"
+
+
+def _prepared_block(
+    block: ContentBlock, tool_result_chars: int | None, max_message_chars: int
+) -> ContentBlock | None:
+    if isinstance(block, TextBlock):
+        return TextBlock(text=trim_text(block.text, max_message_chars))
+    if isinstance(block, ToolResultBlock):
+        return ToolResultBlock(
+            tool_use_id=block.tool_use_id,
+            content=(TextBlock(text=_result_text(block, tool_result_chars)),),
+            is_error=block.is_error,
+        )
+    if isinstance(block, ImageBlock):
+        return TextBlock(text="[image]")
+    if isinstance(block, CacheBreakpoint | ProviderStateBlock):
+        return None  # the summary model is not the one these were made for
+    return block  # a tool use, kept whole so its result still answers it
+
+
+def summary_messages(
+    replaced: Sequence[Message],
+    instructions: str,
+    *,
+    tool_result_chars: int | None = 500,
+    max_message_chars: int = 3_000,
+) -> tuple[Message, ...]:
+    """``replaced`` as a summary request sends it: tool calls and results in their own
+    blocks, each result trimmed to ``tool_result_chars`` (or left out when ``None``),
+    text trimmed to ``max_message_chars``, images named, cache markers and provider state
+    left out, and ``instructions`` added to the last user turn."""
+    messages: list[Message] = []
+    for message in replaced:
+        blocks: list[ContentBlock] = []
+        for block in message.content:
+            prepared = _prepared_block(block, tool_result_chars, max_message_chars)
+            if prepared is not None:
+                blocks.append(prepared)
+        content = tuple(blocks) or (TextBlock(text="[no text]"),)
+        messages.append(Message(role=message.role, content=content))
+    if messages and messages[-1].role == "user":
+        last = messages[-1]
+        messages[-1] = Message(role="user", content=(*last.content, TextBlock(text=instructions)))
+    else:
+        messages.append(Message.user(instructions))
+    return tuple(messages)
+
+
 class Summarise:
     """Summarise the older turns with the model assigned to ``task_class``.
 
-    ``floor`` is the least the summary model must offer; it is checked here, once. The
-    request carries the run's id, so the provider registry's model-call events tie the
-    summary call to the run. Its tokens are metered by the registry like any call, but
-    are not charged to the run's own budget.
+    ``floor`` is the least the summary model must offer (a model with tools unless the
+    product says otherwise); it is checked here, once. The request carries the run's id,
+    so the provider registry's model-call events tie the summary call to the run. Its
+    tokens are metered by the registry like any call, but are not charged to the run's
+    own budget: the run's meter belongs to the runner, which the hook cannot reach.
     """
 
     def __init__(
@@ -182,7 +267,7 @@ class Summarise:
         keep_turns: int = 4,
         instructions: str = DEFAULT_INSTRUCTIONS,
         header: str = SUMMARY_HEADER,
-        tool_result_chars: int = 500,
+        tool_result_chars: int | None = 500,
         max_message_chars: int = 3_000,
         max_summary_tokens: int | None = None,
         name: str = "summarise",
@@ -191,7 +276,8 @@ class Summarise:
         assignment = bindings.assignments.get(task_class)
         if assignment is None:
             raise ConfigurationError(f"summary task class {task_class!r} has no assignment")
-        shortfalls = (floor or CapabilityFloor()).shortfalls(assignment.entry)
+        self.floor = floor if floor is not None else CapabilityFloor(tools=True)
+        shortfalls = self.floor.shortfalls(assignment.entry)
         if shortfalls:
             raise CapabilityRefused(
                 f"{task_class}: model {assignment.model!r} is below the summary floor: "
@@ -209,23 +295,34 @@ class Summarise:
         self.tool_result_chars = tool_result_chars
         self.max_message_chars = max_message_chars
         self.max_summary_tokens = max_summary_tokens
+        self.summary_allowance = self._output(assignment)
+
+    def _output(self, assignment: ResolvedAssignment) -> int:
+        output = assignment.max_output_tokens
+        if self.max_summary_tokens is not None:
+            output = min(output, self.max_summary_tokens)
+        return output
 
     async def summarise(self, replaced: Sequence[Message], context: StrategyContext) -> str:
         binding = self._bindings.for_task(self.task_class)
         assignment = binding.assignment
-        output = assignment.max_output_tokens
-        if self.max_summary_tokens is not None:
-            output = min(output, self.max_summary_tokens)
-        rendered = render_messages(
+        output = self._output(assignment)
+        messages = summary_messages(
             replaced,
+            self.instructions,
             tool_result_chars=self.tool_result_chars,
             max_message_chars=self.max_message_chars,
         )
-        prompt = Message.user(f"{self.instructions}\n\nCONVERSATION:\n\n{rendered}")
-        if estimate_tokens(messages=(prompt,)) + output > assignment.entry.context_window:
+        has_tools = any(
+            isinstance(b, ToolUseBlock | ToolResultBlock) for m in messages for b in m.content
+        )
+        tools = context.tools if has_tools else ()
+        if estimate_tokens(tools=tools, messages=messages) + output > (
+            assignment.entry.context_window
+        ):
             raise CompactionFailed("summary_too_large")
         request = binding.request(
-            messages=(prompt,), max_output_tokens=output, run_id=context.run_id
+            messages=messages, tools=tools, max_output_tokens=output, run_id=context.run_id
         )
         response: ModelResponse | None = None
         failure: ProviderFailure | None = None

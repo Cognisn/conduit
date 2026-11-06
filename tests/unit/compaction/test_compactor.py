@@ -29,6 +29,7 @@ from tests.unit.compaction.helpers import (
     Sink,
     chat,
     conversation,
+    oversized,
     request,
     runtime,
     summary_script,
@@ -129,7 +130,7 @@ async def test_the_most_aggressive_triggered_strategy_is_chosen() -> None:
 async def test_the_replacement_is_the_summary_then_the_tail_unchanged() -> None:
     assignment = await _chat_assignment()
     messages = conversation(5)
-    compactor = Compactor([KeepLastTurns(threshold=0.01, keep_turns=2, notice="NOTICE")])
+    compactor = Compactor([KeepLastTurns(threshold=0.1, keep_turns=2, notice="NOTICE")])
     replaced = await compactor.before_model_call(request(assignment, messages))
     assert replaced is not None
     summary, *tail = replaced
@@ -142,7 +143,7 @@ async def test_the_replacement_is_the_summary_then_the_tail_unchanged() -> None:
 async def test_the_summary_can_be_left_out_of_the_cached_prefix() -> None:
     assignment = await _chat_assignment()
     compactor = Compactor(
-        [KeepLastTurns(threshold=0.01, keep_turns=1, notice="N")], cache_summary=False
+        [KeepLastTurns(threshold=0.1, keep_turns=1, notice="N")], cache_summary=False
     )
     replaced = await compactor.before_model_call(request(assignment, conversation(3)))
     assert replaced is not None
@@ -151,7 +152,7 @@ async def test_the_summary_can_be_left_out_of_the_cached_prefix() -> None:
 
 async def test_nothing_is_compacted_when_too_little_would_go() -> None:
     assignment = await _chat_assignment()
-    compactor = Compactor([KeepLastTurns(threshold=0.01, keep_turns=3)])
+    compactor = Compactor([KeepLastTurns(threshold=0.1, keep_turns=3)])
     assert await compactor.before_model_call(request(assignment, conversation(3))) is None
 
 
@@ -160,7 +161,7 @@ async def test_system_and_tools_are_never_touched() -> None:
     assignment = await _chat_assignment()
     system = (TextBlock(text="You help example.com."), CacheBreakpoint())
     shown = request(assignment, conversation(4), system=system)
-    compactor = Compactor([KeepLastTurns(threshold=0.01, keep_turns=1)])
+    compactor = Compactor([KeepLastTurns(threshold=0.1, keep_turns=1)])
     replaced = await compactor.before_model_call(shown)
     assert replaced is not None
     assert shown.system == system
@@ -230,7 +231,7 @@ async def test_the_event_carries_strategy_tokens_and_entries_replaced() -> None:
     assignment = await _chat_assignment()
     sink = Sink()
     messages = conversation(5)
-    compactor = Compactor([KeepLastTurns(threshold=0.01, keep_turns=2, notice="N")], events=sink)
+    compactor = Compactor([KeepLastTurns(threshold=0.1, keep_turns=2, notice="N")], events=sink)
     replaced = await compactor.before_model_call(request(assignment, messages))
     assert replaced is not None
     [event] = sink.of(CompactionEvent)
@@ -254,7 +255,7 @@ async def test_the_summary_text_is_captured_only_when_prompts_are() -> None:
     for policy, expected in ((None, None), (CapturePolicy(prompts=True), "SECRET-NOTICE")):
         sink = Sink()
         compactor = Compactor(
-            [KeepLastTurns(threshold=0.01, keep_turns=1, notice="SECRET-NOTICE")],
+            [KeepLastTurns(threshold=0.1, keep_turns=1, notice="SECRET-NOTICE")],
             events=sink,
             capture=policy,
         )
@@ -270,7 +271,7 @@ async def test_tool_content_capture_alone_does_not_capture_the_summary() -> None
     assignment = await _chat_assignment()
     sink = Sink()
     compactor = Compactor(
-        [KeepLastTurns(threshold=0.01, keep_turns=1, notice="SECRET-NOTICE")],
+        [KeepLastTurns(threshold=0.1, keep_turns=1, notice="SECRET-NOTICE")],
         events=sink,
         capture=CapturePolicy(tool_content=True),
     )
@@ -293,7 +294,7 @@ async def test_a_compaction_point_is_written_with_tokens_before_and_after() -> N
     await _stored(store, "s-1", messages)
     sink = Sink()
     compactor = Compactor(
-        [KeepLastTurns(threshold=0.01, keep_turns=2, notice="N")], transcripts=store, events=sink
+        [KeepLastTurns(threshold=0.1, keep_turns=2, notice="N")], transcripts=store, events=sink
     )
     replaced = await compactor.before_model_call(request(assignment, messages, session_id="s-1"))
     assert replaced is not None
@@ -316,7 +317,7 @@ async def test_a_second_compaction_folds_in_the_first() -> None:
     await _stored(store, "s-1", messages)
     sink = Sink()
     compactor = Compactor(
-        [KeepLastTurns(threshold=0.01, keep_turns=1, notice="N")], transcripts=store, events=sink
+        [KeepLastTurns(threshold=0.1, keep_turns=1, notice="N")], transcripts=store, events=sink
     )
     first = await compactor.before_model_call(request(assignment, messages, session_id="s-1"))
     assert first is not None
@@ -338,9 +339,9 @@ async def test_a_second_compaction_folds_in_the_first() -> None:
 async def test_the_point_replaces_through_the_last_message_before_the_tail() -> None:
     assignment = await _chat_assignment()
     store = MemoryTranscriptStore()
-    messages = chat(4, chars=100)
+    messages = chat(4, chars=200)
     await _stored(store, "s-1", messages)
-    compactor = Compactor([KeepLastTurns(threshold=0.01, keep_turns=1)], transcripts=store)
+    compactor = Compactor([KeepLastTurns(threshold=0.1, keep_turns=1)], transcripts=store)
     replaced = await compactor.before_model_call(request(assignment, messages, session_id="s-1"))
     assert replaced is not None
     transcript = await store.load("s-1")
@@ -355,11 +356,11 @@ async def test_the_point_replaces_through_the_last_message_before_the_tail() -> 
 async def test_a_transcript_that_does_not_match_is_refused() -> None:
     assignment = await _chat_assignment()
     store = MemoryTranscriptStore()
-    messages = conversation(4)
+    messages = oversized()
     await _stored(store, "s-1", messages[:-1])  # the last message never stored
     sink = Sink()
     compactor = Compactor(
-        [KeepLastTurns(threshold=0.01, keep_turns=1)], transcripts=store, events=sink
+        [KeepLastTurns(threshold=0.1, keep_turns=1)], transcripts=store, events=sink
     )
     with pytest.raises(CompactionFailed) as raised:
         await compactor.before_model_call(request(assignment, messages, session_id="s-1"))
@@ -372,7 +373,7 @@ async def test_a_transcript_that_does_not_match_is_refused() -> None:
 async def test_without_a_session_nothing_is_written() -> None:
     assignment = await _chat_assignment()
     store = MemoryTranscriptStore()
-    compactor = Compactor([KeepLastTurns(threshold=0.01, keep_turns=1)], transcripts=store)
+    compactor = Compactor([KeepLastTurns(threshold=0.1, keep_turns=1)], transcripts=store)
     assert await compactor.before_model_call(request(assignment, conversation(3)))
     assert await store.list_sessions() == []
 
@@ -410,12 +411,12 @@ def _clean(error: BaseException) -> None:
 async def test_a_failing_store_is_reported_by_class_only(fail_on: str) -> None:
     assignment = await _chat_assignment()
     store = FailingStore(fail_on)
-    messages = conversation(4)
+    messages = oversized()
     await _stored(store, "s-1", messages)
     store.armed = True
     sink = Sink()
     compactor = Compactor(
-        [KeepLastTurns(threshold=0.01, keep_turns=1)], transcripts=store, events=sink
+        [KeepLastTurns(threshold=0.2, keep_turns=1)], transcripts=store, events=sink
     )
     with pytest.raises(CompactionFailed) as raised:
         await compactor.before_model_call(request(assignment, messages, session_id="s-1"))
@@ -429,7 +430,7 @@ async def test_a_failing_store_is_reported_by_class_only(fail_on: str) -> None:
 async def test_a_failing_product_strategy_is_wrapped_without_its_text() -> None:
     class Broken:
         name = "broken"
-        threshold = 0.01
+        threshold = 0.1
         keep_turns = 1
 
         async def summarise(self, replaced: Sequence[Message], context: StrategyContext) -> str:
@@ -437,7 +438,7 @@ async def test_a_failing_product_strategy_is_wrapped_without_its_text() -> None:
 
     assignment = await _chat_assignment()
     with pytest.raises(CompactionFailed) as raised:
-        await Compactor([Broken()]).before_model_call(request(assignment, conversation(3)))
+        await Compactor([Broken()]).before_model_call(request(assignment, oversized()))
     assert (raised.value.reason, raised.value.error_class) == ("strategy_failed", "ValueError")
     _clean(raised.value)
 
@@ -448,11 +449,11 @@ async def test_a_failed_summary_leaves_no_point_and_is_reported() -> None:
 
     rt = await runtime(summariser=scripted([ProviderError(ProviderFailure.TIMEOUT)]))
     store = MemoryTranscriptStore()
-    messages = conversation(4)
+    messages = oversized()
     await _stored(store, "s-1", messages)
     sink = Sink()
     compactor = Compactor(
-        [Summarise(rt, task_class="summary", threshold=0.01, keep_turns=1)],
+        [Summarise(rt, task_class="summary", threshold=0.5, keep_turns=1)],
         transcripts=store,
         events=sink,
     )
@@ -474,7 +475,7 @@ async def test_a_failed_summary_leaves_no_point_and_is_reported() -> None:
 async def test_cancellation_propagates_unchanged() -> None:
     class Slow:
         name = "slow"
-        threshold = 0.01
+        threshold = 0.1
         keep_turns = 1
 
         async def summarise(self, replaced: Sequence[Message], context: StrategyContext) -> str:
@@ -497,7 +498,8 @@ async def test_a_summarised_compaction_end_to_end() -> None:
     rt = await runtime(summariser=log)
     sink = Sink()
     compactor = Compactor(
-        [Summarise(rt, task_class="summary", threshold=0.01, keep_turns=1)], events=sink
+        [Summarise(rt, task_class="summary", threshold=0.1, keep_turns=1, max_summary_tokens=64)],
+        events=sink,
     )
     replaced = await compactor.before_model_call(request(rt.assignments["chat"], conversation(4)))
     assert replaced is not None
@@ -528,7 +530,7 @@ def test_request_helper_matches_the_runner_shape() -> None:
 async def test_a_strategy_must_return_some_text(returned: object, reason: str) -> None:
     class Odd:
         name = "odd"
-        threshold = 0.01
+        threshold = 0.1
         keep_turns = 1
 
         async def summarise(self, replaced: Sequence[Message], context: StrategyContext) -> object:
@@ -538,7 +540,7 @@ async def test_a_strategy_must_return_some_text(returned: object, reason: str) -
     sink = Sink()
     compactor = Compactor([Odd()], events=sink)  # type: ignore[list-item]
     with pytest.raises(CompactionFailed) as raised:
-        await compactor.before_model_call(request(assignment, conversation(3)))
+        await compactor.before_model_call(request(assignment, oversized()))
     assert raised.value.reason == reason
     _clean(raised.value)
     [event] = sink.of(CompactionEvent)
@@ -548,7 +550,7 @@ async def test_a_strategy_must_return_some_text(returned: object, reason: str) -
 async def test_a_strategys_own_chained_failure_reaches_the_caller_unchained() -> None:
     class Chained:
         name = "chained"
-        threshold = 0.01
+        threshold = 0.1
         keep_turns = 1
 
         async def summarise(self, replaced: Sequence[Message], context: StrategyContext) -> str:
@@ -559,7 +561,7 @@ async def test_a_strategys_own_chained_failure_reaches_the_caller_unchained() ->
 
     assignment = await _chat_assignment()
     with pytest.raises(CompactionFailed) as raised:
-        await Compactor([Chained()]).before_model_call(request(assignment, conversation(3)))
+        await Compactor([Chained()]).before_model_call(request(assignment, oversized()))
     assert (raised.value.reason, raised.value.error_class) == ("summary_failed", "KeyError")
     _clean(raised.value)
 
@@ -572,7 +574,7 @@ async def test_the_event_leaves_the_compactor_already_within_the_policy(
     assignment = await _chat_assignment()
     sink = Sink()
     compactor = Compactor(
-        [KeepLastTurns(threshold=0.01, keep_turns=1, notice="SECRET-NOTICE")], events=sink
+        [KeepLastTurns(threshold=0.1, keep_turns=1, notice="SECRET-NOTICE")], events=sink
     )
     with caplog.at_level("WARNING", logger="conduit.events"):
         await compactor.before_model_call(request(assignment, conversation(3)))

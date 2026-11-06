@@ -66,7 +66,7 @@ async def test_two_compactions_reload_to_the_compacted_view(opener: Opener) -> N
     messages = conversation(4)
     await store.append("s-1", [MessageEntry(message=m) for m in messages])
     compactor = Compactor(
-        [KeepLastTurns(threshold=0.01, keep_turns=1, notice="NOTICE")], transcripts=store
+        [KeepLastTurns(threshold=0.1, keep_turns=1, notice="NOTICE")], transcripts=store
     )
     first = await compactor.before_model_call(request(assignment, messages, session_id="s-1"))
     assert first is not None

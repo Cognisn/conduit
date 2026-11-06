@@ -40,6 +40,7 @@ __all__ = [
     "estimate_tokens",
     "find_cut",
     "render_messages",
+    "trim_text",
 ]
 
 TOOL_RESULT_OMITTED = "[tool result omitted]"
@@ -87,7 +88,8 @@ def find_cut(messages: Sequence[Message], keep_turns: int) -> int | None:
     return None
 
 
-def _trim(text: str, limit: int) -> str:
+def trim_text(text: str, limit: int) -> str:
+    """``text`` cut to at most ``limit`` characters, ending with a truncation marker."""
     return text if len(text) <= limit else text[: max(0, limit - len(TRUNCATED))] + TRUNCATED
 
 
@@ -96,7 +98,7 @@ def _result_text(block: ToolResultBlock, limit: int | None) -> str:
         return TOOL_RESULT_OMITTED
     parts = [c.text if isinstance(c, TextBlock) else "[image]" for c in block.content]
     marker = "error" if block.is_error else "result"
-    return f"[tool {marker}: {_trim(' '.join(parts), limit)}]"
+    return f"[tool {marker}: {trim_text(' '.join(parts), limit)}]"
 
 
 def render_messages(
@@ -124,6 +126,6 @@ def render_messages(
                 parts.append("[image]")
             elif isinstance(block, CacheBreakpoint | ProviderStateBlock):
                 continue
-        text = _trim("\n".join(parts), max_message_chars)
+        text = trim_text("\n".join(parts), max_message_chars)
         paragraphs.append(f"[{message.role.upper()}]: {text}")
     return "\n\n".join(paragraphs)

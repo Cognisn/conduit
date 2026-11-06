@@ -9,7 +9,12 @@
 # Compaction points go to the transcript store, and compaction events to the event sink
 # under the capture policy. The layer uses the core alone.
 
-from conduit.compaction.compactor import CompactionContext, Compactor, TokenEstimator
+from conduit.compaction.compactor import (
+    DEFAULT_MAX_FORCED,
+    CompactionContext,
+    Compactor,
+    TokenEstimator,
+)
 from conduit.compaction.conversation import (
     DEFAULT_MAX_MESSAGE_CHARS,
     TOOL_RESULT_OMITTED,
@@ -17,7 +22,7 @@ from conduit.compaction.conversation import (
     find_cut,
     render_messages,
 )
-from conduit.compaction.errors import CompactionError, CompactionFailed
+from conduit.compaction.errors import REASONS, CompactionError, CompactionFailed
 from conduit.compaction.events import CompactionEvent, CompactionOutcome, CompactionTrigger
 from conduit.compaction.strategies import (
     DEFAULT_INSTRUCTIONS,
@@ -29,12 +34,15 @@ from conduit.compaction.strategies import (
     Summarise,
     SummaryBindings,
     check_strategy,
+    summary_messages,
 )
 
 __all__ = [
     "DEFAULT_INSTRUCTIONS",
+    "DEFAULT_MAX_FORCED",
     "DEFAULT_MAX_MESSAGE_CHARS",
     "DEFAULT_NOTICE",
+    "REASONS",
     "TOOL_RESULT_OMITTED",
     "CompactionContext",
     "CompactionError",
@@ -54,4 +62,5 @@ __all__ = [
     "estimate_tokens",
     "find_cut",
     "render_messages",
+    "summary_messages",
 ]
