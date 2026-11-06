@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0a17] - 2026-11-05
+
+Wave 5, second merge: compaction (`feat/0.1.0-compaction`).
+
+### Added
+
+- Compaction (`conduit.compaction`), the agent runner's compaction hook:
+  - strategies drop old tool results, keep the last turns, or summarise through a product-declared task class, whose capability floor is checked at start-up;
+  - each strategy is triggered at a share of the assigned model's context window. While the prompt fits, a compaction is applied only when it brings the prompt under its threshold. Once the prompt no longer fits, a compaction is applied whenever its result fits, and fails with a fixed reason when nothing can;
+  - a compaction can be forced per session, and runs once even under concurrent calls.
+- Cache-stable compaction: the system prompt, tools and loaded skills are never touched, and the summary follows the cached prefix with its own cache breakpoint, so cache reads continue after a compaction.
+- Summary requests keep tool calls and results in tool blocks, so the capture policy's tool-content setting applies to them, and they carry only the tools those turns used.
+- Compaction points written through the transcript store, with tokens before and after, reloading to the compacted conversation.
+- Compaction events carrying strategy, trigger, outcome, tokens and entries replaced, with the summary only as captured prompt content.
+- Compaction failures carry fixed reasons only, and leave a conversation that still fits unchanged.
+
+### Changed
+
+- CI's postgres job also runs the compaction store tests against a real Postgres.
+
+## [0.1.0a16] - 2026-11-05
+
+Wave 5, first merge: Bedrock key logging (`fix/0.1.0-bedrock-key-logging`).
+
+### Changed
+
+- Short-term Bedrock API keys for the bedrock and bedrock-mantle providers now come from one presign step, `conduit.providers.bedrock.auth.short_term_keys`. It presigns with botocore's SigV4 query signer, caps the key's lifetime at the credentials' expiry, refreshes within a margin, and generates the first key at start-up.
+- The bedrock provider keeps its API keys out of botocore's DEBUG records, in both key modes. botocore.auth `Signature:` records are dropped, and botocore.endpoint records are turned into fixed text when they are logged. Both filters are installed once per process, even when clients are created from several threads. The bedrock auth module documents what a product gives up by removing them, and that botocore's own credential-refresh logging cannot be filtered, so products keep botocore above DEBUG in production.
+- `SignatureRecordFilter`, `SIGNER_LOGGER` and `keep_signatures_out_of_logs` have moved from `conduit.providers.bedrock_mantle.auth` to `conduit.providers.bedrock.auth` (the last is now `keep_keys_out_of_logs`).
+- bedrock-mantle's refusal when no AWS credentials are found now names `NoCredentialsError`, as the bedrock provider's does.
+- The repository working agreement names the shared `devwork` Kvasir library for new project knowledge.
+
 ## [0.1.0a15] - 2026-11-05
 
 Wave 4, sixth and last merge: the bedrock-mantle adapter (`feat/0.1.0-provider-bedrock-mantle`). Milestone M3 (agent runner, skills, MCP client and embeddings).
