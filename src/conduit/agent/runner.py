@@ -22,9 +22,11 @@ What the runner enforces, whatever the model says:
 - **Approvals**: a tool the product marks goes to its ``ApprovalHandler`` first; a
   refusal (or no handler, or a failing one) is a tool result the model sees.
 - **Output filter**: the product's filter masks the text of every assistant message.
-- **Fail safe**: a failing provider, a refusing model or a raising tool executor ends the
-  run with a typed failure; the conversation is left well formed (every tool use has a
-  result), so the transcript stays loadable.
+- **Fail safe**: a failing provider, a refusing model, a raising tool executor or a
+  raising compaction hook ends the run with a typed failure; the conversation is left
+  well formed (every tool use has a result), so the transcript stays loadable.
+- **Hooks' own calls**: a model call the compaction hook makes itself (a summary) is
+  counted and charged to the run's budget through the request's ``charge`` (D0085).
 
 A run is an async stream of typed run events (``conduit.agent.events``); the result is
 ``AgentRun.result`` once the stream ends, or ``await runner.run(task)``. With a
@@ -211,6 +213,8 @@ class _Run:
     hand_offs: list[str] = field(default_factory=list)
     last_usage: Usage | None = None
     result: RunResult | None = None
+    # A limit a hook's own model call reached through the run's charge (D0085).
+    charged_over: Exhausted | None = None
     # Tool uses the conversation holds without results yet, and the turn answering them.
     open_uses: tuple[ToolUseBlock, ...] = ()
     open_turn: _Turn | None = None
@@ -225,6 +229,48 @@ class _Run:
             "correlation_id": self.correlation_id,
             "task_class": self.task_class,
         }
+
+
+class _Charge:
+    """A run's ``ModelCallCharge``: a hook's own model calls, counted and charged to the
+    run's budget like the runner's. A limit reached is kept on the run, which ends on it
+    once the hook returns."""
+
+    __slots__ = ("_run",)
+
+    def __init__(self, run: _Run) -> None:
+        self._run = run
+
+    def __repr__(self) -> str:
+        return f"_Charge({self._run.run_id!r})"
+
+    def begin(self, max_output_tokens: int) -> int | None:
+        run = self._run
+        # Once a limit is reached the meter refuses every later call too.
+        exhausted = run.meter.begin_model_call()
+        if exhausted is not None:
+            run.charged_over = exhausted
+            return None
+        allowed = max(1, max_output_tokens)
+        budget = run.meter.budget
+        if budget.max_tokens is not None and TokenCount.OUTPUT in budget.counted_tokens:
+            allowed = max(1, min(allowed, budget.max_tokens - run.meter.tokens_used))
+        return allowed
+
+    def record(self, usage: Usage) -> bool:
+        run = self._run
+        over = run.meter.record_usage(usage)
+        if over is not None and run.charged_over is None:
+            run.charged_over = over
+        return over is None and run.charged_over is None
+
+
+@dataclass
+class _Compaction:
+    """What the compaction step came to: the event to emit, or a failed hook."""
+
+    event: ConversationCompactedEvent | None = None
+    failed: bool = False
 
 
 @dataclass
@@ -481,26 +527,37 @@ class AgentRunner:
             # The hooks run within the wall-time budget, and the deadline is checked again
             # once they are done, so a slow hook cannot carry a call past it.
             system: tuple[SystemBlock, ...] | None = None
-            compacted: ConversationCompactedEvent | None = None
+            compaction = _Compaction()
             expired = False
             try:
                 async with asyncio.timeout(self._left(run)) as scope:
                     system = await self._system(run)
-                    compacted = await self._compact(run, system)
+                    compaction = await self._compact(run, system)
             except TimeoutError:
                 if not scope.expired():
                     raise
                 expired = True
+            # A hook that swallowed the deadline's cancellation is out of time all the same.
+            expired = expired or scope.expired()
+            # A hook's own call over the budget ends the run as any over-budget call
+            # does, whatever the hook did next (D0085).
+            if run.charged_over is not None:
+                async for event in self._exhaust(run, run.charged_over):
+                    yield event
+                return
             if expired or system is None:
                 async for event in self._exhaust(run, run.meter.timed_out()):
                     yield event
                 return
-            if compacted is not None:
-                yield await self._emit(compacted)
+            if compaction.event is not None:
+                yield await self._emit(compaction.event)
             late = run.meter.wall_time_exhausted()
             if late is not None:
                 async for event in self._exhaust(run, late):
                     yield event
+                return
+            if compaction.failed:
+                yield await self._finish(run, RunFailure.COMPACTION_FAILED)
                 return
             call = _Call()
             request = self._request(run, system)
@@ -1072,28 +1129,39 @@ class AgentRunner:
 
     # Compaction --------------------------------------------------------------------
 
-    async def _compact(
-        self, run: _Run, system: tuple[SystemBlock, ...]
-    ) -> ConversationCompactedEvent | None:
+    async def _compact(self, run: _Run, system: tuple[SystemBlock, ...]) -> _Compaction:
+        """Offer the conversation to the compaction hook. A hook that raises fails the
+        compaction step: the run ends with ``COMPACTION_FAILED``, a fixed reason, and the
+        error is logged by class name only and never kept (D0040). Cancellation
+        propagates unchanged."""
         if self._compaction is None:
-            return None
+            return _Compaction()
         before = tuple(run.messages)
-        replacement: Any = await self._compaction.before_model_call(
-            CompactionRequest(
-                run_id=run.run_id,
-                task_class=run.task_class,
-                session_id=run.task.session_id,
-                assignment=run.binding.assignment,
-                system=system,
-                tools=self._specs(run),
-                messages=before,
-                usage=run.meter.usage,
-                last_usage=run.last_usage,
-                model_calls=run.meter.model_calls - 1,
+        replacement: Any = None
+        failed: str | None = None
+        try:
+            replacement = await self._compaction.before_model_call(
+                CompactionRequest(
+                    run_id=run.run_id,
+                    task_class=run.task_class,
+                    session_id=run.task.session_id,
+                    assignment=run.binding.assignment,
+                    system=system,
+                    tools=self._specs(run),
+                    messages=before,
+                    usage=run.meter.usage,
+                    last_usage=run.last_usage,
+                    model_calls=run.meter.model_calls - 1,
+                    charge=_Charge(run),
+                )
             )
-        )
+        except Exception as error:
+            failed = type(error).__name__
+        if failed is not None:
+            logger.warning("the compaction hook failed in run %s: %s", run.run_id, failed)
+            return _Compaction(failed=True)
         if replacement is None:
-            return None
+            return _Compaction()
         usable = isinstance(replacement, Sequence) and not isinstance(replacement, str | bytes)
         messages = tuple(replacement) if usable else ()
         if (
@@ -1106,8 +1174,10 @@ class AgentRunner:
                 "user message"
             )
         run.messages = list(messages)
-        return ConversationCompactedEvent(
-            **run.common(), messages_before=len(before), messages_after=len(messages)
+        return _Compaction(
+            event=ConversationCompactedEvent(
+                **run.common(), messages_before=len(before), messages_after=len(messages)
+            )
         )
 
     # Recording ---------------------------------------------------------------------
