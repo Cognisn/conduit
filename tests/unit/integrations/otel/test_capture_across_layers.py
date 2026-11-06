@@ -2,7 +2,8 @@
 
 One run uses all of it: a system prompt and user message, model output, a product tool
 behind an approval, an MCP tool (an in-memory MCP server), a skill loaded with
-``use_skill``, and a compaction that replaces the conversation. A marker is planted in
+``use_skill``, and a real ``Compactor`` compaction that replaces the history turn with
+a notice (the compaction summary, prompt content). A marker is planted in
 every piece of content. All of it goes through one ``FanOutSink`` under the deployment's
 policy, to a memory sink and the OpenTelemetry sink with in-memory exporters.
 
@@ -22,12 +23,13 @@ import pytest
 
 pytest.importorskip("mcp")  # the MCP layer is the mcp extra's
 
-from conduit.agent import AgentRunner, AgentTask, CompactionRequest
+from conduit.agent import AgentRunner, AgentTask
 from conduit.agent.events import (
     ConversationCompactedEvent,
     RunFinishedEvent,
     ToolCallStartedEvent,
 )
+from conduit.compaction import CompactionEvent, Compactor, KeepLastTurns
 from conduit.core.events import (
     CapturePolicy,
     Event,
@@ -41,7 +43,7 @@ from conduit.core.events import (
 from conduit.core.runtime import start
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.core.tools import TaskTools, ToolCatalogue
-from conduit.core.types import Message, ModelRequest, TextBlock
+from conduit.core.types import Message, ModelRequest, SystemBlock, TextBlock, ToolSpec
 from conduit.integrations.otel import OtelEventSink
 from conduit.mcp.bridge import McpToolBridge
 from conduit.mcp.events import McpCallEvent
@@ -72,11 +74,15 @@ def _script(request: ModelRequest, index: int) -> StubTurn:
     return StubTurn(text=f"Answer: {MARKER}")
 
 
-class Compactor:
-    async def before_model_call(self, request: CompactionRequest) -> Sequence[Message] | None:
-        if request.model_calls == 1:
-            return (Message.user(f"Summary so far: {MARKER}"),)
-        return None
+def _estimate(
+    *,
+    system: Sequence[SystemBlock] = (),
+    tools: Sequence[ToolSpec] = (),
+    messages: Sequence[Message] = (),
+) -> int:
+    """Over the threshold once the conversation reaches five messages (the history turn,
+    the new turn and its tool round), so the second model call compacts."""
+    return 1_000_000 if len(messages) >= 5 else 1
 
 
 @dataclass
@@ -121,11 +127,20 @@ async def _observe(
             approvals=Approvals(approve=True),
             events=bus,
             capture=capture,
-            compaction=Compactor(),
+            compaction=Compactor(
+                [KeepLastTurns(threshold=0.5, keep_turns=1, notice=f"Earlier: {MARKER}")],
+                events=bus,
+                capture=capture,
+                estimate=_estimate,
+            ),
         )
         task = AgentTask(
             task_class="chat",
             system=(TextBlock(text=f"System: {MARKER}"),),
+            history=(
+                Message.user(f"Before: {MARKER}"),
+                Message.assistant(f"Reply: {MARKER}"),
+            ),
             messages=(Message.user(f"User: {MARKER}"),),
             system_hook=session.system,
             tool_wrapper=with_use_skill,
@@ -159,6 +174,7 @@ def _every_layer_is_present(events: list[Event]) -> None:
         "skill_loaded",
         "tool_call",
         "conversation_compacted",
+        "compaction",
         "run_finished",
     } <= types, sorted(types)
 
@@ -189,6 +205,8 @@ async def test_with_prompts_only_tool_content_stays_out(telemetry: Telemetry) ->
     assert '"q":"' + MARKER not in first.request.text
     finished = _one(events, RunFinishedEvent)
     assert finished.output is not None and finished.output.text == f"Answer: {MARKER}"
+    compacted = _one(events, CompactionEvent, outcome="compacted")
+    assert compacted.summary is not None and compacted.summary.text == f"Earlier: {MARKER}"
     assert MARKER not in observed.exported
 
 
@@ -214,6 +232,8 @@ async def test_with_both_on_every_kind_of_content_arrives_but_never_in_telemetry
     assert MARKER in mcp.result.text
     run = _one(events, RunFinishedEvent)
     assert run.output is not None and run.output.text == f"Answer: {MARKER}"
+    compacted = _one(events, CompactionEvent, outcome="compacted")
+    assert compacted.summary is not None and compacted.summary.text == f"Earlier: {MARKER}"
     # Events that never carry content still never do.
     for kind in (SkillLoadedEvent, ConversationCompactedEvent):
         assert MARKER not in _one(events, kind).model_dump_json()

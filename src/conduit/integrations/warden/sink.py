@@ -160,6 +160,14 @@ CONDUIT_ACTIONS: Mapping[str, ConduitAction] = {
     "conversation_compacted": ConduitAction(
         Severity.INFO, "conduit run {resource_id} conversation compacted", "conduit.run", "run_id"
     ),
+    # The compaction layer's own record: strategy, trigger, outcome and token counts.
+    "compaction": ConduitAction(
+        Severity.INFO,
+        "conduit run {resource_id} compaction: {outcome}",
+        "conduit.run",
+        "run_id",
+        _FAILED,
+    ),
 }
 
 

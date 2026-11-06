@@ -31,6 +31,7 @@ from conduit.agent.events import (
     ToolCallStartedEvent,
 )
 from conduit.agent.results import RunFailure
+from conduit.compaction.events import CompactionEvent
 from conduit.core.events import (
     CapturePolicy,
     ContentKind,
@@ -74,6 +75,8 @@ METRIC_ATTRIBUTES = frozenset(
         "conduit.budget",
         "conduit.from_task_class",
         "conduit.to_task_class",
+        "conduit.strategy",
+        "conduit.trigger",
     }
 )
 #: Values that would make a metric unbounded: event and call ids, and content hashes.
@@ -232,6 +235,25 @@ def mcp_call(ms: float, call_id: str = "tool_1", *, failed: bool = False) -> Mcp
     )
 
 
+def compaction(ms: float, *, outcome: str = "compacted") -> CompactionEvent:
+    failed = outcome == "failed"
+    return CompactionEvent(
+        **RUN,
+        occurred_at=at(ms),
+        strategy="keep_last_turns",
+        trigger="threshold",
+        outcome=outcome,  # type: ignore[arg-type]
+        reason="store_failed" if failed else None,
+        context_window=200000,
+        tokens_before=180000,
+        tokens_after=None if failed else 40000,
+        messages_before=9,
+        messages_after=None if failed else 2,
+        entries_replaced=0 if failed else 7,
+        summary=None if failed else prompt(),
+    )
+
+
 def full_run() -> list[Event]:
     """One run with a model call, an approved MCP tool call, a skill, a compaction and a
     hand-off, in the order the runner and its layers emit them."""
@@ -264,6 +286,7 @@ def full_run() -> list[Event]:
             loaded_count=1,
             loaded_size=1200,
         ),
+        compaction(73.5),
         ConversationCompactedEvent(**RUN, occurred_at=at(74), messages_before=9, messages_after=2),
         HandOffEvent(
             **RUN,
@@ -490,6 +513,41 @@ class TestSpans:
         assert span.attributes is not None
         assert span.attributes["conduit.model"] == "stub-embed"
 
+    async def test_a_compaction_is_a_span_and_the_runners_record_a_run_span_event(
+        self, telemetry: Telemetry
+    ) -> None:
+        await emit_all(sink(telemetry), full_run())
+        span = telemetry.span("conduit.compaction")  # one span: the compaction layer's
+        run = telemetry.span("conduit.run")
+        assert span.parent is not None and span.parent.span_id == run.context.span_id
+        assert span.start_time == span.end_time == ns(at(73.5))
+        attributes = dict(span.attributes or {})
+        assert attributes["conduit.strategy"] == "keep_last_turns"
+        assert attributes["conduit.trigger"] == "threshold"
+        assert attributes["conduit.outcome"] == "compacted"
+        assert attributes["conduit.tokens_before"] == 180000
+        assert attributes["conduit.tokens_after"] == 40000
+        assert attributes["conduit.entries_replaced"] == 7
+        assert attributes["conduit.summary.sha256"] == prompt().sha256
+        assert attributes["conduit.summary.size"] == prompt().size
+        assert not any(MARKER in str(v) for v in attributes.values())
+        assert span.status.status_code is StatusCode.UNSET
+        replaced = [e for e in run.events if e.name == "conduit.conversation_compacted"]
+        assert len(replaced) == 1
+        assert dict(replaced[0].attributes or {})["conduit.messages_after"] == 2
+
+    async def test_a_failed_compaction_is_an_error_named_by_its_reason(
+        self, telemetry: Telemetry
+    ) -> None:
+        await emit_all(sink(telemetry), [run_started(0), compaction(1, outcome="failed")])
+        status = telemetry.span("conduit.compaction").status
+        assert (status.status_code, status.description) == (StatusCode.ERROR, "store_failed")
+
+    async def test_a_skipped_compaction_is_not_an_error(self, telemetry: Telemetry) -> None:
+        await sink(telemetry).emit(compaction(1, outcome="skipped"))
+        assert telemetry.span("conduit.compaction").status.status_code is StatusCode.UNSET
+        assert telemetry.points("conduit.errors") == []
+
     def test_the_span_names_are_published(self) -> None:
         assert set(SPAN_NAMES) == {
             "conduit.run",
@@ -669,6 +727,30 @@ class TestMetrics:
         [tool_calls] = telemetry.points("conduit.run.tool_calls")
         assert tool_calls.sum == 1
 
+    async def test_compactions_are_counted_by_strategy_trigger_and_outcome(
+        self, telemetry: Telemetry
+    ) -> None:
+        target = sink(telemetry)
+        for event in (compaction(1), compaction(2), compaction(3, outcome="failed")):
+            await target.emit(event)
+        counts = {
+            (
+                p.attributes["conduit.strategy"],
+                p.attributes["conduit.trigger"],
+                p.attributes["conduit.outcome"],
+            ): p.value
+            for p in telemetry.points("conduit.compactions")
+        }
+        assert counts == {
+            ("keep_last_turns", "threshold", "compacted"): 2,
+            ("keep_last_turns", "threshold", "failed"): 1,
+        }
+        errors = {
+            (p.attributes["conduit.operation"], p.attributes["conduit.error.type"]): p.value
+            for p in telemetry.points("conduit.errors")
+        }
+        assert errors == {("compaction", "store_failed"): 1}
+
     async def test_hand_offs_are_counted(self, telemetry: Telemetry) -> None:
         await emit_all(sink(telemetry), full_run())
         [point] = telemetry.points("conduit.hand_offs")
@@ -730,6 +812,8 @@ class TestMetrics:
                 duration_ms=3,
                 dimensions=8,
             ),
+            compaction(301),
+            compaction(302, outcome="failed"),
             run_finished(300, failed=True),
         ]
         await emit_all(sink(telemetry), events)
@@ -763,6 +847,7 @@ class TestMetrics:
             "conduit.run.model_calls",
             "conduit.run.tool_calls",
             "conduit.hand_offs",
+            "conduit.compactions",
         }
 
 

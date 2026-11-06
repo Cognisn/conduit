@@ -4,12 +4,14 @@ Spans
     One trace per run. ``conduit.run`` spans a run, from ``RunStartedEvent`` to
     ``RunFinishedEvent``; its children are ``conduit.model_call`` (from the registry's
     started and finished events), ``conduit.tool_call`` (from ``ToolCallStartedEvent`` to
-    the core ``ToolCallEvent``), ``conduit.skill_load``, ``conduit.compaction`` and
-    ``conduit.hand_off``. ``conduit.approval`` and ``conduit.mcp_call`` are children of
-    the tool call they belong to. ``conduit.embedding_call`` spans an embedding call. A
+    the core ``ToolCallEvent``), ``conduit.skill_load``, ``conduit.compaction`` (the
+    compaction layer's ``CompactionEvent``) and ``conduit.hand_off``.
+    ``conduit.approval`` and ``conduit.mcp_call`` are children of the tool call they
+    belong to. ``conduit.embedding_call`` spans an embedding call. A
     finished event whose start was never seen still gets its span, ending at the event
     and starting its ``duration_ms`` earlier. Output-contract failures, skill use,
-    unloads and refusals, and budget exhaustion are span events on the run span. Text
+    unloads and refusals, budget exhaustion and the runner's own record of a replaced
+    conversation (``conversation_compacted``) are span events on the run span. Text
     deltas make no span. A failure sets the span's status to error, described by an
     identifier (the error type or code) only.
 
@@ -23,7 +25,8 @@ Metrics
     ``conduit.budget.exhausted`` counts runs stopped by a budget, and
     ``conduit.run.tokens``, ``conduit.run.model_calls`` and ``conduit.run.tool_calls``
     record what each run used of the budgets that limit it. ``conduit.hand_offs`` counts
-    hand-offs by outcome and task classes. Metric attributes are low-cardinality
+    hand-offs by outcome and task classes, and ``conduit.compactions`` compactions by
+    strategy, trigger and outcome. Metric attributes are low-cardinality
     identifiers only, never a run, call or event id.
 
 Every attribute is metadata (``conduit.integrations.otel.attributes``): content is
@@ -108,11 +111,21 @@ METRIC_NAMES: tuple[str, ...] = (
     "conduit.run.model_calls",
     "conduit.run.tool_calls",
     "conduit.hand_offs",
+    "conduit.compactions",
 )
 
 #: Run-level events recorded as span events on the run span.
 _RUN_SPAN_EVENTS = frozenset(
-    {"output_invalid", "skill_used", "skill_unloaded", "skill_refused", "budget_exhausted"}
+    {
+        "output_invalid",
+        "skill_used",
+        "skill_unloaded",
+        "skill_refused",
+        "budget_exhausted",
+        # The runner's record that its hook replaced the conversation; the compaction
+        # layer's own CompactionEvent is the compaction span.
+        "conversation_compacted",
+    }
 )
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -192,6 +205,11 @@ class OtelEventSink:
         self._hand_offs = meter.create_counter(
             "conduit.hand_offs", unit="{hand_off}", description="Hand-offs, by outcome"
         )
+        self._compactions = meter.create_counter(
+            "conduit.compactions",
+            unit="{compaction}",
+            description="Compactions, by strategy, trigger and outcome",
+        )
         self._open: OrderedDict[_Key, _Open] = OrderedDict()
         self._lock = threading.Lock()
         #: Spans to end once the lock is released: ending one runs the span processors.
@@ -209,7 +227,7 @@ class OtelEventSink:
             "approval_requested": self._approval_requested,
             "approval_decided": self._approval_decided,
             "skill_loaded": self._skill_loaded,
-            "conversation_compacted": self._compacted,
+            "compaction": self._compaction,
             "hand_off": self._hand_off,
         }
 
@@ -579,8 +597,19 @@ class OtelEventSink:
     def _skill_loaded(self, event: Event, attributes: dict[str, AttributeValue]) -> None:
         self._one_shot(SKILL_LOAD, event, attributes, (_key("run", event.run_id),))
 
-    def _compacted(self, event: Event, attributes: dict[str, AttributeValue]) -> None:
-        self._one_shot(COMPACTION, event, attributes, (_key("run", event.run_id),))
+    def _compaction(self, event: Event, attributes: dict[str, AttributeValue]) -> None:
+        failed = getattr(event, "outcome", None) == "failed"
+        why = getattr(event, "reason", None) or "failed"
+        self._one_shot(
+            COMPACTION,
+            event,
+            attributes,
+            (_key("run", event.run_id),),
+            failure=why if failed else None,
+        )
+        self._compactions.add(1, pick(attributes, "strategy", "trigger", "outcome"))
+        if failed:
+            self._error("compaction", why)
 
     def _hand_off(self, event: Event, attributes: dict[str, AttributeValue]) -> None:
         self._one_shot(

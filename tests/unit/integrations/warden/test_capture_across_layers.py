@@ -51,6 +51,7 @@ async def test_no_content_reaches_the_audit_trail_under_any_policy(
         "conduit.approval_decided",
         "conduit.skill_loaded",
         "conduit.conversation_compacted",
+        "conduit.compaction",
         "conduit.run_finished",
     } <= actions
     leaks = [r.action for r in recorder.events if MARKER in r.model_dump_json()]

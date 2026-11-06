@@ -27,6 +27,7 @@ from conduit.agent.events import (
     TextDeltaEvent,
     ToolCallStartedEvent,
 )
+from conduit.compaction.events import CompactionEvent
 from conduit.core.errors import ConduitError, ConfigurationError
 from conduit.core.events import (
     CapturePolicy,
@@ -245,6 +246,7 @@ class TestRegistration:
             "budget_exhausted",
             "output_invalid",
             "conversation_compacted",
+            "compaction",
         } <= set(CONDUIT_ACTIONS)
 
 
@@ -363,6 +365,43 @@ class TestRecording:
         (record,) = recorder.events
         assert MARKER not in record.model_dump_json()
         assert record.resource_id is None
+
+    @pytest.mark.parametrize(
+        ("outcome", "audited"),
+        [("compacted", "success"), ("skipped", "success"), ("failed", "failure")],
+    )
+    async def test_a_compaction_is_recorded_against_its_run_without_its_summary(
+        self, outcome: str, audited: str
+    ) -> None:
+        failed = outcome == "failed"
+        event = CompactionEvent(
+            **RUN,
+            strategy="keep_last_turns",
+            trigger="forced",
+            outcome=outcome,  # type: ignore[arg-type]
+            reason="store_failed" if failed else None,
+            context_window=200000,
+            tokens_before=150000,
+            tokens_after=None if failed else 30000,
+            messages_before=9,
+            entries_replaced=0 if failed else 7,
+            summary=None if failed else prompt(),
+        )
+        recorder = Recorder(registered())
+        await WardenAuditSink(recorder).emit(event)
+        (record,) = recorder.events
+        assert record.action == "conduit.compaction"
+        assert (record.outcome, record.resource_type, record.resource_id) == (
+            audited,
+            "conduit.run",
+            "run_1",
+        )
+        assert record.details["strategy"] == "keep_last_turns"
+        assert record.details["trigger"] == "forced"
+        assert record.details["tokens_before"] == 150000
+        if not failed:
+            assert record.details["summary.sha256"] == prompt().sha256
+        assert MARKER not in record.model_dump_json()
 
     def test_action_for_maps_an_event_type_to_its_action(self) -> None:
         assert action_for("tool_call") == "conduit.tool_call"
