@@ -50,7 +50,7 @@ The core install and the stub provider need no extra. [Setting up providers](htt
 | `konfig` | konfig settings loader and secret resolver |
 | `warden` | Records conduit events in warden's audit trail (metadata only). 37 runtime packages with the core, including psycopg (LGPL-3.0, a reviewed licence exception) |
 | `otel` | OpenTelemetry spans and metrics (the OpenTelemetry API; the product supplies the SDK and exporters) |
-| `cli` | A terminal interface demonstrating the public API (`uvx --from "cognisn-conduit[cli]" conduit`) |
+| `cli` | The `conduit` terminal interface demonstrating the public API (`uvx --from "cognisn-conduit[cli]" conduit`); installs rich and the `mcp` extra |
 
 The agent runner, compaction, skills and the in-memory and JSON stores are part of the core install.
 

@@ -85,7 +85,12 @@ src/conduit/
   testing/         replay (recorded responses and scrub checks) and conformance/ (the
                    transcript store, token store and skill source suites, a pytest
                    plugin)
-  cli/             the terminal interface, behind the cli extra
+  cli/             the terminal interface, behind the cli extra: main (the conduit
+                   console script and python -m conduit.cli), app (commands and
+                   options), config (the configuration file), setup, status
+                   (providers, models, check), servers (MCP and OAuth sign-in),
+                   chat, output (the sanitising screen) and demo (the stub's
+                   demonstration script and tools)
 ```
 
 Hatchling reads `_version.txt` for the distribution metadata, and `conduit.__version__` reads it at import. The public API is whatever is importable from `conduit`, or from a layer's package (`conduit.agent`, `conduit.mcp`, `conduit.providers.bedrock`), without a leading underscore.
@@ -104,7 +109,7 @@ Hatchling reads `_version.txt` for the distribution metadata, and `conduit.__ver
 - `conduit.core` imports nothing from any other conduit package, nor the top-level `conduit` package. Its only runtime dependency is pydantic.
 - Upper layers import the core. Each is usable alone; none imports another upper layer, except that the embeddings adapters reuse their chat adapter's settings and client (`conduit.embeddings.bedrock` uses `conduit.providers.bedrock`), the bedrock-mantle adapter reuses the Bedrock presign step and the Anthropic request mapping, and the Anthropic adapter's Foundry endpoint reuses the OpenAI-compatible adapter's Entra ID support. The compaction layer reaches the runner only through the core's hook shapes, and the skills layer reaches it through `AgentTask.system_hook` and `tool_wrapper`.
 - Each optional third-party library (a provider SDK, or a layer's own dependency) is imported only inside the layer of the extra that installs it, and only when a client is built or the layer is used. Without the extra installed, nothing else in conduit fails to import.
-- Nothing outside `conduit.cli` imports `conduit.cli`; the terminal interface uses the public API only.
+- Nothing outside `conduit.cli` imports `conduit.cli`; the terminal interface uses the public API only, which its own tests check, and rich is imported only inside it.
 - No module constructs a provider client outside the provider registry, only the registry wraps a provider in metering, and no event carries content unless the content-capture policy allows it.
 
 `tests/tripwires/` enforces these rules by scanning the source tree statically, so an import inside a function, a `TYPE_CHECKING` block or an `importlib.import_module` call with a literal name is caught whether or not the extra is installed. The tripwires are never skipped or weakened.
@@ -173,6 +178,6 @@ Each adapter passes its SDK every setting the SDK could otherwise take from the 
 | `konfig` | `conduit.integrations.konfig` | cognisn-konfig |
 | `warden` | `conduit.integrations.warden` | cognisn-warden (a pre-release), whose audit recorder needs psycopg (LGPL-3.0, a named licence exception) |
 | `otel` | `conduit.integrations.otel` | the OpenTelemetry API (the product supplies the SDK and exporters) |
-| `cli` | `conduit.cli` | the terminal interface's dependencies |
+| `cli` | `conduit.cli` | rich, and the `mcp` extra; the `conduit` console script |
 
 The agent, compaction and skills layers, the stub provider, and the memory and JSON stores need no extra. Every runtime extra's dependency tree is held to the licence policy (`scripts/licence_audit.py --all-extras`); weak copyleft is accepted only as a named, reviewed exception in that script.
