@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import weakref
 from typing import Any
 
 import httpx
@@ -21,7 +22,7 @@ from pydantic import ValidationError
 from conduit.core.backends import TokenSet
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.mcp.errors import McpAuthError, OAuthFailure
-from conduit.mcp.oauth import OAuthClient, _Client
+from conduit.mcp.oauth import OAuthClient, _Client, _shared_lock
 from conduit.mcp.settings import McpServerSettings
 from conduit.stores.memory import MemoryTokenStore
 from tests.unit.mcp.fake_auth import ISSUER, RESOURCE, FakeAuthServer
@@ -231,6 +232,66 @@ class TestSharedRefresh:
             await make(transport, store, clock).refreshed(stale)
         assert caught.value.reason is OAuthFailure.SIGN_IN_REQUIRED
         assert await store.get("mcp:docs") is None
+
+
+class SlottedStore:
+    """A store that cannot be weakly referenced (``__slots__`` without ``__weakref__``)."""
+
+    __slots__ = ("_inner",)
+
+    def __init__(self) -> None:
+        self._inner = MemoryTokenStore()
+
+    async def get(self, key: str) -> TokenSet | None:
+        return await self._inner.get(key)
+
+    async def put(self, key: str, tokens: TokenSet) -> None:
+        await self._inner.put(key, tokens)
+
+    async def delete(self, key: str) -> None:
+        await self._inner.delete(key)
+
+
+class UnhashableStore(SharedBacking):
+    """A store that cannot be a dictionary key at all."""
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, UnhashableStore) and other._inner is self._inner
+
+
+class TestSharedRefreshFallback:
+    """A store that cannot be weakly referenced still shares one refresh across clients."""
+
+    async def _shared_by_two_clients(self, store: Any) -> None:
+        server = FakeAuthServer()
+        clock = Clock()
+        transport = routed(server, delay=0.05)
+        stale = await make(transport, store, clock, hook=server.sign_in_hook()).access_token()
+        before = len(server.token_requests)
+        first, second = make(transport, store, clock), make(transport, store, clock)
+        fresh = await asyncio.gather(first.refreshed(stale), second.refreshed(stale))
+        assert len(server.token_requests) - before == 1
+        assert fresh[0].get_secret_value() == fresh[1].get_secret_value()
+
+    async def test_a_store_without_weak_references(self) -> None:
+        store = SlottedStore()
+        with pytest.raises(TypeError):
+            weakref.ref(store)
+        await self._shared_by_two_clients(store)
+
+    async def test_an_unhashable_store(self) -> None:
+        store = UnhashableStore(MemoryTokenStore())
+        with pytest.raises(TypeError):
+            hash(store)
+        await self._shared_by_two_clients(store)
+
+    async def test_two_such_stores_do_not_share_a_lock(self) -> None:
+        first, second = SlottedStore(), SlottedStore()
+        assert _shared_lock(first, "mcp:docs") is _shared_lock(first, "mcp:docs")
+        assert _shared_lock(first, "mcp:docs") is not _shared_lock(second, "mcp:docs")
+        assert _shared_lock(first, "mcp:docs") is not _shared_lock(first, "mcp:other")
 
 
 class TestRefreshedLeavesNothingUnusable:

@@ -267,6 +267,31 @@ class TestLoopbackSignIn:
         with pytest.raises(ConfigurationError):
             LoopbackSignIn(port("callback"), read_timeout=0)
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://auth.example.com/authorize?x=1",
+            "https://auth.example.com/authorize?state=s1&state=s2",
+            "https://auth.example.com/authorize?state=s1&x=1&state=s1",
+            "https://auth.example.com/authorize?state=",
+        ],
+    )
+    async def test_a_url_without_exactly_one_state_is_refused(self, url: str) -> None:
+        opened: list[str] = []
+
+        def opener(address: str) -> bool:
+            opened.append(address)
+            return bool(visit("/callback?code=zz-code-zz")(address))
+
+        hook = LoopbackSignIn(port("callback"), open_url=opener, timeout=2)
+        with pytest.raises(ConfigurationError) as caught:
+            await hook.sign_in(request(url))
+        assert opened == []  # refused before the browser opens or anything listens
+        assert port_is_free(port("callback"))
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+        assert "s1" not in str(caught.value)
+
     async def test_cancellation_closes_the_listener(self) -> None:
         hook = LoopbackSignIn(port("callback"), open_url=lambda url: True, timeout=30)
         task = asyncio.create_task(hook.sign_in(request()))
