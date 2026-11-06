@@ -226,6 +226,37 @@ def test_each_filter_is_installed_on_its_logger_once(monkeypatch: pytest.MonkeyP
     assert [type(f) for f in endpoint.filters] == [RenderedRecordFilter]
 
 
+class SlowFilters(list[Any]):
+    """A logger's filter list whose membership check is slow, so racing installers
+    all pass the check before any of them adds a filter, unless they are serialised."""
+
+    def __iter__(self) -> Any:
+        seen = list(super().__iter__())  # what the check sees
+        time.sleep(0.05)  # ...while another thread may add
+        return iter(seen)
+
+
+def test_concurrent_installs_leave_exactly_one_of_each_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signer = logging.getLogger(SIGNER_LOGGER)
+    endpoint = logging.getLogger(ENDPOINT_LOGGER)
+    monkeypatch.setattr(signer, "filters", SlowFilters())
+    monkeypatch.setattr(endpoint, "filters", SlowFilters())
+    threads = 8
+    barrier = threading.Barrier(threads)
+
+    def install() -> None:
+        barrier.wait()  # all start together
+        keep_keys_out_of_logs()
+
+    with ThreadPoolExecutor(max_workers=threads) as pool:
+        for future in [pool.submit(install) for _ in range(threads)]:
+            future.result()
+    assert [type(f) for f in list.__iter__(signer.filters)] == [SignatureRecordFilter]
+    assert [type(f) for f in list.__iter__(endpoint.filters)] == [RenderedRecordFilter]
+
+
 class TestPresigning:
     """The shared presign step, with botocore's own signer and synthetic credentials."""
 

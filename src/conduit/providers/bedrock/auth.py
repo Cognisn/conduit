@@ -195,16 +195,21 @@ class RenderedRecordFilter(logging.Filter):
         return True
 
 
+#: Serialises the check-then-add below, so concurrent clients install each filter once.
+_FILTERS_LOCK = threading.Lock()
+
+
 def keep_keys_out_of_logs() -> None:
     """Install ``SignatureRecordFilter`` and ``RenderedRecordFilter`` on botocore's
-    signer and endpoint loggers, each once per process."""
-    for name, kind in (
-        (SIGNER_LOGGER, SignatureRecordFilter),
-        (ENDPOINT_LOGGER, RenderedRecordFilter),
-    ):
-        logger = logging.getLogger(name)
-        if not any(isinstance(f, kind) for f in logger.filters):
-            logger.addFilter(kind())
+    signer and endpoint loggers, each once per process, even from several threads."""
+    with _FILTERS_LOCK:
+        for name, kind in (
+            (SIGNER_LOGGER, SignatureRecordFilter),
+            (ENDPOINT_LOGGER, RenderedRecordFilter),
+        ):
+            logger = logging.getLogger(name)
+            if not any(isinstance(f, kind) for f in logger.filters):
+                logger.addFilter(kind())
 
 
 def presign_short_term_key(
