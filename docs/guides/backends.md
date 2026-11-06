@@ -316,6 +316,7 @@ assert "test_an_unknown_reference_is_secret_unavailable" in run_suite(TestVaultS
 Run `EventSinkSuite` against your sink. A sink is write-only, so besides `make_sink` the suite asks how to read back what it kept: `recorded(sink)` returns each event it recorded, in order, as a mapping holding at least `event_id` (`event.model_dump(mode="json")` is one). The suite checks that every event is recorded once and in order (per task, when tasks emit at once); that an event of a type the sink does not know is accepted; that an emit returns promptly (`emit_deadline_s`, five seconds by default); and that content the capture policy withholds never reaches the sink's record, delivering through a `FanOutSink` under the default policy as conduit does. Override `records(event)` for a sink that keeps only some events (an audit trail of chosen actions). A sink with no record per event (an exporter of aggregates) sets `keeps_records = False` and overrides `recorded_text(sink)` to return everything it kept or sent as text: its two order scenarios are then skipped with that reason. A suite that has not opted out and reads back `None` fails.
 
 ```python
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -323,10 +324,14 @@ from typing import Any
 from conduit import EventSink
 from conduit.testing.conformance import EventSinkSuite
 
+made: list[Path] = []
+
 
 class TestJsonLinesSink(EventSinkSuite):
     async def make_sink(self) -> JsonLinesSink:
-        return JsonLinesSink(str(Path(tempfile.mkdtemp()) / "events.jsonl"))
+        folder = Path(tempfile.mkdtemp())
+        made.append(folder)
+        return JsonLinesSink(str(folder / "events.jsonl"))
 
     async def recorded(self, sink: EventSink) -> Sequence[Mapping[str, Any]]:
         assert isinstance(sink, JsonLinesSink)
@@ -334,8 +339,13 @@ class TestJsonLinesSink(EventSinkSuite):
         lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
         return [json.loads(line) for line in lines]
 
+    async def close_sink(self, sink: EventSink) -> None:
+        assert isinstance(sink, JsonLinesSink)
+        shutil.rmtree(Path(sink._path).parent)
+
 
 assert "test_every_event_is_recorded_in_order" in run_suite(TestJsonLinesSink())
+assert made and not any(folder.exists() for folder in made)  # every scenario cleaned up
 ```
 
 Run `ApprovalHandlerSuite` against your handler. Besides `make_handler`, say which calls it approves and which it refuses: `approved_call(n)` and `refused_call(n)` return an `ApprovalCall` (a tool name and its arguments); put `n` in an argument, so the concurrency scenario's calls differ. A handler that asks a person is built in `make_handler` with a stand-in that answers as the person would. The suite checks that each call gets its decision as an `ApprovalDecision`, also when many are pending at once; and, running a real `AgentRunner` on the stub provider, that an approved call runs its tool, a refused call never does, and a handler that raises, or is still deciding when the run's wall-time budget ends, is treated as a refusal (those two guard conduit's runner around your handler, so leave `build_runner` alone). `ApprovalCall` is exported from `conduit.testing.conformance`.
@@ -387,33 +397,54 @@ asyncio.run(sql_round_trip())
 
 The drivers are asyncpg (Postgres) and aiosqlite (SQLite). `downgrade`, `current_revision`, `head_revision` and `revisions` are there for a product's own migration tooling; every migration is reversible.
 
-
 ## Evaluating agent tasks
 
 `conduit.testing.evaluation` runs agent tasks as cases and judges them. An `EvalCase` has a `name`, an `AgentTask`, its `checks`, and optionally a stub `script` (turns played in order, or a `StubScript`), `tools` (`EvalTool(name, response=...)`, answered with a canned response; `requires_approval=True` sends the call to the harness's approval handler), `stub_checks` (holding only for the script) and `live=True` (its checks hold for a real model too).
 
-- `StubHarness(task_classes=..., approvals=..., capture=...)` runs every case on the stub provider, in the default test run. A case without a script is a `ValueError`. With `task_classes` given, only those classes are assigned; otherwise each class a case uses is declared with a tools floor.
+- `StubHarness(task_classes=..., approvals=..., capture=...)` runs every case on the stub provider, in the default test run. With `task_classes` given, only those classes are assigned; otherwise each class a case uses is declared with a tools floor.
 - `LiveHarness(runtime, approvals=..., capture=...)` runs the cases marked live on a runtime you started with your configured assignments. Use it only in tests marked `integration`. It skips a case not marked live, or one whose task class or hand-off target has no assignment, with the reason.
 
 `await harness.run(cases)` gives an `EvalReport`: `outcomes` (each with `passed`, `failures`, `result` and `skipped`), `passed`, `failed`, `skipped`, `ran`, `score` (passed over cases that ran), `failures()` and `summary()`. A check is any callable taking an `Observation` (`result`, the streamed `events`, the events `delivered` to the sink, and the tools `executed`) and returning `None` when it holds or a non-empty reason; only `None` is a pass, and any other result fails, named by its type. Shipped checks: `completed()`, `failed(*failures)`, `handed_off(*task_classes)`, `output_field(name, value)`, `executed(tool)`, `never_executed(tool)` and `no_text_in_events(text)`. Reasons never repeat content (a check that raises is reported by its exception type), so a report is safe to print. A run that raises fails its case; cancellation propagates.
+
+Mistakes in the cases themselves are raised rather than reported: an `EvalCase` with no name or no checks raises `ValueError` when it is made, `harness.run` refuses duplicate case names with `ValueError`, and a `StubHarness` case without a script raises `ValueError` out of `run()` rather than failing that one case.
+
+The two cases below differ only in the host, so the approval handler decides the outcome: the change inside the window runs, and the one outside it never does.
 
 ```python
 from conduit import Message
 from conduit.agent import AgentTask
 from conduit.providers.stub import StubToolCall, StubTurn
-from conduit.testing.evaluation import EvalCase, EvalTool, StubHarness, completed, never_executed
-
-case = EvalCase(
-    name="an_unapproved_change_never_runs",
-    task=AgentTask(task_class="ops", messages=(Message.user("Restart 192.0.2.21."),)),
-    checks=(completed(), never_executed("restart_service")),
-    script=(
-        StubTurn(tool_calls=(StubToolCall("restart_service", {"host": "192.0.2.21"}),)),
-        StubTurn(text="That change was not approved."),
-    ),
-    tools=(EvalTool("restart_service", requires_approval=True),),
-    live=True,
+from conduit.testing.evaluation import (
+    EvalCase,
+    EvalTool,
+    StubHarness,
+    completed,
+    executed,
+    never_executed,
 )
-report = asyncio.run(StubHarness(approvals=ChangeWindowApprovals({"192.0.2.20"})).run([case]))
-assert report.score == 1.0, report.summary()
+
+
+def restart_case(name: str, host: str, *checks: Any) -> EvalCase:
+    return EvalCase(
+        name=name,
+        task=AgentTask(task_class="ops", messages=(Message.user(f"Restart {host}."),)),
+        checks=(completed(), *checks),
+        script=(
+            StubTurn(tool_calls=(StubToolCall("restart_service", {"host": host}),)),
+            StubTurn(text="Done, or refused, as the handler decided."),
+        ),
+        tools=(EvalTool("restart_service", requires_approval=True),),
+        live=True,
+    )
+
+
+cases = [
+    restart_case("an_approved_change_runs", "192.0.2.20", executed("restart_service")),
+    restart_case(
+        "an_unapproved_change_never_runs", "192.0.2.21", never_executed("restart_service")
+    ),
+]
+harness = StubHarness(approvals=ChangeWindowApprovals({"192.0.2.20"}))
+report = asyncio.run(harness.run(cases))
+assert report.passed == 2 and report.score == 1.0, report.summary()
 ```
