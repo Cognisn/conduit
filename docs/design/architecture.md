@@ -1,6 +1,6 @@
 # conduit architecture
 
-This document records conduit's standing design decisions, its package layout, the direction its dependencies may point, and its extras. It is versioned with the code. The plan of record, with the reasoning behind each decision, is held in the project's knowledge base as "2026-11-04 plan conduit 0.1.0 development" and "2026-11-04 decision conduit library scope and design rulings (C1 to C19)". Where this document and those records disagree, the records win and this document is corrected.
+This document records conduit's standing design decisions, its package layout as built, the direction its dependencies may point, how start-up, the provider registry, residency and content capture work, its providers and its extras. It is versioned with the code; the guides in `docs/guides/` show how a product uses it. The plan of record, with the reasoning behind each decision, is held in the project's knowledge base as "2026-11-04 plan conduit 0.1.0 development" and "2026-11-04 decision conduit library scope and design rulings (C1 to C19)". Where this document and those records disagree, the records win and this document is corrected.
 
 ## 1. Purpose
 
@@ -33,71 +33,146 @@ conduit gives every Cognisn product one AI integration layer: model providers, a
 
 ## 3. Package layout
 
-```
+The layout as built. Each layer's package docstring describes it in more detail.
+
+```text
 src/conduit/
-  core/            message, content block, tool and stream event types; normalised
-                   response; usage events (input, output, cache read, cache write);
-                   provider protocol; settings models; catalogue loader, overlays and
-                   default data; task classes and floors; residency policy; errors;
-                   secret resolver, event sink, approval handler, transcript store and
-                   token store protocols; event fan-out and content-capture policy;
-                   cache breakpoint model; sync facade
-  providers/       bedrock, anthropic, openai_compat (openai, xai, microsoft), gemini,
-                   ollama, stub (each SDK behind its own extra)
-  embeddings/      interface, remote providers; local/ behind the local-embeddings extra
-  agent/           runner, budgets, hand-off, output contracts with one retry,
-                   untrusted-content framing, output filter hook, tool registry use
-  compaction/      strategies, cache-stable summaries, transcript integration
-  skills/          SKILL.md format and validation, skill source protocol, filesystem
-                   source, use_skill progressive disclosure
-  mcp/             client over the official SDK (stdio, streamable HTTP, SSE), static
-                   credentials, OAuth 2.1 client, MCP tools bridged into the registry
-  stores/          memory and JSON file backends; sql/ behind the sql extra (schema
-                   "conduit", Alembic chain)
-  integrations/    konfig/ (loader, secret resolver), warden/ (audit adapter),
-                   otel/ (spans and metrics), each behind its extra
-  testing/         stub and recorded-response replay, conformance suites as a pytest
-                   plugin, evaluation harness
-  cli/             terminal interface behind the cli extra
+  __init__.py      the top-level public API (the core's contracts, start and start_sync)
+  _version.txt     the version, written only by scripts/stamp_version.py
+  core/
+    types.py       messages, content blocks (text, image, tool use, tool result, provider
+                   state, cache breakpoint), tool specs, requests, responses, usage
+    streaming.py   stream events (usage, text delta, tool call started and finished,
+                   provider state, stop) and collect
+    provider.py    the provider protocol and BaseProvider; the embedding request, response
+                   and provider protocol
+    registry.py    the provider registry, MeteredProvider and MeteredEmbedder, the model
+                   call and embedding call events
+    runtime.py     ConduitSettings, start, Runtime and TaskBinding
+    settings.py    ProviderSettings and AssignmentSettings; credential and echo rules
+    catalogue.py   the catalogue, its entries and overlays; data/catalogue.json
+    tasks.py       task classes, capability floors and the resolution of assignments
+    residency.py   residency scopes and policy
+    secrets.py     secret references, the resolver protocol and two resolvers
+    events.py      the event base, the sink protocol, FanOutSink and the capture policy
+    tools.py       the tool protocol, catalogue, per-task registries and TaskTools
+    transcript.py  transcript entries, Transcript and the transcript store protocol
+    backends.py    token store, skill source and approval handler protocols
+    facade.py      the sync facade: LoopThread, sync, start_sync and the sync views
+    errors.py, identifiers.py
+  providers/       stub (no extra), bedrock, bedrock_mantle, anthropic, openai_compat
+                   (OpenAI, X.AI and Microsoft Foundry, with entra.py shared by the
+                   Foundry endpoints), gemini, ollama; builtin_factories()
+  embeddings/      start_embeddings and EmbeddingRuntime; bedrock, openai_compat,
+                   gemini, ollama and stub embedders; local/ (sentence-transformers,
+                   behind local-embeddings); builtin_embedding_factories()
+  agent/           runner (AgentRunner, AgentTask, AgentRun), budgets, contracts
+                   (output contracts, one retry), untrusted (framing), hooks (output
+                   filter, approvals mark, compaction, system and tool hooks), events,
+                   results
+  compaction/      compactor (the runner's compaction hook, forced compaction),
+                   strategies (DropToolResults, KeepLastTurns, Summarise), conversation
+                   (estimates, cut points, rendering), events, errors
+  skills/          format (SKILL.md and resource paths), filesystem and memory sources,
+                   disclosure (SkillSession), tool (use_skill), events, errors
+  mcp/             settings (transports and authentication), client (McpConnection),
+                   oauth (OAuthClient), signin (SignInHook, LoopbackSignIn), bridge
+                   (McpToolBridge), events, errors; behind the mcp extra
+  stores/          memory and json (transcript and token stores); sql/ (models,
+                   stores, migration and the Alembic chain), behind the sql extra
+  integrations/    konfig/ (load_settings, KonfigSecretResolver), warden/
+                   (WardenAuditSink), otel/ (OtelEventSink), each behind its extra
+  testing/         replay (recorded responses and scrub checks) and conformance/ (the
+                   transcript store, token store and skill source suites, a pytest
+                   plugin)
+  cli/             the terminal interface, behind the cli extra
 ```
 
-The version lives only in `src/conduit/_version.txt`. Hatchling reads it for the distribution metadata, `conduit.__version__` reads it at import, and only `scripts/stamp_version.py` writes it.
+Hatchling reads `_version.txt` for the distribution metadata, and `conduit.__version__` reads it at import. The public API is whatever is importable from `conduit`, or from a layer's package (`conduit.agent`, `conduit.mcp`, `conduit.providers.bedrock`), without a leading underscore.
 
 ## 4. Dependency direction
 
-```
-            cli
-             |
+```text
+                                       cli
+                                        |
    agent  compaction  skills  mcp  embeddings  stores  integrations  testing  providers
-             \___________________________|___________________________/
-                                         |
-                                        core
+     \__________________________________|________________________________________/
+                                        |
+                                       core
 ```
 
-- `conduit.core` imports nothing from any other conduit package, nor the top-level `conduit` package. It takes no runtime dependency beyond those agreed in the plan.
-- Upper layers may import the core. A layer that needs another upper layer says so in its workstream's kick-off, and the tripwires are extended to match.
-- Each optional third-party library (a provider SDK, or a layer's own dependency) is imported only inside the layer of the extra that installs it. Without the extra installed, nothing else in conduit fails to import.
+- `conduit.core` imports nothing from any other conduit package, nor the top-level `conduit` package. Its only runtime dependency is pydantic.
+- Upper layers import the core. Each is usable alone; none imports another upper layer, except that the embeddings adapters reuse their chat adapter's settings and client (`conduit.embeddings.bedrock` uses `conduit.providers.bedrock`), the bedrock-mantle adapter reuses the Bedrock presign step and the Anthropic request mapping, and the Anthropic adapter's Foundry endpoint reuses the OpenAI-compatible adapter's Entra ID support. The compaction layer reaches the runner only through the core's hook shapes, and the skills layer reaches it through `AgentTask.system_hook` and `tool_wrapper`.
+- Each optional third-party library (a provider SDK, or a layer's own dependency) is imported only inside the layer of the extra that installs it, and only when a client is built or the layer is used. Without the extra installed, nothing else in conduit fails to import.
 - Nothing outside `conduit.cli` imports `conduit.cli`; the terminal interface uses the public API only.
-- No module constructs a provider client outside the provider registry, and no event carries content unless the content-capture policy allows it (tripwires added by the core workstream).
+- No module constructs a provider client outside the provider registry, only the registry wraps a provider in metering, and no event carries content unless the content-capture policy allows it.
 
 `tests/tripwires/` enforces these rules by scanning the source tree statically, so an import inside a function, a `TYPE_CHECKING` block or an `importlib.import_module` call with a literal name is caught whether or not the extra is installed. The tripwires are never skipped or weakened.
 
-## 5. Extras
+## 5. Start-up, the registry and metering
+
+`start(settings, task_classes=, factories=, secrets=, events=)` is the one way providers are built for a product:
+
+1. The settings' catalogue overlays are applied to the default catalogue (withdraw, override, add; adding an existing entry, or overriding or withdrawing an absent one, is refused).
+2. Each configured provider's settings are re-validated against its adapter's own model. A credential field must hold a `secret://` reference; a plain-text credential, at any depth and under any credential-like name, is refused, and the refusal names the field, never the value.
+3. Every assignment is resolved: the task class must be declared, the model declared in the catalogue for the provider (`UndeclaredModel` otherwise), offered in the provider's region, at or above the task class's floor, within the residency policy, and its output budget within the model's output limit. The result is immutable.
+4. Only then are the providers built, each for the assignments resolved to it: the registry resolves the provider's secret references through the product's resolver, calls the adapter's `create_client` (nothing else in conduit may), and wraps the adapter in a `MeteredProvider`.
+
+Every refusal is a `ConfigurationError` raised before any client exists. Nothing about a running task changes part-way through, so no floor or residency check can fail mid-task.
+
+`MeteredProvider` is the single funnel every model call passes through. The adapter it wraps is private. Before any client call it refuses a model the catalogue does not declare, a request above the model's output limit, and anything outside the provider's resolved assignments (`ModelNotAssigned`): a request for a task class must name that class's model. A provider built without assignments (`ProviderRegistry.build` used directly) is held to the registry's residency policy on every call instead. It emits a `model_call_started` event and exactly one `model_call_finished` event for every call, however it ends (`ok`; or `failed` with the error class, `cancelled` or `abandoned`), carrying the final usage with all four counts. `MeteredEmbedder` does the same for embedding calls, and checks every response's vectors.
+
+`start_embeddings` resolves embedding task classes (floors of kind `embedding`) from the same settings through the same registry. The sync facade's `start_sync` runs `start` on a loop conduit owns.
+
+## 6. Residency
+
+Each catalogue entry declares its residency scope: `local` (the deployment's own hosts), `in_region` (processed in the region the provider is called in, one of the entry's regions), `cross_region` (processed in any of the entry's regions, such as a Bedrock geographic inference profile) or `global` (anywhere the provider chooses). A `ResidencyPolicy` allows a set of scopes and optionally a set of regions:
+
+- a scope outside the allowed set is refused;
+- with regions set, a `global` entry is always refused, a non-local entry needs the provider's region set and allowed, and every region a `cross_region` entry may use must be allowed;
+- `local` entries need no region.
+
+The policy is checked when assignments are resolved at start-up, again when a provider is built for its assignments, and on every call of a provider built without assignments. Residency covers where a model provider processes a request; where transcripts and events are stored is decided by the product's backends.
+
+## 7. Events and content capture
+
+Every layer emits typed events through the product's event sink: model and embedding calls (the registry), runs, tool calls, approvals, hand-offs, budgets and output contracts (the runner), skills, MCP calls and compaction. An event's string fields are identifiers, which cannot hold prose; content (prompts, model output, tool arguments and results, summaries) appears only inside a `CapturedContent` field, which always carries the content's SHA-256 hash and size and carries its text only when the `CapturePolicy` allows that kind (`prompts`, `tool_content`; neither by default). A field declared as tool content is held to the tool-content setting whatever its emitter labelled it.
+
+`FanOutSink` delivers each event to several sinks concurrently and enforces its own capture policy on the way through, so a sink never receives content its policy does not allow; a failing sink is logged by class name and never stops the others. The warden and otel sinks record metadata only, whatever the policy allows. The event-content tripwire checks every event class in conduit.
+
+Errors follow the same rule: a conduit error never keeps the exception it was raised for (`__cause__` and `__context__` are `None`), and its message names fields, models and classes, never a value, a credential or provider text.
+
+## 8. Providers
+
+| Kind | Extra | Service | Authentication |
+|---|---|---|---|
+| `bedrock` | `bedrock` | Amazon Bedrock runtime, Converse and ConverseStream | AWS credential chain, access keys as secret references, short-term Bedrock API keys (generated and refreshed by conduit), long-term API keys only when `allow_long_term_api_keys` is set |
+| `bedrock_mantle` | `bedrock-mantle` | Claude through Bedrock's mantle endpoint (Anthropic Messages API, single-Region) | Short-term or long-term Bedrock API keys, as for `bedrock` |
+| `anthropic` | `anthropic` | Anthropic direct; Claude in Microsoft Foundry | API key; for Foundry an API key or Microsoft Entra ID |
+| `openai_compat` | `openai` | OpenAI, X.AI, Microsoft Foundry's OpenAI v1 endpoint | API key; for Foundry an API key or Microsoft Entra ID |
+| `gemini` | `gemini` | The Gemini API | API key |
+| `ollama` | `ollama` | An Ollama server, loopback by default | none |
+| `stub` | none | Deterministic, scriptable test provider | none; needs `not_for_production` |
+
+Each adapter passes its SDK every setting the SDK could otherwise take from the environment (keys, endpoints, regions), refuses environment variables that would override conduit's settings or make the SDK log request content where it can, and documents the rest (D0037). Embedding adapters exist for `bedrock`, `openai_compat`, `gemini`, `ollama`, `stub` and, behind `local-embeddings`, `sentence_transformers`.
+
+## 9. Extras
 
 | Extra | Layer | Holds |
 |---|---|---|
-| `bedrock` | `conduit.providers.bedrock` | boto3 and botocore |
+| `bedrock` | `conduit.providers.bedrock`, `conduit.embeddings.bedrock` | boto3 and botocore |
+| `bedrock-mantle` | `conduit.providers.bedrock_mantle` | the Anthropic SDK's mantle client, and botocore (from boto3) to presign short-term keys |
 | `anthropic` | `conduit.providers.anthropic` | the Anthropic SDK, and azure-identity for Microsoft Entra ID on Claude in Microsoft Foundry |
-| `openai` | `conduit.providers.openai_compat` | the OpenAI SDK and Microsoft Entra ID support |
-| `gemini` | `conduit.providers.gemini` | the Google Gen AI SDK |
-| `ollama` | `conduit.providers.ollama` | the Ollama client |
-| `all-providers` | | every provider extra above |
-| `local-embeddings` | `conduit.embeddings.local` | sentence-transformers with CPU-only torch |
+| `openai` | `conduit.providers.openai_compat`, `conduit.embeddings.openai_compat` | the OpenAI SDK and azure-identity for Microsoft Entra ID |
+| `gemini` | `conduit.providers.gemini`, `conduit.embeddings.gemini` | the Google Gen AI SDK |
+| `ollama` | `conduit.providers.ollama`, `conduit.embeddings.ollama` | httpx |
+| `all-providers` | | every provider library above |
+| `local-embeddings` | `conduit.embeddings.local` | sentence-transformers with CPU-only torch (install lines per installer in the providers guide) |
 | `mcp` | `conduit.mcp` | the official MCP Python SDK |
-| `sql` | `conduit.stores.sql` | SQLAlchemy and Alembic |
+| `sql` | `conduit.stores.sql` | SQLAlchemy, Alembic, asyncpg and aiosqlite |
 | `konfig` | `conduit.integrations.konfig` | cognisn-konfig |
-| `warden` | `conduit.integrations.warden` | cognisn-warden |
+| `warden` | `conduit.integrations.warden` | cognisn-warden (a pre-release), whose audit recorder needs psycopg (LGPL-3.0, a named licence exception) |
 | `otel` | `conduit.integrations.otel` | the OpenTelemetry API (the product supplies the SDK and exporters) |
 | `cli` | `conduit.cli` | the terminal interface's dependencies |
 
-Every extra is declared empty in `pyproject.toml` and filled by the workstream that builds its layer. Every runtime extra's dependency tree is held to the licence policy (`scripts/licence_audit.py --all-extras`).
+The agent, compaction and skills layers, the stub provider, and the memory and JSON stores need no extra. Every runtime extra's dependency tree is held to the licence policy (`scripts/licence_audit.py --all-extras`); weak copyleft is accepted only as a named, reviewed exception in that script.
