@@ -44,6 +44,17 @@ def test_another_weak_copyleft_package_is_still_refused(licence: str) -> None:
     assert [p.name for p in report.violations] == ["other-bundle"]
 
 
+@pytest.mark.parametrize(
+    "name", ["psycopg-binary", "psycopg-c", "psycopg-pool", "psycopg2", "certifi-extra", "tqdm2"]
+)
+def test_an_exception_names_one_package_exactly(name: str) -> None:
+    # A package whose name merely starts with an excepted one is not excepted.
+    package = Package(name=name, licences=["LGPL-3.0-only"], requires=[], extras=[])
+    report = audit("root", lookup=_tree(package).__getitem__)
+    assert [p.name for p in report.violations] == [name]
+    assert report.excepted == []
+
+
 @pytest.mark.parametrize("name", ["certifi", "tqdm", "psycopg"])
 def test_an_exception_under_strong_copyleft_is_refused_despite_it(name: str) -> None:
     package = Package(name=name, licences=["GPL-3.0-only"], requires=[], extras=[])
