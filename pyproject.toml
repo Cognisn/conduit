@@ -72,7 +72,9 @@ sql = [
     "aiosqlite>=0.20,<1",
 ]
 konfig = ["cognisn-konfig>=0.5,<1"]
-warden = []
+# cognisn-warden is published as pre-releases only; the pin names one so resolvers accept it.
+# Its audit recorder needs psycopg (LGPL-3.0), a named licence exception (Q0036).
+warden = ["cognisn-warden>=0.1.0b8,<0.2"]
 otel = ["opentelemetry-api>=1.30,<2"]
 cli = []
 # Development only; never a runtime dependency.
@@ -83,10 +85,14 @@ dev = [
     "ruff>=0.6",
     # The licence audit reads requirement specifiers with packaging.
     "packaging>=24",
-    # Postgres tests for the sql extra start a throwaway container (no psycopg: LGPL).
+    # Postgres tests for the sql extra start a throwaway container; the sql extra's own
+    # drivers (asyncpg, aiosqlite) are used, never psycopg.
     "testcontainers[postgres]>=4.9,<5",
     # In-memory span and metric exporters for the otel extra's tests (no collector).
     "opentelemetry-sdk>=1.30,<2",
+    # Test-only libpq, so warden's audit recorder (which imports psycopg) imports on every
+    # platform. LGPL-3.0; dev is never licence-audited (Q0036, Q0038).
+    "psycopg[binary]>=3.2",
 ]
 
 [project.urls]

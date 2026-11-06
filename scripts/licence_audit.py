@@ -53,6 +53,11 @@ EXCEPTIONS: dict[str, str] = {
     # package.
     "tqdm": "MPL-2.0 AND MIT progress bars required by sentence-transformers, transformers "
     "and huggingface_hub; used unmodified, installed separately (Q0032)",
+    # Agreed 2026-11-05 (Skuld Q0036): the PostgreSQL driver required by cognisn-warden
+    # (the warden extra), whose audit recorder imports it. conduit never imports it; used
+    # unmodified and installed as its own package.
+    "psycopg": "LGPL-3.0 PostgreSQL driver required by cognisn-warden (the warden extra); "
+    "used unmodified, installed separately (Q0036)",
 }
 
 _STRONG = re.compile(
