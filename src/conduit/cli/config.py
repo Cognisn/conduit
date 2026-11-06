@@ -30,9 +30,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from conduit import ConduitSettings, ConfigurationError
+from conduit import ConduitSettings, ConfigurationError, refusals
 from conduit.agent import RunBudget
-from conduit.core.settings import refusals
 
 #: The task class every chat runs on.
 CHAT = "chat"

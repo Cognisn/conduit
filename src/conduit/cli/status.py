@@ -21,11 +21,11 @@ from conduit import (
     ResidencyPolicy,
     TaskClass,
     default_catalogue,
+    resolve_assignments,
 )
 from conduit.cli.config import CliConfig
 from conduit.cli.output import describe_error
 from conduit.cli.setup import Context, task_classes
-from conduit.core.tasks import resolve_assignments
 
 #: Each adapter's extra and the libraries it needs.
 EXTRAS: dict[str, tuple[str, tuple[str, ...]]] = {
