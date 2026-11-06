@@ -263,27 +263,37 @@ class EvalHarness:
             executed=tuple(name for name, _ in executor.executed),
         )
         checks = case.checks + (case.stub_checks if self.stub else ())
-        failures = tuple(f for f in (_judge(check, observation) for check in checks) if f)
+        failures = tuple(
+            f for f in (_judge(check, observation) for check in checks) if f is not None
+        )
         return EvalOutcome(case.name, not failures, failures, result)
 
 
 def _judge(check: Check, observation: Observation) -> str | None:
+    """``None`` when the check holds; otherwise a reason. Only ``None`` is a pass: any
+    other result that is not a non-empty reason fails, named by its type alone."""
     raised: str | None = None
-    verdict: str | None = None
+    verdict: object = None
     try:
         verdict = check(observation)
     except Exception as error:  # a broken check fails its case, naming only the type
         raised = type(error).__name__
     if raised is not None:
         return f"a check raised {raised}"
-    return verdict
+    if verdict is None:
+        return None
+    if isinstance(verdict, str):
+        return verdict if verdict else "a check returned an empty reason"
+    return f"a check returned {type(verdict).__name__}"
 
 
 class StubHarness(EvalHarness):
     """Each case on the stub provider playing its script, in the default test run.
 
-    ``task_classes`` gives the product's own task classes (with their floors) by name;
-    any class a case uses that is not given is declared with a tools floor.
+    ``task_classes`` gives the product's own task classes (with their floors). When it
+    is given, only those classes are assigned, so a case using another one is refused
+    (its run raises ``RunRefused`` and the case fails). When it is empty, each class a
+    case uses is declared with a tools floor.
     """
 
     stub = True
@@ -394,7 +404,8 @@ def handed_off(*task_classes: str) -> Check:
 
 
 def output_field(name: str, value: object) -> Check:
-    """The run's structured output has field ``name`` equal to ``value``."""
+    """The run's structured output has field ``name`` equal to ``value``. The failure
+    names the field only, never either value."""
 
     def check(o: Observation) -> str | None:
         if o.result.output is None:
@@ -404,7 +415,7 @@ def output_field(name: str, value: object) -> Check:
         return (
             None
             if actual is not missing and actual == value
-            else (f"output field {name} was not {value!r}")
+            else f"output field {name} did not hold the expected value"
         )
 
     return check

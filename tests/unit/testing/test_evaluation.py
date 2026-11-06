@@ -232,7 +232,7 @@ async def test_output_field() -> None:
         script=_answer('{"verdict": "benign", "confidence": 2}'),
     )
     outcome = await _one(case)
-    assert outcome.failures == ("output field confidence was not 3",)
+    assert outcome.failures == ("output field confidence did not hold the expected value",)
     no_output = await _one(
         EvalCase("plain", _ask(), checks=(output_field("verdict", "x"),), script=_answer())
     )
@@ -380,3 +380,33 @@ async def test_the_score_counts_only_the_cases_that_ran() -> None:
     assert (report.passed, report.failed, report.skipped, report.ran) == (1, 0, 1, 1)
     assert report.score == 1.0
     assert report.failures() == {}
+
+
+@pytest.mark.parametrize(
+    ("returned", "reason"),
+    [
+        (False, "a check returned bool"),
+        (0, "a check returned int"),
+        ("", "a check returned an empty reason"),
+        ([], "a check returned list"),
+    ],
+)
+async def test_only_none_is_a_pass(returned: object, reason: str) -> None:
+    case = EvalCase("odd", _ask(), checks=(lambda o: returned,), script=_answer())  # type: ignore[arg-type,return-value]
+    outcome = await _one(case)
+    assert not outcome.passed
+    assert outcome.failures == (reason,)
+
+
+async def test_an_output_field_failure_never_repeats_the_expected_value() -> None:
+    contract = OutputContract(model=Verdict, name="verdict")
+    case = EvalCase(
+        "secret_value",
+        _ask(contract=contract),
+        checks=(output_field("verdict", CANARY),),
+        script=_answer('{"verdict": "benign", "confidence": 2}'),
+    )
+    outcome = await _one(case)
+    assert not outcome.passed
+    assert CANARY not in repr(outcome.failures)
+    assert outcome.failures == ("output field verdict did not hold the expected value",)
