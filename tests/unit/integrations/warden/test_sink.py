@@ -27,7 +27,7 @@ from conduit.agent.events import (
     TextDeltaEvent,
     ToolCallStartedEvent,
 )
-from conduit.core.errors import ConduitError
+from conduit.core.errors import ConduitError, ConfigurationError
 from conduit.core.events import (
     CapturePolicy,
     ContentKind,
@@ -209,7 +209,7 @@ class TestRegistration:
         ]
 
     def test_an_unknown_event_type_cannot_be_registered(self) -> None:
-        with pytest.raises(ValueError, match="not a conduit audit action"):
+        with pytest.raises(ConfigurationError, match="not a conduit audit action"):
             register_conduit_actions(ActionRegistry(), ["text_delta"])
 
     def test_summaries_render_from_the_event_fields_warden_allows(self) -> None:
@@ -291,7 +291,7 @@ class TestRecording:
         assert [e.action for e in recorder.events] == ["conduit.run_finished"]
 
     def test_a_subset_naming_an_unknown_type_is_refused(self) -> None:
-        with pytest.raises(ValueError, match="not a conduit audit action"):
+        with pytest.raises(ConfigurationError, match="not a conduit audit action"):
             WardenAuditSink(Recorder(registered()), actions=["text_delta"])
 
     async def test_each_record_names_its_resource_outcome_time_and_actor(self) -> None:
@@ -390,6 +390,21 @@ class TestFailures:
         bus = FanOutSink([WardenAuditSink(recorder), WardenAuditSink(good)])
         await bus.emit(tool_call())
         assert [e.action for e in good.events] == ["conduit.tool_call"]
+
+    async def test_a_record_warden_rejects_fails_without_its_values(self) -> None:
+        # A naive time passes no conduit check when validation is bypassed; warden's
+        # AuditEvent refuses it, and its validation error (with the input) never escapes.
+        event = ToolCallEvent.model_construct(
+            **tool_call().__dict__ | {"occurred_at": datetime(2026, 2, 3, 4, 5, 6)}
+        )
+        recorder = Recorder(registered())
+        with pytest.raises(AuditRecordFailed) as raised:
+            await WardenAuditSink(recorder).emit(event)
+        error = raised.value
+        assert error.__cause__ is None and error.__context__ is None
+        for shown in (str(error), repr(error), *map(str, error.args)):
+            assert "2026" not in shown and "run_1" not in shown and MARKER not in shown
+        assert recorder.events == []
 
     async def test_cancellation_propagates_unchanged(self) -> None:
         recorder = Recorder(registered(), fail_with=asyncio.CancelledError())

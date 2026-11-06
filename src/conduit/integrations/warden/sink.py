@@ -30,7 +30,7 @@ from typing import Protocol
 
 from warden.audit import ActionRegistry, ActionSpec, AuditEvent, Outcome, Severity
 
-from conduit.core.errors import ConduitError
+from conduit.core.errors import ConduitError, ConfigurationError
 from conduit.core.events import Event
 from conduit.integrations._metadata import identifier, metadata_fields
 
@@ -172,7 +172,7 @@ def _audited(event_types: Iterable[str] | None) -> tuple[str, ...]:
     chosen = tuple(CONDUIT_ACTIONS) if event_types is None else tuple(event_types)
     unknown = sorted(t for t in chosen if t not in CONDUIT_ACTIONS)
     if unknown:
-        raise ValueError(f"{', '.join(unknown)}: not a conduit audit action")
+        raise ConfigurationError(f"{', '.join(unknown)}: not a conduit audit action")
     return chosen
 
 
@@ -248,17 +248,19 @@ class WardenAuditSink:
                     "audit action %s is not registered; call register_conduit_actions", action
                 )
             return
-        record = AuditEvent(
-            action=action,
-            outcome=_outcome(event, spec),
-            occurred_at=event.occurred_at,
-            actor=self._actor,
-            resource_type=spec.resource_type,
-            resource_id=identifier(getattr(event, spec.resource_field, None)),
-            details=dict(metadata_fields(event)),
-        )
         failed = False
         try:
+            # Built inside the guard: warden refusing the record (a naive time, say)
+            # fails like a failed write, without the record's values.
+            record = AuditEvent(
+                action=action,
+                outcome=_outcome(event, spec),
+                occurred_at=event.occurred_at,
+                actor=self._actor,
+                resource_type=spec.resource_type,
+                resource_id=identifier(getattr(event, spec.resource_field, None)),
+                details=dict(metadata_fields(event)),
+            )
             await self._recorder.record(record)
         except Exception:
             failed = True
