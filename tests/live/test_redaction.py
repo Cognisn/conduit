@@ -18,10 +18,16 @@ from pathlib import Path
 
 import pytest
 
-from tests.live.needs import PREFIX
+from tests.live.needs import PREFIX, LiveEnv
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PLACEHOLDER = "conduit-placeholder-not-a-credential-9f2c"
+
+
+def test_live_env_keeps_only_live_variables() -> None:
+    env = LiveEnv({"CONDUIT_LIVE_REGION": "set", "AWS_SECRET_ACCESS_KEY": "set"})
+    assert sorted(env) == ["CONDUIT_LIVE_REGION"]
+
 
 SYNTHETIC = """
 import os

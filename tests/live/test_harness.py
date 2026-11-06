@@ -323,6 +323,18 @@ async def test_a_silent_answer_after_the_tool_result_fails() -> None:
     assert "no answer followed the tool result" in str(failed.value)
 
 
+async def test_tool_calls_ending_the_turn_fail() -> None:
+    ended = StubTurn(
+        tool_calls=(StubToolCall(LOOKUP_TOOL.name, {"code": "R-1234"}),),
+        stop_reason=StopReason.END_TURN,
+    )
+    script = answer_tool_results(ended, lambda results: StubTurn(text="done"))
+    async with started(_target("ended"), factories=_factory(ended=script)) as binding:
+        with pytest.raises(AssertionError) as failed:
+            await check_tools(binding, "stub tools")
+    assert "expected tool_use" in str(failed.value)
+
+
 class _FakeEmbedder:
     def __init__(self, response: EmbeddingResponse) -> None:
         self._response = response
@@ -348,6 +360,13 @@ async def test_embedding_usage_beyond_input_fails() -> None:
     with pytest.raises(AssertionError) as failed:
         await check_embeddings(cast(EmbeddingBinding, _FakeEmbedder(response)), "fake", 2)
     assert "more than input tokens" in str(failed.value)
+
+
+async def test_fewer_vectors_than_texts_fail() -> None:
+    response = EmbeddingResponse(model="fake", vectors=_vectors(0.25)[:-1], usage=None)
+    with pytest.raises(AssertionError) as failed:
+        await check_embeddings(cast(EmbeddingBinding, _FakeEmbedder(response)), "fake", 2)
+    assert "vectors for" in str(failed.value)
 
 
 async def test_a_well_formed_fake_embedding_passes() -> None:
