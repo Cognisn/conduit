@@ -124,6 +124,18 @@ class TestGuardedClient:
             tb = tb.tb_next
         assert "build" not in names
 
+    def test_a_conduit_error_passes_through_without_its_notes(self) -> None:
+        def build() -> Any:
+            error = ConfigurationError("refused on purpose")
+            error.add_note(f"while building with {PLACEHOLDER}")
+            raise error
+
+        with pytest.raises(ConfigurationError, match="refused on purpose") as caught:
+            guarded_client("fake", build)
+        error = caught.value
+        assert not hasattr(error, "__notes__")
+        assert PLACEHOLDER not in rendered(error)
+
     @pytest.mark.parametrize("raised", [asyncio.CancelledError, KeyboardInterrupt, SystemExit])
     def test_base_exceptions_propagate_unchanged(self, raised: type[BaseException]) -> None:
         signal = raised()

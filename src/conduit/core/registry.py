@@ -156,12 +156,14 @@ def guarded_client[T](kind: str, build: Callable[[], T], *, name: str | None = N
     passes through. If it raises:
 
     - a conduit error (a ``ConfigurationError`` the factory raises on purpose, say)
-      goes on as it is, with its traceback, cause and context cleared, so no frame of
-      the step, and no exception it handled, travels with it;
+      goes on as it is, with its traceback, cause, context and notes cleared, so no
+      frame of the step, no exception it handled and no note added on the way travels
+      with it;
     - any other exception becomes ``ConfigurationError`` naming the adapter ``kind``
       (and the configured provider ``name``, when given) and the exception's class
       only, raised after the handler so its cause and context are both ``None``;
-    - cancellation and any other ``BaseException`` propagate unchanged.
+    - cancellation and any other ``BaseException`` propagate unchanged, so they still
+      carry the step's frames: the promise about frames covers ordinary exceptions only.
 
     It cannot keep out what the library itself writes before it raises: an SDK that
     logs its own arguments at DEBUG does so before the guard sees anything.
@@ -178,6 +180,8 @@ def guarded_client[T](kind: str, build: Callable[[], T], *, name: str | None = N
         refused.__cause__ = None
         refused.__context__ = None
         refused.__suppress_context__ = False
+        if hasattr(refused, "__notes__"):
+            del refused.__notes__
         raise refused.with_traceback(None)
     where = f"provider {name!r}: " if name is not None else ""
     raise ConfigurationError(f"{where}the {kind} client could not be built: {failed}")

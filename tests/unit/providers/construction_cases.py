@@ -35,7 +35,7 @@ from conduit.embeddings import (
     OpenAICompatEmbeddingFactory,
 )
 from conduit.providers.anthropic import AnthropicFactory
-from conduit.providers.bedrock import BedrockFactory
+from conduit.providers.bedrock import BedrockFactory, auth
 from conduit.providers.bedrock_mantle import BedrockMantleFactory
 from conduit.providers.gemini import GeminiFactory
 from conduit.providers.ollama import OllamaFactory
@@ -82,6 +82,23 @@ ACCESS_KEYS = {
 }
 
 
+#: The short-term Bedrock keys presigned in the current case, in this process.
+ISSUED: list[str] = []
+
+
+def record_issued_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Record every short-term key the presign step makes, so a test can look for it."""
+    ISSUED.clear()
+    encode = auth.encode_short_term_key
+
+    def recorded(presigned_url: str) -> str:
+        key = encode(presigned_url)
+        ISSUED.append(key)
+        return key
+
+    monkeypatch.setattr(auth, "encode_short_term_key", recorded)
+
+
 class SyntheticConstructorFailure(RuntimeError):
     """What ``RaisingClient`` raises."""
 
@@ -112,12 +129,15 @@ class Case:
     #: Modules replaced by empty stand-ins, so the case runs where the library cannot
     #: load (torch's native libraries, for one).
     stand_ins: tuple[str, ...] = field(default=())
+    #: Whether a short-term Bedrock key is presigned before the constructor raises.
+    presigns: bool = False
 
     def patch(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for module in self.needs:
             pytest.importorskip(module)
         for module in self.stand_ins:
             monkeypatch.setitem(sys.modules, module, types.ModuleType(module))
+        record_issued_keys(monkeypatch)
         owner = importlib.import_module(self.target[0])
         monkeypatch.setattr(owner, self.target[1], RaisingClient)
 
@@ -154,6 +174,13 @@ MANTLE = ("anthropic", "botocore")
 LOCAL = ("sentence_transformers",)
 CREDENTIAL = ("azure.identity.aio", "DefaultAzureCredential")
 SESSION = ("boto3.session", "Session")
+#: The client's configuration, built after any short-term key has been presigned.
+CONFIG = ("botocore.config", "Config")
+SHORT_TERM = {
+    "kind": "bedrock",
+    "region": "eu-west-2",
+    "auth": {"mode": "short_term_api_key", "source": ACCESS_KEYS},
+}
 
 CHAT_CASES: tuple[Case, ...] = (
     Case(
@@ -276,6 +303,15 @@ CHAT_CASES: tuple[Case, ...] = (
         needs=BOTO,
     ),
     Case(
+        "bedrock-short-term-key-presigned",
+        "bedrock",
+        SHORT_TERM,
+        CONFIG,
+        BedrockFactory,
+        needs=BOTO,
+        presigns=True,
+    ),
+    Case(
         "bedrock-long-term-key",
         "bedrock",
         {
@@ -299,6 +335,7 @@ CHAT_CASES: tuple[Case, ...] = (
         ("anthropic.lib.bedrock", "AsyncAnthropicBedrockMantle"),
         BedrockMantleFactory,
         needs=MANTLE,
+        presigns=True,
     ),
     Case(
         "bedrock-mantle-long-term-key",
@@ -337,6 +374,16 @@ EMBEDDING_CASES: tuple[Case, ...] = (
         BedrockEmbeddingFactory,
         embedding=True,
         needs=BOTO,
+    ),
+    Case(
+        "embed-bedrock-short-term-key-presigned",
+        "bedrock",
+        SHORT_TERM,
+        CONFIG,
+        BedrockEmbeddingFactory,
+        embedding=True,
+        needs=BOTO,
+        presigns=True,
     ),
     Case(
         "embed-openai-key",
@@ -416,8 +463,11 @@ def ids(cases: tuple[Case, ...]) -> list[str]:
 
 
 def leaks(text: str) -> bool:
-    """Whether ``text`` holds the placeholder or the SDK's own text."""
-    return PLACEHOLDER in text or SDK_TEXT in text
+    """Whether ``text`` holds the placeholder, the SDK's own text, or a short-term key
+    (any, by its prefix, and each one presigned in this process, whole)."""
+    if PLACEHOLDER in text or SDK_TEXT in text or auth.SHORT_TERM_PREFIX in text:
+        return True
+    return any(key in text for key in ISSUED)
 
 
 def watch_loggers(caplog: pytest.LogCaptureFixture) -> None:
@@ -463,6 +513,8 @@ def frame_locals(error: BaseException) -> str:
 def check_hidden(case: Case, error: BaseException, caplog: pytest.LogCaptureFixture) -> None:
     """The fixed refusal, and the key nowhere: not in a traceback, a frame or a log."""
     check_refusal(case, error)
+    if case.presigns:
+        assert ISSUED, "no short-term key was presigned before the constructor raised"
     assert not leaks(rendered(error)), "the key reached a traceback with locals"
     assert not leaks(frame_locals(error)), "a frame the error holds keeps the key"
     assert not leaks(logged(caplog)), "the key reached a log record"

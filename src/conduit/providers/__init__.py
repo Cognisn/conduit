@@ -15,10 +15,13 @@
 #   ``None``.
 # - The credential is resolved only inside the step's own frames, which have ended when
 #   the error is raised, so a traceback printed with its locals (``pytest -l``, or a
-#   product that logs frame locals) holds no resolved key, token or secret key.
+#   product that logs frame locals) holds no resolved key, token or secret key. This
+#   covers ordinary exceptions only: cancellation, ``KeyboardInterrupt`` or another
+#   ``BaseException`` arriving during construction propagates unchanged (D0040), still
+#   carrying the SDK constructor's frames.
 # - A conduit error the step raises on purpose (a missing extra, an unresolved secret, a
 #   refused environment variable, a short-term key that cannot be presigned) goes on as
-#   it is, with its traceback, cause and context cleared.
+#   it is, with its traceback, cause, context and notes cleared.
 # - The guard itself logs nothing. Cancellation and other ``BaseException`` propagate
 #   unchanged.
 #
