@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import pytest
+from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 from opentelemetry.trace import StatusCode
 
 from conduit.agent.budgets import BudgetKind
@@ -819,6 +820,23 @@ class TestLifecycle:
         )
         with pytest.raises(asyncio.CancelledError):
             await target.emit(run_started(0))
+
+    async def test_spans_are_ended_outside_the_sinks_lock(self, telemetry: Telemetry) -> None:
+        # Ending a span runs the span processors, which may export over the network: the
+        # sink's lock must not be held then, or a slow exporter stalls every emitter.
+        target = sink(telemetry)
+        held: list[bool] = []
+
+        class Probe(SpanProcessor):
+            def on_end(self, span: ReadableSpan) -> None:
+                held.append(target._lock.locked())
+
+        telemetry.tracer_provider.add_span_processor(Probe())
+        await emit_all(target, full_run())
+        await emit_all(target, [run_started(500), tool_started(501), tool_started(502, "tool_9")])
+        target.close()
+        assert len(held) == len(telemetry.spans()) >= 12
+        assert not any(held)
 
     async def test_concurrent_runs_keep_their_spans_apart(self, telemetry: Telemetry) -> None:
         target = sink(telemetry)

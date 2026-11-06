@@ -37,6 +37,12 @@ The sink uses the tracer and meter providers it is given, or OpenTelemetry's glo
 ones. conduit configures no exporter and reads no ``OTEL_*`` variable itself: those
 configure the product's OpenTelemetry SDK, which owns where telemetry goes. None of them
 can make the sink export content, which it never reads.
+
+Spans are ended after the sink's lock is released, so a slow span processor never holds
+up another emitter; but ``emit`` still runs on the event loop, and a span processor that
+exports synchronously (``SimpleSpanProcessor`` with a network exporter) blocks the loop
+while it does. Products should export through ``BatchSpanProcessor`` and a periodic
+metric reader, which export on their own threads.
 """
 
 from __future__ import annotations
@@ -188,6 +194,8 @@ class OtelEventSink:
         )
         self._open: OrderedDict[_Key, _Open] = OrderedDict()
         self._lock = threading.Lock()
+        #: Spans to end once the lock is released: ending one runs the span processors.
+        self._ending: list[tuple[Span, int | None]] = []
         self._handlers: Mapping[str, Callable[[Event, dict[str, AttributeValue]], None]] = {
             "run_started": self._run_started,
             "run_finished": self._run_finished,
@@ -217,7 +225,11 @@ class OtelEventSink:
         failed: str | None = None
         try:
             with self._lock:
-                self._handle(event)
+                try:
+                    self._handle(event)
+                finally:
+                    ending, self._ending = self._ending, []
+            failed = self._end_all(ending)
         except Exception as error:
             failed = type(error).__name__
         if failed is not None:
@@ -229,6 +241,21 @@ class OtelEventSink:
             while self._open:
                 _, entry = self._open.popitem(last=False)
                 self._end_incomplete(entry.span, None)
+            ending, self._ending = self._ending, []
+        failed = self._end_all(ending)
+        if failed is not None:
+            logger.warning("OpenTelemetry sink failed on close: %s", failed)
+
+    @staticmethod
+    def _end_all(ending: list[tuple[Span, int | None]]) -> str | None:
+        """End each span, outside the lock; the first failure's class name, if any."""
+        failed: str | None = None
+        for span, end in ending:
+            try:
+                span.end(end_time=end)
+            except Exception as error:
+                failed = failed or type(error).__name__
+        return failed
 
     # Dispatch.
 
@@ -307,7 +334,7 @@ class OtelEventSink:
             span.set_attributes(attributes)
         if failure is not None:
             self._fail(span, failure)
-        span.end(end_time=end)
+        self._ending.append((span, end))
 
     def _one_shot(
         self,
@@ -328,7 +355,7 @@ class OtelEventSink:
     def _end_incomplete(self, span: Span, end_ns: int | None) -> None:
         span.set_attribute("conduit.incomplete", True)
         span.set_status(Status(StatusCode.ERROR, "incomplete"))
-        span.end(end_time=end_ns)
+        self._ending.append((span, end_ns))
 
     def _run_span_event(self, event: Event, attributes: dict[str, AttributeValue]) -> None:
         key = _key("run", event.run_id)
