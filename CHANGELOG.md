@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b8] - 2026-11-06
+
+Wave 8, fourth and last merge: default-ignorable characters and more angle lookalikes in the untrusted-content sanitiser (`fix/0.1.0-sanitiser-ignorables`).
+
+### Changed
+
+- `sanitise_untrusted` treats every Unicode default-ignorable character as hidden, among them U+034F, the variation selectors, U+180B to U+180F and the Hangul fillers: a frame marker broken up by one is escaped, and each is shown as `[U+XXXX]`, including a variation selector in ordinary text such as an emoji's U+FE0F.
+- `sanitise_untrusted` reads U+27E8, U+1438 and U+29FC as `<` when matching frame markers.
+- The sanitiser's documentation states which white space it keeps, and what it does not cover in 0.1.0: visible combining marks and cross-script homoglyphs inside a marker.
+
 ## [0.1.0b7] - 2026-11-06
 
 Wave 8, third merge: terminal interface and documentation follow-ups (`refactor/0.1.0-cli-docs-follow-ups`).
