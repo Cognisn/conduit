@@ -7,6 +7,7 @@ Locally a listed module whose extra is missing is skipped with the extra named. 
 from __future__ import annotations
 
 import importlib
+import types
 from importlib import metadata
 
 import pytest
@@ -61,12 +62,18 @@ class TestExcuse:
 
 class TestTheScan:
     def _break_import(self, monkeypatch: pytest.MonkeyPatch, broken: str) -> None:
+        """Only ``broken`` fails to import, for want of the mcp extra. A module this
+        environment genuinely cannot import (a job installing only some extras) stands
+        in as an empty module, so the result does not depend on what is installed."""
         real = importlib.import_module
 
         def fake(name: str, package: str | None = None) -> object:
             if name == broken:
                 raise _missing("mcp")
-            return real(name, package)
+            try:
+                return real(name, package)
+            except ImportError:
+                return types.ModuleType(name)
 
         monkeypatch.setattr(importlib, "import_module", fake)
 
