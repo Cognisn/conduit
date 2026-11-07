@@ -23,9 +23,10 @@ Every layer shares these, so the rules are the same wherever external text enter
   isolates, the byte order mark, tag characters, lone surrogates), every
   Default_Ignorable_Code_Point (among them the combining grapheme joiner, the variation
   selectors, the Mongolian free variation selectors and the Hangul fillers), and the
-  line and paragraph separators. Newlines and tabs are kept, as is all other white
-  space, and the result always encodes as UTF-8. A variation selector is marked in
-  ordinary text too, so an emoji's presentation selector shows as ``[U+FE0F]``;
+  line and paragraph separators. Newlines and tabs are kept, as is other white space
+  that is not a control character or a line or paragraph separator, and the result
+  always encodes as UTF-8. A variation selector is marked in ordinary text too, so an
+  emoji's presentation selector shows as ``[U+FE0F]``;
 - a run of ``BASE64_RUN_THRESHOLD`` or more base64 characters is replaced by a note of
   its length.
 

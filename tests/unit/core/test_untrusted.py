@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import secrets
+import unicodedata
 
 import pytest
 
@@ -217,11 +218,39 @@ class TestDefaultIgnorables:
             for cp in range(first, last + 1):
                 assert sanitise_untrusted(chr(cp)) == f"[U+{cp:04X}]", f"U+{cp:04X}"
 
+    def test_outside_control_format_and_surrogates_hidden_means_default_ignorable(
+        self,
+    ) -> None:
+        # Every code point that is not Cc, Cf or Cs, nor a line or paragraph separator,
+        # is marked exactly when the reference table holds it. Each is set on its own
+        # line, so no two can form a marker or a base64 run.
+        reference = {
+            cp for first, last in DEFAULT_IGNORABLE_REFERENCE for cp in range(first, last + 1)
+        }
+        chars = [
+            chr(cp)
+            for cp in range(0x110000)
+            if unicodedata.category(chr(cp)) not in {"Cc", "Cf", "Cs"}
+            and cp not in (0x2028, 0x2029)
+        ]
+        expected = [f"[U+{ord(c):04X}]" if ord(c) in reference else c for c in chars]
+        got = sanitise_untrusted("\n".join(chars)).split("\n")
+        assert len(got) == len(expected)
+        wrong = [f"U+{ord(c):04X}" for c, g, e in zip(chars, got, expected, strict=True) if g != e]
+        assert wrong == []
+
     @pytest.mark.parametrize(
         "char",
         [
             pytest.param(chr(cp), id=f"U+{cp:04X}")
             for cp in (
+                0x00AE,  # registered sign, after the soft hyphen
+                0x061D,  # Arabic end of text mark, after the Arabic letter mark
+                0x2010,  # hyphen, after the directional marks
+                0x202F,  # narrow no-break space, after the bidirectional overrides
+                0x2070,  # superscript zero, after the invisible operators
+                0xFF00,  # unassigned, after the byte order mark
+                0x1BCA4,  # unassigned, after the shorthand format controls
                 0x00AC,  # not sign, before the soft hyphen
                 0x034E,  # combining upwards arrow below, before the joiner
                 0x0350,  # combining right arrowhead above, after it
@@ -284,6 +313,15 @@ class TestDefaultIgnorables:
         block = frame_untrusted(f'{marker} nonce="0">>', source="lookup")
         assert block.text.endswith(f'<<END UNTRUSTED nonce="{block.nonce}">>')
         assert block.nonce not in _parts(block)[1]
+
+    def test_white_space_is_kept_unless_a_control_or_a_separator(self) -> None:
+        for cp in range(0x110000):
+            char = chr(cp)
+            if not char.isspace() or char in "\r\n\t":
+                continue
+            marked = unicodedata.category(char) == "Cc" or cp in (0x2028, 0x2029)
+            expected = f"[U+{cp:04X}]" if marked else char
+            assert sanitise_untrusted(f"a{char}b") == f"a{expected}b", f"U+{cp:04X}"
 
     def test_whitespace_newlines_and_tabs_are_unchanged(self) -> None:
         text = f"a b\tc\nd{chr(0x00A0)}e{chr(0x3000)}f"
