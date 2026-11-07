@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b5] - 2026-11-06
+
+Wave 8, first merge: core and tripwire follow-ups (`fix/0.1.0-core-follow-ups`).
+
+### Added
+
+- `conduit.core.untrusted` gives every layer one untrusted-content sanitiser and frame:
+  - `sanitise_untrusted` escapes anything resembling a frame marker of either style, including fullwidth, small-form, guillemet and HTML-escaped lookalikes and markers broken up by control or format characters; it also shows invisible and surrogate characters and replaces long base64 runs.
+  - `frame_untrusted` frames sanitised text with a fresh nonce, a code-chosen source, record and further attributes, and a length cap.
+  - `untrusted_text_block` gives a framed content block.
+- `Runtime.events` and `Runtime.capture`, read only: the product's event sink under the runtime's capture policy, which cannot be loosened through it, and the policy itself.
+- A `testing` extra declaring pytest, which the conformance suites' pytest plugin needs.
+
+### Changed
+
+- `start()` accepts embedding task classes alongside chat ones and leaves them, their assignments and any provider only they use to `start_embeddings`.
+- `FanOutSink.policy` is read only.
+- The client-construction tripwire also covers `MeteredEmbedder`, the local embeddings client and `SentenceTransformer`.
+- The import tripwire names the shared Entra ID module as azure.identity's only owner and lets only `conduit.testing` import pytest.
+- The event-content tripwire fails, rather than skips, a module whose extra is missing when `CONDUIT_ALL_EXTRAS=require`, and CI's test job sets it.
+
+### Fixed
+
+- An event sink's cancellation propagates through the fan-out unchanged.
+- Closing a sync facade loop leaves no task to be logged as destroyed while pending.
+
 ## [0.1.0b4] - 2026-11-06
 
 Wave 7, third and last merge: top-level re-exports and guide text (`feat/0.1.0-public-exports`).
