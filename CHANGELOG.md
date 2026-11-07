@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0rc1] - 2026-11-07
+
+First release candidate, from 0.1.0b9 with no change to the code, and the first version published to PyPI.
+
+### Changed
+
+- The README's status and installation notes describe the release candidate on PyPI.
+
 ### Added
 
 - A publish workflow, run by hand, that builds, checks and publishes to PyPI with trusted publishing. It refuses a version that does not match the branch's version file, a pre-release from anywhere but a release branch, and a final version from anywhere but `main`.
