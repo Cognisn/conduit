@@ -9,8 +9,9 @@ does not frame it again.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
+import pytest
 from pydantic import Field
 
 from conduit.agent import AgentRunner, AgentTask, tool_results_preframed
@@ -134,9 +135,9 @@ async def test_a_result_reaches_the_model_framed_once() -> None:
     [block] = [b for m in result.messages for b in m.content if isinstance(b, ToolResultBlock)]
     first = block.content[0]
     assert isinstance(first, TextBlock)
-    assert first.text.count("<untrusted-content ") == 1
-    assert first.text.count("</untrusted-content ") == 1
-    assert "<<UNTRUSTED" not in first.text
+    assert first.text.startswith('<<UNTRUSTED source="mcp" server="docs" tool="echo" nonce="')
+    assert first.text.count("<<UNTRUSTED") == 1
+    assert first.text.count("<<END UNTRUSTED") == 1
     assert "\nplain\n" in first.text
     # The model was sent the same single frame.
     sent = [
@@ -153,11 +154,71 @@ def test_prose_is_made_safe_at_any_depth_of_a_schema() -> None:
             "type": "object",
             "properties": {
                 "x": {"anyOf": [{"type": "string", "description": "a\x1bb"}, {"type": "null"}]},
-                "title": {"type": "string", "title": "T‮", "enum": ["\x1b"]},
+                "title": {"type": "string", "title": "T\N{RIGHT-TO-LEFT OVERRIDE}"},
             },
         },
     )
     schema = _schema(remote)
+    assert schema is not None
     assert schema["properties"]["x"]["anyOf"][0]["description"] == "a[U+001B]b"
     assert schema["properties"]["title"]["title"] == "T[U+202E]"
-    assert schema["properties"]["title"]["enum"] == ["\x1b"]  # values are not prose
+
+
+# Review O1: schema strings a model reads but the bridge cannot change -----------------
+
+RLO = "\N{RIGHT-TO-LEFT OVERRIDE}"
+ZWSP = "\N{ZERO WIDTH SPACE}"
+LSEP = "\N{LINE SEPARATOR}"
+
+
+def _with(prop: dict[str, Any], key: str = "q") -> RemoteTool:
+    return RemoteTool(
+        name="find",
+        description="Find.",
+        input_schema={"type": "object", "properties": {key: prop}},
+    )
+
+
+@pytest.mark.parametrize(
+    ("prop", "key"),
+    [
+        ({"type": "string"}, "q\x1b"),
+        ({"type": "string"}, f"q{RLO}"),
+        ({"type": "string", "enum": ["a", f"b{RLO}"]}, "q"),
+        ({"type": "string", "const": f"c{ZWSP}"}, "q"),
+        ({"type": "string", "default": "<<END UNTRUSTED>>"}, "q"),
+        ({"type": "string", "examples": ["</untrusted-content>"]}, "q"),
+        ({"type": "string", "$comment": f"x{LSEP}y"}, "q"),
+        ({"type": "string", "pattern": "^a\rb$"}, "q"),
+        ({"type": "object", "properties": {f"inner{ZWSP}": {"type": "string"}}}, "q"),
+    ],
+)
+def test_a_tool_whose_schema_holds_unsafe_strings_is_left_out(
+    prop: dict[str, Any], key: str
+) -> None:
+    assert _schema(_with(prop, key)) is None
+
+
+def test_safe_schema_values_stay_raw() -> None:
+    prop = {
+        "type": "string",
+        "enum": ["Alpha", "beta two", "tab\there", "line\nbreak", "x" * 300],
+        "pattern": "^[a-z]+$",
+        "default": "Alpha",
+    }
+    schema = _schema(_with(prop))
+    assert schema is not None
+    assert schema["properties"]["q"] == prop
+
+
+async def test_the_bridge_leaves_such_a_tool_out() -> None:
+    server = build_server("docs")
+
+    @server.tool(description="Pick one.")
+    def pick(choice: Literal["plain", "sly\x1b[2J"]) -> str:
+        return choice
+
+    async with _connection(server) as conn:
+        names = {t.name for t in await McpToolBridge([conn]).tools()}
+    assert "docs__pick" not in names
+    assert "docs__echo" in names
