@@ -64,6 +64,11 @@ class TestInvisibleCharacters:
     def test_each_becomes_a_visible_marker(self, char: str, marker: str) -> None:
         assert sanitise_untrusted(f"a{char}b") == f"a{marker}b"
 
+    def test_a_lone_surrogate_becomes_a_marker_and_the_text_encodes(self) -> None:
+        cleaned = sanitise_untrusted("a" + chr(0xD800) + "b" + chr(0xDFFF))
+        assert cleaned == "a[U+D800]b[U+DFFF]"
+        cleaned.encode("utf-8")
+
     def test_ordinary_text_is_unchanged(self) -> None:
         text = 'Plain text, numbers 42, accents \u00e9 \u00fc, and symbols <> & "quotes".'
         assert sanitise_untrusted(text) == text
@@ -88,12 +93,43 @@ class TestDelimiters:
         assert ESCAPED_DELIMITER in cleaned
         assert not re.search(r"<\s*/?\s*(end\s+)?untrusted", cleaned, re.IGNORECASE)
 
-    def test_a_marker_split_by_an_invisible_character_cannot_reform(self) -> None:
-        cleaned = sanitise_untrusted("<<UN\u200bTRUSTED")
-        assert cleaned == "<<UN[U+200B]TRUSTED"
+    def test_a_marker_split_by_an_invisible_character_is_escaped(self) -> None:
+        cleaned = sanitise_untrusted("a <<UN" + chr(0x200B) + "TRUSTED b")
+        assert cleaned == f"a {ESCAPED_DELIMITER} b"
 
-    def test_ordinary_angle_brackets_are_kept(self) -> None:
-        assert sanitise_untrusted("a << b and <trusted>") == "a << b and <trusted>"
+    @pytest.mark.parametrize("control", [chr(0x0B), chr(0x0C), chr(0x1F), chr(0x00)])
+    def test_a_control_character_inside_a_marker_is_escaped(self, control: str) -> None:
+        cleaned = sanitise_untrusted(f"a <<{control}UNTRUSTED b")
+        assert cleaned == f"a {ESCAPED_DELIMITER} b"
+
+    @pytest.mark.parametrize(
+        "marker",
+        [
+            pytest.param(chr(0xFF1C) * 2 + "UNTRUSTED", id="fullwidth-angles"),
+            pytest.param(
+                chr(0xFF1C) + chr(0xFF0F) + "".join(chr(0xFF41 + ord(c) - 97) for c in "untrusted"),
+                id="fullwidth-everything",
+            ),
+            pytest.param(chr(0xFE64) + "untrusted", id="small-form-angle"),
+            pytest.param(chr(0x2039) * 2 + "UNTRUSTED", id="single-guillemets"),
+            pytest.param("<<END-UNTRUSTED", id="end-hyphen"),
+            pytest.param("<<END_UNTRUSTED", id="end-underscore"),
+            pytest.param("<<ENDUNTRUSTED", id="end-joined"),
+            pytest.param("<<END" + chr(0x2010) + "UNTRUSTED", id="end-unicode-hyphen"),
+            pytest.param("&lt;untrusted", id="html-named"),
+            pytest.param("&LT;&lt;UNTRUSTED", id="html-named-upper"),
+            pytest.param("&#60;untrusted", id="html-decimal"),
+            pytest.param("&#x3C;/untrusted", id="html-hex"),
+            pytest.param("&#x3c&#x3cUNTRUSTED", id="html-hex-no-semicolon"),
+        ],
+    )
+    def test_a_lookalike_marker_is_escaped_in_place(self, marker: str) -> None:
+        cleaned = sanitise_untrusted(f"before {marker} after")
+        assert cleaned == f"before {ESCAPED_DELIMITER} after"
+
+    def test_ordinary_angle_brackets_and_entities_are_kept(self) -> None:
+        text = "a << b and <trusted> and &lt;b&gt; and " + chr(0xFF1C) + "x"
+        assert sanitise_untrusted(text) == text
 
 
 class TestBase64Runs:

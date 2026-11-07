@@ -8,15 +8,19 @@ Every layer shares these, so the rules are the same wherever external text enter
 ``sanitise_untrusted`` promises:
 
 - carriage returns (``\\r\\n`` and a lone ``\\r``) become newlines;
-- control and format characters (C0 and C1 controls, zero-width characters,
-  bidirectional overrides and isolates, the byte order mark, tag characters) and the
-  line and paragraph separators become visible ``[U+XXXX]`` markers; newlines and tabs
-  are kept;
 - anything resembling a frame marker, of this frame (``<<UNTRUSTED``,
   ``<<END UNTRUSTED``) or of an element-style frame (``<untrusted...``,
-  ``</untrusted...``), in any case and with any spacing, is replaced by
-  ``ESCAPED_DELIMITER``. Invisible characters are made visible first, so one hidden
-  inside a marker cannot be removed later to re-form it;
+  ``</untrusted...``), is replaced by ``ESCAPED_DELIMITER``: in any case, with any
+  spacing (control characters included), with ``END`` joined by nothing, underscores
+  or hyphens, with hidden characters inside it, with ``<`` HTML-escaped (``&lt;``,
+  ``&#60;``, ``&#x3c;``) or as a lookalike (fullwidth, small-form, guillemet), and with
+  fullwidth letters. Markers are matched first, on a folded copy of the text, and the
+  matching span of the original is replaced;
+- control, format and surrogate characters (C0 and C1 controls, zero-width
+  characters, bidirectional overrides and isolates, the byte order mark, tag
+  characters, lone surrogates) and the line and paragraph separators become visible
+  ``[U+XXXX]`` markers; newlines and tabs are kept, so the result always encodes as
+  UTF-8;
 - a run of ``BASE64_RUN_THRESHOLD`` or more base64 characters is replaced by a note of
   its length.
 
@@ -69,9 +73,20 @@ FRAMING_NOTE = (
 _VALUE = re.compile(r"^[A-Za-z0-9_.:\-]{1,128}$")
 _NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _RESERVED = frozenset({"source", "record", "nonce"})
+#: Angle brackets NFKC does not fold to ``<``: single guillemet, ornamental and CJK
+#: angle brackets, the modifier-letter arrowhead.
+_ANGLE_LOOKALIKES = {cp: "<" for cp in (0x2039, 0x2329, 0x276C, 0x276E, 0x3008, 0x02C2)}
+#: Hyphens and dashes NFKC does not fold to ``-``.
+_HYPHENS = "".join(chr(cp) for cp in (*range(0x2010, 0x2016), 0x2212))
+#: ``<`` as written, or HTML-escaped (``&lt;``, ``&#60;``, ``&#x3c;``, semicolon optional).
+_ANGLE = r"(?:<|&lt;?|&#0*60;?|&#x0*3c;?)"
 #: This frame's markers and element-style ones (``<untrusted-content>``,
-#: ``</untrusted-content>``), with any number of ``<``, any spacing and any case.
-_DELIMITER = re.compile(r"<+\s*/?\s*(?:END\s+)?UNTRUSTED", re.IGNORECASE)
+#: ``</untrusted-content>``): any number of angles, any spacing, any case, and ``END``
+#: joined to ``UNTRUSTED`` by nothing, spaces, underscores or hyphens. It is matched on
+#: a folded copy of the text (see ``_fold``).
+_DELIMITER = re.compile(
+    rf"{_ANGLE}+\s*/?\s*(?:END[\s_\-{re.escape(_HYPHENS)}]*)?UNTRUSTED", re.IGNORECASE
+)
 _BASE64_RUN = re.compile(rf"[A-Za-z0-9+/]{{{BASE64_RUN_THRESHOLD},}}={{0,2}}")
 _KEPT_CONTROLS = frozenset({"\n", "\t"})
 #: Line and paragraph separators render as line breaks but are not ``\n``.
@@ -96,23 +111,55 @@ class UntrustedBlock:
     truncated: bool
 
 
+#: Cc: C0 and C1 controls. Cf: format characters, which include zero-width characters,
+#: bidirectional overrides and isolates, the BOM and tag characters. Cs: lone
+#: surrogates, which no UTF-8 encoder accepts.
+_HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Cs"})
+
+
+def _hidden(char: str) -> bool:
+    return char not in _KEPT_CONTROLS and (
+        unicodedata.category(char) in _HIDDEN_CATEGORIES or char in _MARKED_SEPARATORS
+    )
+
+
 def _replace_invisible(text: str) -> str:
+    return "".join(f"[U+{ord(char):04X}]" if _hidden(char) else char for char in text)
+
+
+def _fold(char: str) -> str:
+    """``char`` as the marker check sees it: hidden characters other than whitespace
+    dropped, so none can split a marker; compatibility forms folded (NFKC), so fullwidth
+    and small-form lookalikes read as ASCII; other angle lookalikes read as ``<``."""
+    if _hidden(char) and not char.isspace():
+        return ""
+    return unicodedata.normalize("NFKC", char).translate(_ANGLE_LOOKALIKES)
+
+
+def _escape_markers(text: str) -> str:
+    """``text`` with each span whose folded form is a marker replaced in the original."""
+    folded: list[str] = []
+    origin: list[int] = []
+    for index, char in enumerate(text):
+        for piece in _fold(char):
+            folded.append(piece)
+            origin.append(index)
     out: list[str] = []
-    for char in text:
-        # Cc: C0 and C1 controls. Cf: format characters, which include zero-width
-        # characters, bidirectional overrides and isolates, the BOM and tag characters.
-        hidden = char not in _KEPT_CONTROLS and (
-            unicodedata.category(char) in ("Cc", "Cf") or char in _MARKED_SEPARATORS
-        )
-        out.append(f"[U+{ord(char):04X}]" if hidden else char)
+    last = 0
+    for match in _DELIMITER.finditer("".join(folded)):
+        start, end = origin[match.start()], origin[match.end() - 1] + 1
+        out.append(text[last:start])
+        out.append(ESCAPED_DELIMITER)
+        last = end
+    out.append(text[last:])
     return "".join(out)
 
 
 def sanitise_untrusted(text: str) -> str:
     """``text`` made safe to show a model or a person (see the module's promises)."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _escape_markers(text)
     text = _replace_invisible(text)
-    text = _DELIMITER.sub(ESCAPED_DELIMITER, text)
     return _BASE64_RUN.sub(lambda m: f"[base64 run: {len(m.group(0))} chars]", text)
 
 
