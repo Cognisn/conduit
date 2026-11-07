@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b7] - 2026-11-06
+
+Wave 8, third merge: terminal interface and documentation follow-ups (`refactor/0.1.0-cli-docs-follow-ups`).
+
+### Added
+
+- `conduit` re-exports the untrusted-content sanitiser and frame: `sanitise_untrusted`, `frame_untrusted`, `untrusted_text_block`, `UntrustedText`, `UntrustedBlock` and `FRAMING_NOTE`.
+- The guides document `Runtime.events` and `Runtime.capture` and the agent runner's defaults to them, untrusted content and what the sanitiser covers, summaries charged to the run's budget, a compaction hook that fails, starting chat and embedding task classes from one list, the MCP result frame and the `testing` extra's install line.
+
+### Changed
+
+- The terminal interface imports every name from the package that exports it (`conduit` for core names, `conduit.stores` for the stores), never from `conduit.core` or a module a package covers, and its public-API test refuses such an import.
+- The documentation test refuses an example that imports a private module path. It skips a guide whose examples need an extra that is not installed, naming the extra, unless `CONDUIT_ALL_EXTRAS=require`, which fails instead (any other value is refused); its checks that import nothing run even for a skipped guide.
+- The README gives the warden extra's package count on Linux and Windows and its psycopg licence exception, and lists the `testing` extra.
+- The terminal interface's MCP sign-in tests take ports from the MCP tests' port plan.
+
 ## [0.1.0b6] - 2026-11-06
 
 Wave 8, second merge: agent runner, compaction and MCP follow-ups (`fix/0.1.0-runner-mcp-follow-ups`).
