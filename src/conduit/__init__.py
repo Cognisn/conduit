@@ -130,6 +130,7 @@ from conduit.core.untrusted import (
     UntrustedBlock,
     UntrustedText,
     frame_untrusted,
+    is_hidden_character,
     sanitise_untrusted,
     untrusted_text_block,
 )
@@ -241,6 +242,7 @@ __all__ = [
     "default_catalogue",
     "frame_untrusted",
     "guarded_client",
+    "is_hidden_character",
     "refusals",
     "resolve_assignments",
     "sanitise_untrusted",
