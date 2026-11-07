@@ -110,6 +110,8 @@ async def compacted_run() -> tuple[list[Event], int]:
             )
         )
         assert result.status is RunStatus.COMPLETED
+        # The summary is a model call of the run, counted with the run's own.
+        assert result.model_calls == 2
 
         reloaded = await store.load("sess_mail")
         return sink.events, len(reloaded.active_messages())
@@ -140,7 +142,7 @@ Some providers limit how many breakpoints one request may carry: Anthropic allow
 - **Once the prompt no longer fits**, a compaction is needed, so it is applied whenever its result fits, even above the threshold. A result that cannot fit fails (`result_too_large`).
 - **A forced compaction** skips these checks and is applied whenever there is something to replace.
 
-A failure (`CompactionFailed`, with a fixed reason) leaves the conversation as it was. While the prompt still fits, the call goes ahead uncompacted and the next call tries again; once it no longer fits, the hook raises, since the call could not succeed. Every attempt, skip or failure emits a `CompactionEvent` with the strategy, trigger, outcome, reason and token estimates before and after.
+A failure (`CompactionFailed`, with a fixed reason) leaves the conversation as it was. While the prompt still fits, the call goes ahead uncompacted and the next call tries again; once it no longer fits, the hook raises, since the call could not succeed, and the run ends with the failure `compaction_failed`. Every attempt, skip or failure emits a `CompactionEvent` with the strategy, trigger, outcome, reason and token estimates before and after.
 
 ## The summary call
 
@@ -150,7 +152,63 @@ That is why `Summarise`'s default floor is `CapabilityFloor(tools=True)`: the su
 
 Tool arguments and results in the summary request are tool content, and the summary call's events are held to the capture policy like every model call's: the request is always recorded by hash and size, its text only when `prompts` is captured, and even then without the tool arguments and results unless `tool_content` is captured too.
 
-The summary call is metered by the provider registry like every model call, and its events carry the run's id, but its tokens are **not charged to the run's own budget**: the run's budget meter belongs to the runner, which the hook cannot reach. Budget summaries through the usage events if they matter.
+## Summaries and the run's budget
+
+A summary is a model call of the run: `Summarise` counts it against `max_model_calls`, holds its output to the tokens the budget has left, and charges its usage to `max_tokens`. A summary the budget refuses is never made, and the run ends as `budget_exhausted`, as for any over-budget call; so does a summary that spends the token budget exactly. Allow for summaries when you set `max_model_calls`. `RunResult.model_calls` counts every call counted, including the run's own call that was counted but never made because a compaction failed or was refused. The summary call is also metered by the provider registry like every model call, and its events carry the run's id.
+
+A product's own hook charges its calls through `request.charge` (`begin`, then `record`), valid only during that `before_model_call`. A hook that raises ends the run with the failure `compaction_failed`; the error is logged by class name and not kept, so nothing it held reaches the result. Cancellation propagates.
+
+```python
+from collections.abc import Sequence
+
+from conduit.agent import CompactionRequest, RunBudget, RunFailed, RunFailure
+
+
+class BrokenHook:
+    """A product's own compaction hook whose summary service is down."""
+
+    async def before_model_call(self, request: CompactionRequest) -> Sequence[Message] | None:
+        raise ConnectionError("summary service unreachable at 192.0.2.40")
+
+
+async def failed_and_refused_runs() -> None:
+    runtime = await start(
+        settings,
+        task_classes=TASK_CLASSES,
+        factories=[StubFactory(scripts={"summariser": summariser})],
+        secrets=LiteralSecretResolver({}),
+    )
+    question = (Message.user("Is it fixed now?"),)
+    try:
+        broken = await AgentRunner(runtime, compaction=BrokenHook()).run(
+            AgentTask(task_class="assistant", messages=question)
+        )
+        assert broken.status is RunStatus.FAILED
+        assert broken.failure is RunFailure.COMPACTION_FAILED
+        try:
+            broken.raise_for_failure()
+        except RunFailed as failed:
+            assert "192.0.2.40" not in str(failed) and failed.__cause__ is None
+
+        # One model call allowed: the run's own call, so a forced summary is refused.
+        compactor = Compactor([Summarise(runtime, task_class="conversation_summary", keep_turns=2)])
+        compactor.force("sess_budget")
+        refused = await AgentRunner(runtime, compaction=compactor).run(
+            AgentTask(
+                task_class="assistant",
+                session_id="sess_budget",
+                history=tuple(history),
+                messages=question,
+                budget=RunBudget(max_model_calls=1),
+            )
+        )
+        assert refused.failure is RunFailure.BUDGET_EXHAUSTED
+    finally:
+        await runtime.aclose()
+
+
+asyncio.run(failed_and_refused_runs())
+```
 
 ## The token estimate
 
