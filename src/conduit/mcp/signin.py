@@ -48,14 +48,15 @@ _FAILED_PAGE = (
 
 
 def _expected_state(authorization_url: str) -> str | None:
-    states = parse_qs(urlsplit(authorization_url).query).get("state", [])
-    return states[0] if len(states) == 1 else None
+    """The authorisation request's ``state``, or ``None`` unless it has exactly one,
+    and that one is not empty."""
+    query = urlsplit(authorization_url).query
+    states = parse_qs(query, keep_blank_values=True).get("state", [])
+    return states[0] if len(states) == 1 and states[0] else None
 
 
-def _carries(target: str, state: str | None) -> bool:
+def _carries(target: str, state: str) -> bool:
     """Whether the callback ``target`` carries exactly the ``state`` the request sent."""
-    if state is None:
-        return True
     states = parse_qs(urlsplit(target).query, keep_blank_values=True).get("state", [])
     return len(states) == 1 and hmac.compare_digest(states[0].encode(), state.encode())
 
@@ -107,7 +108,9 @@ class LoopbackSignIn:
     listener and every
     connection to it are closed when the sign-in ends, however it ends, and an idle
     connection cannot hold it open. A sign-in not completed within ``timeout`` seconds
-    raises ``TimeoutError``.
+    raises ``TimeoutError``. An authorisation URL without exactly one non-empty
+    ``state`` is refused (``ConfigurationError``) before anything listens or the browser
+    opens, since no callback could then be told from a forged one.
     """
 
     def __init__(
@@ -142,8 +145,12 @@ class LoopbackSignIn:
 
     async def sign_in(self, request: SignInRequest) -> SignInResult:
         loop = asyncio.get_running_loop()
-        received: asyncio.Future[str] = loop.create_future()
         state = _expected_state(request.authorization_url)
+        if state is None:
+            raise ConfigurationError(
+                "a loopback sign-in needs an authorisation URL with exactly one state"
+            )
+        received: asyncio.Future[str] = loop.create_future()
         writers: set[asyncio.StreamWriter] = set()
 
         async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:

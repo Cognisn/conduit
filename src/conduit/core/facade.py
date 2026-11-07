@@ -66,6 +66,8 @@ logger = logging.getLogger("conduit.facade")
 DEFAULT_TIMEOUT_S: float = 300.0
 #: How long a timed-out call may take to unwind before its caller is released anyway.
 UNWIND_GRACE_S: float = 10.0
+#: How long ``close(join_timeout=None)`` lets calls still pending after the shutdown unwind.
+SETTLE_S: float = 5.0
 
 
 class LoopThread:
@@ -190,7 +192,10 @@ class LoopThread:
 
         A caller waiting on a cancelled call gets ``FacadeError``, as does one whose call
         ignored cancellation past ``join_timeout``. Refused on the loop's own thread,
-        where it would wait on itself.
+        where it would wait on itself. Each of its three steps (the shutdown, the thread
+        join, and the settle that unwinds whatever the shutdown did not reach) may take
+        up to ``join_timeout`` (the settle, ``SETTLE_S`` when that is ``None``), so
+        ``close`` can take up to three times that.
         """
         if self.on_loop_thread():
             raise FacadeError(
@@ -218,6 +223,7 @@ class LoopThread:
         for future in stranded:
             future.cancel()
         if not thread.is_alive():
+            _settle(loop, SETTLE_S if join_timeout is None else join_timeout)
             loop.close()
 
     def __enter__(self) -> LoopThread:
@@ -256,6 +262,39 @@ async def _shutdown(loop: asyncio.AbstractEventLoop) -> None:
         task.cancel()
     await asyncio.gather(*pending, return_exceptions=True)
     await loop.shutdown_asyncgens()
+
+
+#: Tasks a closed loop could not finish: each ignored cancellation past its bound. They
+#: are kept referenced, deliberately, so none is garbage-collected while pending (which
+#: asyncio would log as "Task was destroyed but it is pending").
+_ABANDONED: set[asyncio.Task[Any]] = set()
+
+
+async def _sweep(timeout: float) -> None:
+    """Cancel every other task on the running loop and give them ``timeout`` to unwind."""
+    current = asyncio.current_task()
+    pending = {task for task in asyncio.all_tasks() if task is not current}
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.wait(pending, timeout=timeout)
+
+
+def _settle(loop: asyncio.AbstractEventLoop, timeout: float) -> None:
+    """On ``loop``, stopped and with its thread gone, finish what the shutdown did not.
+
+    A call submitted as close began, or the shutdown itself when it gave up on a call
+    ignoring cancellation, can still be pending. The loop is run here, on the closing
+    thread, until each is cancelled and unwound or ``timeout`` passes; any still pending
+    then is kept in ``_ABANDONED``. A thread already running another loop cannot run
+    this one, so there they are kept without the sweep.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        if any(not task.done() for task in asyncio.all_tasks(loop)):
+            loop.run_until_complete(_sweep(timeout))
+    _ABANDONED.update(task for task in asyncio.all_tasks(loop) if not task.done())
 
 
 def _discard(awaitable: Awaitable[Any]) -> None:

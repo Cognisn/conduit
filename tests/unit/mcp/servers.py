@@ -3,8 +3,10 @@
 Everything here is synthetic. The memory transport runs the server in the same event
 loop over anyio memory streams; ``LoopbackServer`` runs an ASGI app (the SDK's
 streamable HTTP or SSE app, or the fake authorisation server) under uvicorn on
-127.0.0.1, inside this worktree's slot unless ``CONDUIT_MCP_TEST_PORT_BASE`` says
-otherwise.
+127.0.0.1. With ``CONDUIT_MCP_TEST_PORT_BASE`` set (a worktree's slot base), each server
+takes its fixed offset in that block; without it, each takes a port the operating system
+assigns, kept for the whole test session, so suites run at once never collide on a
+fixed default (D0087).
 """
 
 from __future__ import annotations
@@ -28,17 +30,63 @@ from mcp.shared.memory import create_client_server_memory_streams
 from mcp.types import EmbeddedResource, ErrorData, ResourceLink, TextResourceContents
 from pydantic import AnyUrl
 
-#: The first port of this worktree's slot (24); offsets within the block are fixed below.
-PORT_BASE = int(os.environ.get("CONDUIT_MCP_TEST_PORT_BASE", "22400"))
-OFFSETS = {"http": 10, "sse": 11, "auth": 12, "protected": 13, "callback": 20, "callback2": 21}
+#: Each server's offset within a slot's block, when a base is set. The ``cli_`` names are
+#: the terminal interface's OAuth tests'.
+OFFSETS = {
+    "http": 10,
+    "sse": 11,
+    "auth": 12,
+    "protected": 13,
+    "callback": 20,
+    "callback2": 21,
+    "cli_auth": 50,
+    "cli_protected": 51,
+    "cli_callback": 52,
+}
+_ENVIRONMENT = os.environ.get("CONDUIT_MCP_TEST_PORT_BASE")
+#: The slot base, as set. Unset, it is the old fixed default, kept only for tests that
+#: still add their own offsets to it; use ``port(name)`` instead, which never collides.
+PORT_BASE = int(_ENVIRONMENT) if _ENVIRONMENT else 22400
 
 PIXEL = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg=="
 )
 
 
+def free_port() -> int:
+    """A loopback port the operating system assigns, free when it is returned."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        number: int = probe.getsockname()[1]
+        return number
+
+
+class PortPlan:
+    """Each server's port: its offset from ``base`` when one is set, otherwise a port the
+    operating system assigns on first use and keeps for the plan's life."""
+
+    def __init__(self, base: str | None) -> None:
+        self._base = int(base) if base else None
+        self._assigned: dict[str, int] = {}
+
+    def port(self, name: str) -> int:
+        offset = OFFSETS[name]
+        if self._base is not None:
+            return self._base + offset
+        if name not in self._assigned:
+            taken = set(self._assigned.values())
+            number = free_port()
+            while number in taken:
+                number = free_port()
+            self._assigned[name] = number
+        return self._assigned[name]
+
+
+_PLAN = PortPlan(_ENVIRONMENT)
+
+
 def port(name: str) -> int:
-    return PORT_BASE + OFFSETS[name]
+    return _PLAN.port(name)
 
 
 def build_server(name: str = "example", **settings: Any) -> FastMCP:

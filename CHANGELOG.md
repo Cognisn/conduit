@@ -6,6 +6,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b6] - 2026-11-06
+
+Wave 8, second merge: agent runner, compaction and MCP follow-ups (`fix/0.1.0-runner-mcp-follow-ups`).
+
+### Changed
+
+- The agent runner ends a run whose compaction hook raises with `RunFailure.COMPACTION_FAILED`, keeping nothing of the error; cancellation still propagates.
+- Summary calls made during compaction count against the run's model-call and token budgets (`CompactionRequest.charge`, `ModelCallCharge`): a summary the budget refuses is never made, and one that reaches or passes the run's token budget ends the run as `BUDGET_EXHAUSTED`. `CompactionFailed` gains the reason `budget_exhausted`. Run results include summary calls in `model_calls` and `usage`.
+- The agent runner sends its events to the runtime's event sink under the runtime's capture policy unless given its own `events` or `capture`. A product that passed a sink only to `start()` now receives run events, and a runner given its own sink but no capture policy now uses the runtime's policy.
+- The agent runner and the MCP bridge use the core's untrusted-content sanitiser and frame (`conduit.core.untrusted`). MCP tool results are framed once, as `<<UNTRUSTED source="mcp" server=".." tool=".." nonce="..">>` blocks in place of `<untrusted-content>` and its note line, with long base64 runs replaced and the truncation note in the core's form; `McpTool` declares `untrusted_framed`.
+- MCP tool descriptions, and the descriptions and titles in their input schemas, are made safe before they reach the model, and a tool whose schema keys or other schema text hold hidden characters, line or paragraph separators or frame markers is left out.
+
+### Removed
+
+- `conduit.mcp.frame_untrusted` (use `conduit.core.untrusted.frame_untrusted`).
+
+### Fixed
+
+- `LoopbackSignIn` refuses an authorisation URL without exactly one state.
+- Clients of a token store that cannot be weakly referenced or hashed share one refresh, and an unhashable store's refresh lock goes with the store.
+- The token store conformance suite round-trips a long token type.
+- MCP loopback test servers take free ports when no slot port base is set.
+
+## [0.1.0b5] - 2026-11-06
+
+Wave 8, first merge: core and tripwire follow-ups (`fix/0.1.0-core-follow-ups`).
+
+### Added
+
+- `conduit.core.untrusted` gives every layer one untrusted-content sanitiser and frame:
+  - `sanitise_untrusted` escapes anything resembling a frame marker of either style, including fullwidth, small-form, guillemet and HTML-escaped lookalikes and markers broken up by control or format characters; it also shows invisible and surrogate characters and replaces long base64 runs.
+  - `frame_untrusted` frames sanitised text with a fresh nonce, a code-chosen source, record and further attributes, and a length cap.
+  - `untrusted_text_block` gives a framed content block.
+- `Runtime.events` and `Runtime.capture`, read only: the product's event sink under the runtime's capture policy, which cannot be loosened through it, and the policy itself.
+- A `testing` extra declaring pytest, which the conformance suites' pytest plugin needs.
+
+### Changed
+
+- `start()` accepts embedding task classes alongside chat ones and leaves them, their assignments and any provider only they use to `start_embeddings`.
+- `FanOutSink.policy` is read only.
+- The client-construction tripwire also covers `MeteredEmbedder`, the local embeddings client and `SentenceTransformer`.
+- The import tripwire names the shared Entra ID module as azure.identity's only owner and lets only `conduit.testing` import pytest.
+- The event-content tripwire fails, rather than skips, a module whose extra is missing when `CONDUIT_ALL_EXTRAS=require`, and CI's test job sets it.
+
+### Fixed
+
+- An event sink's cancellation propagates through the fan-out unchanged.
+- Closing a sync facade loop leaves no task to be logged as destroyed while pending.
+
 ## [0.1.0b4] - 2026-11-06
 
 Wave 7, third and last merge: top-level re-exports and guide text (`feat/0.1.0-public-exports`).

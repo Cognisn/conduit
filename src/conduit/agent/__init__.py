@@ -11,6 +11,7 @@ from conduit.agent.contracts import ContractCheck, OutputContract, parse_output
 from conduit.agent.hooks import (
     CompactionHook,
     CompactionRequest,
+    ModelCallCharge,
     OutputFilter,
     SystemHook,
     ToolWrapper,
@@ -66,6 +67,7 @@ __all__ = [
     "CompactionRequest",
     "ContractCheck",
     "Exhausted",
+    "ModelCallCharge",
     "OutputContract",
     "OutputContractFailed",
     "OutputFilter",

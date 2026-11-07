@@ -10,6 +10,11 @@ Each provider is built for the assignments resolved to it, and serves only those
 call through ``Runtime.providers`` or ``TaskBinding.provider`` that names another
 model, or another task class's model, is refused with ``ModelNotAssigned`` before any
 client call. ``TaskBinding.request`` builds requests that stay within the assignment.
+
+Embedding task classes may be passed to ``start`` with the chat ones; it leaves them, and
+any provider only they use, to ``conduit.embeddings.start_embeddings``. The runtime
+exposes its event sink and capture policy (``Runtime.events``, ``Runtime.capture``), read
+only, so a layer built on it can default to them.
 """
 
 from __future__ import annotations
@@ -23,7 +28,7 @@ from pydantic import Field, field_validator
 
 from conduit.core.catalogue import Catalogue, CatalogueOverlay, default_catalogue
 from conduit.core.errors import ConfigurationError
-from conduit.core.events import CapturePolicy, EventSink
+from conduit.core.events import CapturePolicy, EventSink, FanOutSink
 from conduit.core.identifiers import IDENTIFIER_PATTERN
 from conduit.core.registry import MeteredProvider, ProviderFactory, ProviderRegistry
 from conduit.core.residency import ResidencyPolicy
@@ -109,7 +114,13 @@ def task_request(
 
 
 class Runtime:
-    """Resolved assignments and built providers, from ``start``."""
+    """Resolved assignments and built providers, from ``start``.
+
+    ``events`` and ``capture`` are read only, so a layer (the agent runner, say) can
+    default to the runtime's own: ``capture`` is the settings' capture policy, and
+    ``events`` delivers to the product's sink (the one given to ``start``; none means
+    events go nowhere), holding every event to ``capture`` whatever its emitter did.
+    """
 
     def __init__(
         self,
@@ -118,11 +129,25 @@ class Runtime:
         assignments: Assignments,
         providers: Mapping[str, MeteredProvider],
         registry: ProviderRegistry,
+        events: EventSink | None = None,
+        capture: CapturePolicy | None = None,
     ) -> None:
         self.catalogue = catalogue
         self.assignments = assignments
         self.providers = dict(providers)
         self.registry = registry
+        self._capture = capture if capture is not None else CapturePolicy()
+        self._events = FanOutSink([events] if events is not None else [], policy=self._capture)
+
+    @property
+    def events(self) -> EventSink:
+        """The runtime's event sink: the product's, under the runtime's capture policy."""
+        return self._events
+
+    @property
+    def capture(self) -> CapturePolicy:
+        """The runtime's content-capture policy (the settings' ``capture``)."""
+        return self._capture
 
     def for_task(self, task_class: str) -> TaskBinding:
         assignment = self.assignments.for_task(task_class)
@@ -141,7 +166,25 @@ async def start(
     events: EventSink | None = None,
     catalogue: Catalogue | None = None,
 ) -> Runtime:
-    """Resolve and build. Raises a ``ConfigurationError`` before any client is made."""
+    """Resolve and build. Raises a ``ConfigurationError`` before any client is made.
+
+    Embedding task classes (a floor whose ``kind`` is ``embedding``) may be given with
+    the chat ones, so one list and one ``ConduitSettings`` serve both start-ups: they,
+    their assignments and any provider only they are assigned to are left for
+    ``conduit.embeddings.start_embeddings``, which resolves and builds them through the
+    registry's embedding adapters. Every other configured provider is validated here.
+    """
+    declared = list(task_classes)
+    seen: set[str] = set()
+    for task in declared:
+        if task.name in seen:
+            raise ConfigurationError(f"task class {task.name!r} is declared twice")
+        seen.add(task.name)
+    embedding = {task.name for task in declared if task.floor.kind == "embedding"}
+    chosen = {name: a for name, a in settings.assignments.items() if name not in embedding}
+    embedding_only = {
+        a.provider for name, a in settings.assignments.items() if name in embedding
+    } - {a.provider for a in chosen.values()}
     base = catalogue if catalogue is not None else default_catalogue()
     applied = base.apply(*settings.catalogue)
     registry = ProviderRegistry(
@@ -153,11 +196,13 @@ async def start(
         factories=factories,
     )
     validated = {
-        name: registry.validate(name, provider) for name, provider in settings.providers.items()
+        name: registry.validate(name, provider)
+        for name, provider in settings.providers.items()
+        if name not in embedding_only
     }
     assignments = resolve_assignments(
-        task_classes,
-        settings.assignments,
+        [task for task in declared if task.name not in embedding],
+        chosen,
         validated,
         applied,
         settings.residency,
@@ -176,5 +221,10 @@ async def start(
         await registry.aclose()
         raise
     return Runtime(
-        catalogue=applied, assignments=assignments, providers=providers, registry=registry
+        catalogue=applied,
+        assignments=assignments,
+        providers=providers,
+        registry=registry,
+        events=events,
+        capture=settings.capture,
     )
