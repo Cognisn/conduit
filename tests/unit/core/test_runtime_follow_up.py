@@ -120,6 +120,18 @@ class TestSinkAndCapture:
         await runtime.events.emit(_tool_event())
         await runtime.aclose()
 
+    async def test_capture_cannot_be_loosened_through_the_sink(self) -> None:
+        sink = MemoryEventSink()
+        runtime = await _start(_settings(), events=sink)
+        with pytest.raises(AttributeError):
+            setattr(runtime.events, "policy", CapturePolicy(prompts=True, tool_content=True))  # noqa: B010
+        await runtime.events.emit(_tool_event())
+        (received,) = sink.events
+        assert isinstance(received, ToolCallEvent)
+        assert received.arguments.text is None
+        assert runtime.capture == CapturePolicy()
+        await runtime.aclose()
+
     @pytest.mark.parametrize("name", ["events", "capture"])
     async def test_both_are_read_only(self, name: str) -> None:
         runtime = await _start(_settings())

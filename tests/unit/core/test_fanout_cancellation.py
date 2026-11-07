@@ -11,7 +11,7 @@ import logging
 
 import pytest
 
-from conduit.core.events import Event, FanOutSink
+from conduit.core.events import CapturePolicy, Event, FanOutSink
 
 
 def _event() -> Event:
@@ -115,6 +115,13 @@ class TestCancellingTheFanOut:
             async with asyncio.timeout(0.05):
                 await FanOutSink([sink]).emit(_event())
         assert sink.cancelled
+
+
+def test_the_fan_outs_policy_is_read_only() -> None:
+    bus = FanOutSink([], policy=CapturePolicy())
+    with pytest.raises(AttributeError):
+        setattr(bus, "policy", CapturePolicy(prompts=True))  # noqa: B010
+    assert bus.policy == CapturePolicy()
 
 
 class TestOtherFailuresKeepTodaysBehaviour:

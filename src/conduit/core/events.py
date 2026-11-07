@@ -277,11 +277,19 @@ async def _deliver(sink: EventSink, event: Event) -> Exception | asyncio.Cancell
 
 
 class FanOutSink:
-    """Delivers each event to every sink, concurrently, under one capture policy."""
+    """Delivers each event to every sink, concurrently, under one capture policy.
+
+    The policy is fixed when the fan-out is made: ``policy`` is read only, so whoever is
+    handed the sink cannot loosen what it lets through."""
 
     def __init__(self, sinks: Iterable[EventSink], *, policy: CapturePolicy | None = None) -> None:
         self._sinks = tuple(sinks)
-        self.policy = policy or CapturePolicy()
+        self._policy = policy or CapturePolicy()
+
+    @property
+    def policy(self) -> CapturePolicy:
+        """The capture policy every event is held to (immutable, and read only here)."""
+        return self._policy
 
     async def emit(self, event: Event) -> None:
         """Deliver ``event`` to every sink. A cancellation always propagates unchanged:
