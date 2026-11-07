@@ -105,6 +105,9 @@ jobs:
       - run: pytest -ra
         env:
           CONDUIT_POSTGRES_TESTS: skip
+          # Every runtime extra is installed above, so a module whose extra is
+          # missing fails the event-content tripwire rather than skipping (Q0049).
+          CONDUIT_ALL_EXTRAS: require
 
   # The sql extra against a real Postgres, started by testcontainers. Ubuntu only:
   # macOS runners have no Docker and Windows runners run Windows containers.
