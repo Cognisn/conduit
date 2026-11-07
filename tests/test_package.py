@@ -218,6 +218,16 @@ REEXPORTS: dict[str, tuple[str, ...]] = {
         "start_sync",
         "sync",
     ),
+    # The one untrusted-content sanitiser and frame every layer uses (D0107); its
+    # tuning constants stay in conduit.core.untrusted's own namespace.
+    "conduit.core.untrusted": (
+        "FRAMING_NOTE",
+        "UntrustedBlock",
+        "UntrustedText",
+        "frame_untrusted",
+        "sanitise_untrusted",
+        "untrusted_text_block",
+    ),
 }
 
 

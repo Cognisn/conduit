@@ -125,8 +125,17 @@ from conduit.core.types import (
     ToolUseBlock,
     Usage,
 )
+from conduit.core.untrusted import (
+    FRAMING_NOTE,
+    UntrustedBlock,
+    UntrustedText,
+    frame_untrusted,
+    sanitise_untrusted,
+    untrusted_text_block,
+)
 
 __all__ = [
+    "FRAMING_NOTE",
     "ApprovalDecision",
     "ApprovalHandler",
     "ApprovalRequest",
@@ -223,17 +232,22 @@ __all__ = [
     "UndeclaredModel",
     "UnknownTaskClass",
     "UnknownTool",
+    "UntrustedBlock",
+    "UntrustedText",
     "Usage",
     "UsageReported",
     "__version__",
     "collect",
     "default_catalogue",
+    "frame_untrusted",
     "guarded_client",
     "refusals",
     "resolve_assignments",
+    "sanitise_untrusted",
     "start",
     "start_sync",
     "sync",
+    "untrusted_text_block",
 ]
 
 #: The package version, read from ``_version.txt`` (written only by scripts/stamp_version.py).
