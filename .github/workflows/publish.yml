@@ -1,0 +1,88 @@
+# Publish cognisn-conduit to PyPI with trusted publishing (OIDC): no token is stored
+# in the repository. Run by hand only (Actions > Publish > Run workflow), choosing the
+# branch and typing the version to publish, which must match src/conduit/_version.txt
+# on that branch. A pre-release (a, b or rc) publishes only from a release branch; a
+# final version only from main. Run it only on a commit whose CI is green.
+#
+# PyPI side: the trusted publisher for cognisn-conduit names repository Cognisn/conduit,
+# workflow publish.yml and environment pypi.
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, exactly as in src/conduit/_version.txt (for example 0.1.0rc1)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Check the version and the branch
+        env:
+          REQUESTED: ${{ inputs.version }}
+          REF: ${{ github.ref }}
+        run: |
+          actual=$(tr -d '[:space:]' < src/conduit/_version.txt)
+          if [ "$REQUESTED" != "$actual" ]; then
+            echo "Requested $REQUESTED but $REF holds $actual" >&2
+            exit 1
+          fi
+          if echo "$actual" | grep -Eq '(a|b|rc)[0-9]+$'; then
+            case "$REF" in
+              refs/heads/release/*) ;;
+              *) echo "A pre-release publishes only from a release branch, not $REF" >&2; exit 1 ;;
+            esac
+          elif echo "$actual" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            if [ "$REF" != "refs/heads/main" ]; then
+              echo "A final version publishes only from main, not $REF" >&2
+              exit 1
+            fi
+          else
+            echo "$actual is neither a final version nor an a, b or rc pre-release" >&2
+            exit 1
+          fi
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check --strict dist/*
+      - name: Install the wheel into a clean environment and check its version
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          python -m venv "$RUNNER_TEMP/clean"
+          "$RUNNER_TEMP/clean/bin/pip" install dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/clean/bin/python" -c "import conduit, os, sys; v = conduit.__version__; print(v); sys.exit(v != os.environ['REQUESTED'])"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/cognisn-conduit/${{ inputs.version }}/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A publish workflow, run by hand, that builds, checks and publishes to PyPI with trusted publishing. It refuses a version that does not match the branch's version file, a pre-release from anywhere but a release branch, and a final version from anywhere but `main`.
+
 ## [0.1.0b9] - 2026-11-07
 
 Wave 9: one hidden-character rule for the untrusted-content sanitiser and the MCP bridge (`fix/0.1.0-mcp-schema-hidden`).
