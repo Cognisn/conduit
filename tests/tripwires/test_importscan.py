@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from importlib import metadata
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
 from tests.tripwires.importscan import (
     OPTIONAL_LIBRARIES,
@@ -195,6 +197,73 @@ def test_the_real_table_lists_httpx_for_ollama_and_mcp_only(tmp_path: Path) -> N
         ("conduit.stores", "httpx"),
         ("conduit.providers.openai_compat", "httpx"),
     }
+
+
+ENTRA = "conduit.providers.openai_compat.entra"
+
+
+def test_azure_identity_is_owned_by_the_shared_entra_id_module_only(tmp_path: Path) -> None:
+    # The Foundry Entra ID path: the OpenAI-compatible and anthropic adapters both reach
+    # azure.identity through conduit.providers.openai_compat.entra, and nothing else in
+    # either adapter imports it.
+    assert OPTIONAL_LIBRARIES["azure.identity"] == (ENTRA,)
+    src = _tree(
+        tmp_path,
+        {
+            "conduit/providers/__init__.py": "",
+            "conduit/providers/openai_compat/__init__.py": "",
+            "conduit/providers/openai_compat/entra.py": (
+                "import importlib\nimportlib.import_module('azure.identity.aio')\n"
+            ),
+            "conduit/providers/openai_compat/provider.py": "import azure.identity\n",
+            "conduit/providers/anthropic/__init__.py": "",
+            "conduit/providers/anthropic/provider.py": "from azure.identity import aio\n",
+            "conduit/agent/__init__.py": "import azure.identity.aio\n",
+        },
+    )
+    found = {(e.importer, e.imported) for e in optional_library_violations(scan_tree(src))}
+    assert found == {
+        ("conduit.providers.openai_compat.provider", "azure.identity"),
+        ("conduit.providers.anthropic.provider", "azure.identity"),
+        ("conduit.providers.anthropic.provider", "azure.identity.aio"),
+        ("conduit.agent", "azure.identity.aio"),
+    }
+
+
+def test_the_real_tree_imports_azure_identity_only_in_the_entra_id_module() -> None:
+    importers = {e.importer for e in scan_tree() if e.imported.startswith("azure.identity")}
+    assert importers == {ENTRA}
+
+
+def test_the_anthropic_adapters_foundry_path_uses_the_entra_id_module() -> None:
+    edges = scan_tree()
+    assert any(
+        e.importer == "conduit.providers.anthropic.provider" and e.imported.startswith(ENTRA)
+        for e in edges
+    )
+
+
+def test_pytest_is_owned_by_the_testing_layer_and_declared_by_its_extra(tmp_path: Path) -> None:
+    # Q0031: conduit.testing's pytest plugin imports pytest, which the testing extra
+    # declares; no other layer may import it.
+    assert OPTIONAL_LIBRARIES["pytest"] == ("conduit.testing",)
+    src = _tree(
+        tmp_path,
+        {
+            "conduit/testing/__init__.py": "",
+            "conduit/testing/conformance/__init__.py": "import pytest\n",
+            "conduit/agent/__init__.py": "import pytest\n",
+        },
+    )
+    found = {(e.importer, e.imported) for e in optional_library_violations(scan_tree(src))}
+    assert found == {("conduit.agent", "pytest")}
+    requirements = [Requirement(r) for r in metadata.requires("cognisn-conduit") or []]
+    testing = [
+        r.name
+        for r in requirements
+        if r.marker is not None and r.marker.evaluate({"extra": "testing"})
+    ]
+    assert testing == ["pytest"]
 
 
 MANTLE = "conduit.providers.bedrock_mantle"

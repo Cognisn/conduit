@@ -17,9 +17,16 @@ the factory method. ``getattr(module, "Name")()`` resolves like ``module.Name()`
 ``getattr(module, name)()`` with a computed name on a known SDK module counts as a
 construction.
 
-The scan also records every construction of ``MeteredProvider``: only the registry may
-wrap a provider, since the registry is where a provider is bound to its resolved
-assignments or to the residency policy.
+The scan also records every construction of ``MeteredProvider`` and ``MeteredEmbedder``:
+only the registry may wrap a provider or an embedder, since the registry is where each
+is bound to its resolved assignments or to the residency policy.
+
+Local embedding models are clients too. ``LocalModels`` (the local provider's client) is
+a constructor like any SDK's, allowed only in a ``create_client``; it loads each
+``sentence_transformers.SentenceTransformer`` itself, so a call of that name, however it
+is reached, is allowed only inside ``LocalModels`` in ``conduit.embeddings.local.provider``
+(or a ``create_client``). Every such call is recorded, so the tripwire can prove it sees
+the real one.
 """
 
 from __future__ import annotations
@@ -70,8 +77,19 @@ CLIENT_CONSTRUCTORS: frozenset[str] = frozenset(
         "google.genai.client.Client",
         "ollama.Client",
         "ollama.AsyncClient",
+        # A local embedding model, and the local provider's client that loads them.
+        "sentence_transformers.SentenceTransformer",
+        "conduit.embeddings.local.provider.LocalModels",
     }
 )
+
+#: The local model class. sentence-transformers is held on the ``LocalModels`` client
+#: (made only by the local factory's ``create_client``), which loads each model on first
+#: use, so a call named ``SentenceTransformer`` counts as a construction however it is
+#: reached, and is allowed only inside ``LocalModels`` or a ``create_client``.
+LOCAL_MODEL = "SentenceTransformer"
+LOCAL_MODELS_MODULE = "conduit.embeddings.local.provider"
+LOCAL_MODELS_CLASS = "LocalModels"
 
 #: Generic HTTP clients count as provider clients only inside the provider layers
 #: (the MCP client, for example, has its own HTTP stack).
@@ -82,7 +100,9 @@ CLIENT_LAYERS: tuple[str, ...] = ("conduit.providers", "conduit.embeddings")
 FACTORY_METHOD = "create_client"
 REGISTRY = "conduit.core.registry"
 METERED = "MeteredProvider"
-METERED_QUALIFIED = f"{REGISTRY}.{METERED}"
+METERED_EMBEDDER = "MeteredEmbedder"
+#: The registry's metering wrappers: only the registry may construct either.
+METERED_CLASSES: tuple[str, ...] = (METERED, METERED_EMBEDDER)
 BEDROCK_SERVICE_PREFIX = "bedrock"
 #: Session methods that make a service client from a service name.
 SESSION_CLIENT_METHODS: frozenset[str] = frozenset({"client", "create_client"})
@@ -172,9 +192,11 @@ class _Visitor(ast.NodeVisitor):
         self.path = path
         self.aliases = aliases
         self.functions: list[str] = []
+        self.classes: list[str] = []
         self.constructions: list[Finding] = []
         self.factory_calls: list[Finding] = []
         self.metered: list[Finding] = []
+        self.local_models: list[Finding] = []
 
     def _function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         self.functions.append(node.name)
@@ -183,6 +205,26 @@ class _Visitor(ast.NodeVisitor):
 
     visit_FunctionDef = _function
     visit_AsyncFunctionDef = _function
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.classes.append(node.name)
+        self.generic_visit(node)
+        self.classes.pop()
+
+    def _names_local_model(self, func: ast.AST, target: str | None) -> bool:
+        """A call of ``SentenceTransformer``, by any route: resolved, through an
+        attribute of an unresolved object, or by ``getattr`` with the literal name."""
+        if target is not None and target.rpartition(".")[2] == LOCAL_MODEL:
+            return True
+        if isinstance(func, ast.Attribute | ast.Name):
+            return (func.attr if isinstance(func, ast.Attribute) else func.id) == LOCAL_MODEL
+        return (
+            isinstance(func, ast.Call)
+            and isinstance(func.func, ast.Name)
+            and func.func.id == "getattr"
+            and len(func.args) >= 2
+            and _literal(func.args[1]) == LOCAL_MODEL
+        )
 
     def _getattr_target(self, node: ast.AST) -> tuple[str | None, bool]:
         """For ``getattr(module, "Name")``: the dotted target, and whether it is a
@@ -208,8 +250,17 @@ class _Visitor(ast.NodeVisitor):
         if target is None:
             target, dynamic = self._getattr_target(node.func)
         in_layer = any(within(self.module, layer) for layer in CLIENT_LAYERS)
+        local_model = self._names_local_model(node.func, target)
+        if local_model:
+            target = target or f"<object>.{LOCAL_MODEL}"
+            self.local_models.append(
+                Finding(self.module, self.path, node.lineno, f"constructs {target}")
+            )
         constructs = (
-            dynamic or target in CLIENT_CONSTRUCTORS or (target in HTTP_CLIENTS and in_layer)
+            dynamic
+            or local_model
+            or target in CLIENT_CONSTRUCTORS
+            or (target in HTTP_CLIENTS and in_layer)
         )
         session_call = (
             isinstance(node.func, ast.Attribute)
@@ -231,7 +282,11 @@ class _Visitor(ast.NodeVisitor):
                     + (f" in {'.'.join(self.functions)}" if self.functions else " at module level"),
                 )
             )
-            allowed = in_layer and FACTORY_METHOD in self.functions
+            allowed = (in_layer and FACTORY_METHOD in self.functions) or (
+                local_model
+                and self.module == LOCAL_MODELS_MODULE
+                and LOCAL_MODELS_CLASS in self.classes
+            )
             if allowed:
                 self.constructions.pop()
         called = (
@@ -241,11 +296,12 @@ class _Visitor(ast.NodeVisitor):
             if isinstance(node.func, ast.Name)
             else None
         )
-        bare = isinstance(node.func, ast.Name) and node.func.id == METERED and target is None
-        if target == METERED_QUALIFIED or bare:
-            self.metered.append(
-                Finding(self.module, self.path, node.lineno, f"constructs {METERED}")
-            )
+        for metered in METERED_CLASSES:
+            bare = isinstance(node.func, ast.Name) and node.func.id == metered and target is None
+            if target == f"{REGISTRY}.{metered}" or bare:
+                self.metered.append(
+                    Finding(self.module, self.path, node.lineno, f"constructs {metered}")
+                )
         # An SDK session's create_client("service") is a construction, not the factory.
         if called == FACTORY_METHOD and not session_call:
             self.factory_calls.append(
@@ -256,28 +312,31 @@ class _Visitor(ast.NodeVisitor):
 
 @dataclass(frozen=True)
 class Scan:
-    constructions: list[Finding]  # constructions outside an allowed create_client
+    constructions: list[Finding]  # constructions outside an allowed place
     factory_calls: list[Finding]  # every call of create_client
-    metered: list[Finding]  # every construction of MeteredProvider
+    metered: list[Finding]  # every construction of MeteredProvider or MeteredEmbedder
+    local_models: list[Finding]  # every construction of a local model, allowed or not
 
 
 def scan_source(source: str, module: str, *, path: Path) -> Scan:
     tree = ast.parse(source, filename=str(path))
     visitor = _Visitor(module, path, _aliases(tree))
     visitor.visit(tree)
-    return Scan(visitor.constructions, visitor.factory_calls, visitor.metered)
+    return Scan(visitor.constructions, visitor.factory_calls, visitor.metered, visitor.local_models)
 
 
 def scan_tree(src_root: Path = SRC_ROOT) -> Scan:
     constructions: list[Finding] = []
     factory_calls: list[Finding] = []
     metered: list[Finding] = []
+    local_models: list[Finding] = []
     for path in source_files(src_root):
         scan = scan_source(path.read_text(encoding="utf-8"), module_name(path, src_root), path=path)
         constructions += scan.constructions
         factory_calls += scan.factory_calls
         metered += scan.metered
-    return Scan(constructions, factory_calls, metered)
+        local_models += scan.local_models
+    return Scan(constructions, factory_calls, metered, local_models)
 
 
 def construction_violations(scan: Scan) -> list[Finding]:

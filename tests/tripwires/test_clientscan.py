@@ -299,6 +299,135 @@ def test_a_bedrock_mantle_client_outside_a_factory_is_caught(source: str) -> Non
     assert _constructions(source, "conduit.providers.bedrock_mantle.stray") != []
 
 
+LOCAL_PROVIDER = "conduit.embeddings.local.provider"
+
+
+@pytest.mark.parametrize(
+    ("source", "module"),
+    [
+        pytest.param(
+            """
+            import sentence_transformers
+            def load():
+                return sentence_transformers.SentenceTransformer("example-model")
+            """,
+            LOCAL_PROVIDER,
+            id="module-level-function",
+        ),
+        pytest.param(
+            """
+            class Other:
+                def load(self):
+                    return self._library.SentenceTransformer("example-model")
+            """,
+            LOCAL_PROVIDER,
+            id="another-class-through-an-attribute",
+        ),
+        pytest.param(
+            """
+            class LocalModels:
+                def load(self):
+                    return self._library.SentenceTransformer("example-model")
+            """,
+            "conduit.embeddings.local.stray",
+            id="a-class-of-the-same-name-elsewhere",
+        ),
+        pytest.param(
+            """
+            def load(library):
+                return getattr(library, "SentenceTransformer")("example-model")
+            """,
+            LOCAL_PROVIDER,
+            id="getattr-on-an-unknown-object",
+        ),
+        pytest.param(
+            """
+            from sentence_transformers import SentenceTransformer as Model
+            model = Model("example-model")
+            """,
+            "conduit.agent.runner",
+            id="from-import-alias-outside-the-layer",
+        ),
+    ],
+)
+def test_a_local_model_outside_the_registry_built_client_is_caught(
+    source: str, module: str
+) -> None:
+    found = _constructions(source, module)
+    assert len(found) == 1 and "SentenceTransformer" in found[0]
+
+
+def test_an_aliased_local_model_from_another_module_path_is_caught() -> None:
+    # Neither a known constructor's path nor the class's own name at the call: only the
+    # resolved target's last part names it.
+    source = """
+    from sentence_transformers.SentenceTransformer import SentenceTransformer as Model
+    model = Model("example-model")
+    """
+    found = _constructions(source, "conduit.agent.runner")
+    assert len(found) == 1 and "SentenceTransformer" in found[0]
+    scan = scan_source(textwrap.dedent(source), "conduit.agent.runner", path=PATH)
+    assert len(scan.local_models) == 1
+
+
+def test_a_computed_name_on_sentence_transformers_is_a_construction() -> None:
+    source = """
+    import sentence_transformers as library
+    def load(name):
+        return getattr(library, name)("example-model")
+    """
+    found = _constructions(source, LOCAL_PROVIDER)
+    assert len(found) == 1 and "sentence_transformers" in found[0]
+
+
+def test_a_local_model_inside_the_registry_built_client_is_allowed() -> None:
+    source = """
+    class LocalModels:
+        def load(self, model):
+            return self._library.SentenceTransformer(model, device="cpu")
+    """
+    assert _constructions(source, LOCAL_PROVIDER) == []
+    scan = scan_source(textwrap.dedent(source), LOCAL_PROVIDER, path=PATH)
+    assert len(scan.local_models) == 1  # seen, so the tree check cannot pass vacuously
+
+
+def test_the_local_models_client_may_be_made_only_in_create_client() -> None:
+    stray = """
+    from conduit.embeddings.local.provider import LocalModels
+    def make(library, settings):
+        return LocalModels(library, settings, None)
+    """
+    found = _constructions(stray, "conduit.embeddings.local.factory")
+    assert len(found) == 1 and "LocalModels" in found[0]
+    allowed = """
+    from conduit.embeddings.local.provider import LocalModels
+    class Factory:
+        def create_client(self, settings, secrets):
+            def build():
+                return LocalModels(library, settings, None)
+            return build()
+    """
+    assert _constructions(allowed, "conduit.embeddings.local.factory") == []
+
+
+def test_a_metered_embedder_may_be_made_only_by_the_registry() -> None:
+    source = """
+    from conduit.core.registry import MeteredEmbedder as Metered
+
+    def wrap(inner, settings, catalogue, events):
+        return Metered(inner, name="p", settings=settings, catalogue=catalogue, events=events)
+    """
+    assert _metered(source, "conduit.core.registry") == []
+    found = _metered(source, "conduit.embeddings.runtime")
+    assert len(found) == 1 and "MeteredEmbedder" in found[0]
+    bare = """
+    def wrap(inner):
+        return MeteredEmbedder(inner)
+    """
+    assert _metered(bare, "conduit.core.registry") == []
+    assert len(_metered(bare, "conduit.embeddings.runtime")) == 1
+
+
 def test_a_bedrock_mantle_client_inside_create_client_is_allowed() -> None:
     source = """
     import importlib

@@ -43,7 +43,9 @@ OPTIONAL_LIBRARIES: Mapping[str, tuple[str, ...]] = {
     # The anthropic SDK also serves Claude on bedrock-mantle (its mantle client).
     "anthropic": ("conduit.providers.anthropic", "conduit.providers.bedrock_mantle"),
     "openai": ("conduit.providers.openai_compat",),
-    "azure.identity": ("conduit.providers.openai_compat",),
+    # Microsoft Entra ID for Foundry, behind the openai and anthropic extras. Both
+    # adapters reach it through this one shared module, the only one that imports it.
+    "azure.identity": ("conduit.providers.openai_compat.entra",),
     "google.genai": ("conduit.providers.gemini",),
     "google.generativeai": ("conduit.providers.gemini",),
     "ollama": ("conduit.providers.ollama",),
@@ -64,6 +66,8 @@ OPTIONAL_LIBRARIES: Mapping[str, tuple[str, ...]] = {
     "opentelemetry": ("conduit.integrations.otel",),
     # The cli extra's terminal rendering (Q0040).
     "rich": ("conduit.cli",),
+    # The testing extra: conduit.testing's conformance suites are a pytest plugin (Q0031).
+    "pytest": ("conduit.testing",),
 }
 
 

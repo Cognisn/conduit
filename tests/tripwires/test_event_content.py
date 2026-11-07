@@ -19,6 +19,11 @@ Two halves, never skipped or weakened:
   marker reaches the sink from every class that has a content field. Every module that
   defines an event class must be listed in ``EVENT_MODULES``, so a new layer's events
   cannot be missed, and the scan must see every class each listed module defines.
+
+A module that cannot be imported because an optional extra is missing is skipped, with
+the extra named, only where not every extra is installed. Where every runtime extra is
+installed (CI's test job sets ``CONDUIT_ALL_EXTRAS=require``), it fails instead, so no
+listed module's events are ever passed over silently.
 """
 
 from __future__ import annotations
@@ -27,8 +32,10 @@ import base64
 import enum
 import importlib
 import json
+import os
 import pkgutil
 import types
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
@@ -82,6 +89,68 @@ def _state() -> ProviderStateBlock:
 _SCALARS = (int, float, bool, datetime, type(None))
 _OPTIONAL_ROOTS = {name.split(".")[0] for name in OPTIONAL_LIBRARIES}
 
+#: Set to ``require`` wherever every runtime extra is installed (CI's test job), so a
+#: module the scan cannot import for a missing extra fails the tripwire instead of being
+#: passed over. Unset, such a module is skipped locally with its extra named.
+EVERY_EXTRA_SWITCH = "CONDUIT_ALL_EXTRAS"
+
+#: The extra that installs each optional library's top-level package, for the skip
+#: message; ``None`` for one no extra installs.
+EXTRA_FOR_ROOT: Mapping[str, str | None] = {
+    "boto3": "bedrock",
+    "botocore": "bedrock",
+    "aioboto3": None,
+    "aiobotocore": None,
+    "anthropic": "anthropic",
+    "openai": "openai",
+    "azure": "openai",
+    "google": "gemini",
+    "ollama": None,
+    "httpx": "ollama",
+    "sentence_transformers": "local-embeddings",
+    "torch": "local-embeddings",
+    "transformers": "local-embeddings",
+    "mcp": "mcp",
+    "sqlalchemy": "sql",
+    "alembic": "sql",
+    "asyncpg": "sql",
+    "aiosqlite": "sql",
+    "konfig": "konfig",
+    "warden": "warden",
+    "opentelemetry": "otel",
+    "rich": "cli",
+    "pytest": "testing",
+}
+
+
+def every_extra_required() -> bool:
+    """Whether the switch says every runtime extra is installed. Any other value is an
+    error, so a misspelt switch cannot quietly turn the check off."""
+    value = os.environ.get(EVERY_EXTRA_SWITCH, "")
+    if value not in ("", "require"):
+        raise ValueError(f"{EVERY_EXTRA_SWITCH} must be unset or 'require'")
+    return value == "require"
+
+
+def excuse(module: str, error: ImportError) -> str:
+    """Why ``module`` may be passed over after ``error``.
+
+    Only a missing optional library excuses a module; any other ``ImportError`` is
+    raised again. With every extra required, a missing extra fails the test too.
+    """
+    root = (error.name or "").split(".")[0]
+    if root not in _OPTIONAL_ROOTS:
+        raise error
+    extra = EXTRA_FOR_ROOT.get(root)
+    reason = (
+        f"{module} needs the {extra} extra ({root} is not installed)"
+        if extra
+        else f"{module} needs {root}, which no extra installs"
+    )
+    if every_extra_required():
+        pytest.fail(f"{reason}, but {EVERY_EXTRA_SWITCH}=require says every extra is installed")
+    return reason
+
 
 def _import_everything() -> list[str]:
     imported = []
@@ -89,9 +158,7 @@ def _import_everything() -> list[str]:
         try:
             importlib.import_module(info.name)
         except ImportError as error:
-            # Only a missing optional extra may excuse a module; anything else fails.
-            if (error.name or "").split(".")[0] not in _OPTIONAL_ROOTS:
-                raise
+            excuse(info.name, error)
             continue
         imported.append(info.name)
     return imported
@@ -367,9 +434,7 @@ class TestEveryEventClass:
         try:
             loaded = importlib.import_module(module)
         except ImportError as error:
-            if (error.name or "").split(".")[0] not in _OPTIONAL_ROOTS:
-                raise
-            pytest.skip(f"{module} needs an optional extra that is not installed")
+            pytest.skip(excuse(module, error))
         defined = {
             value
             for value in vars(loaded).values()
