@@ -21,8 +21,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from conduit import ModelRequest, TextBlock, ToolResultBlock
-from conduit.core.tools import ToolCallContext, ToolOutcome
+from conduit import (
+    ModelRequest,
+    TextBlock,
+    ToolCallContext,
+    ToolOutcome,
+    ToolResultBlock,
+)
 from conduit.providers.stub import StubToolCall, StubTurn, echo
 
 _CALL = re.compile(r"^call\s+([A-Za-z][A-Za-z0-9_-]{0,63})\s*(.*)$", re.DOTALL)

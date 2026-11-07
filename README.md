@@ -48,8 +48,9 @@ The core install and the stub provider need no extra. [Setting up providers](htt
 | `mcp` | MCP client over the official SDK (stdio, streamable HTTP and SSE), with static credentials and an OAuth 2.1 client |
 | `sql` | SQL transcript and token stores (SQLAlchemy; Postgres and SQLite) with their own schema and migrations |
 | `konfig` | konfig settings loader and secret resolver |
-| `warden` | Records conduit events in warden's audit trail (metadata only). 37 runtime packages with the core, including psycopg (LGPL-3.0, a reviewed licence exception) |
+| `warden` | Records conduit events in warden's audit trail (metadata only). The extra installs 32 runtime packages on Linux and Windows beyond the core's 5 (37 in all, as `python scripts/licence_audit.py --extra warden` counts them; a few fewer on macOS), including psycopg (LGPL-3.0) under its named licence exception in the licence audit |
 | `otel` | OpenTelemetry spans and metrics (the OpenTelemetry API; the product supplies the SDK and exporters) |
+| `testing` | pytest, for the conformance suites' pytest plugin (`conduit.testing.conformance`) |
 | `cli` | The `conduit` terminal interface demonstrating the public API (`uvx --from "cognisn-conduit[cli]" conduit`); installs rich and the `mcp` extra |
 
 The agent runner, compaction, skills and the in-memory and JSON stores are part of the core install.
@@ -109,7 +110,7 @@ The full design is in [docs/design/architecture.md](https://github.com/Cognisn/c
 ## Development
 
 ```sh
-pip install -e ".[dev,all-providers,bedrock-mantle,cli,konfig,local-embeddings,mcp,otel,sql,warden]"
+pip install -e ".[dev,all-providers,bedrock-mantle,cli,konfig,local-embeddings,mcp,otel,sql,testing,warden]"
 ruff format --check .
 ruff check .
 mypy --strict
@@ -118,7 +119,7 @@ python scripts/licence_audit.py
 python scripts/licence_audit.py --all-extras
 ```
 
-The default test run never calls a live model or service. Tests marked `integration` need live providers and are skipped by default. Every Python example in this README and in the guides is executed by `tests/docs/test_guides.py`.
+The default test run never calls a live model or service. Tests marked `integration` need live providers and are skipped by default. Every Python example in this README and in the guides is executed by `tests/docs/test_guides.py`; a guide whose examples need an extra you have not installed is skipped, naming the extra. With every extra installed, set `CONDUIT_ALL_EXTRAS=require`, as CI does: a missing extra then fails these tests and the event-content tripwire instead of skipping them, and any other value of the variable is refused. The MCP tests' loopback servers take ports the operating system assigns, unless `CONDUIT_MCP_TEST_PORT_BASE` is set to a slot's base port.
 
 ## Licence
 

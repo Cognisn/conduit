@@ -22,10 +22,8 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from conduit import ConduitError, Event, Usage
-from conduit.agent import sanitise_untrusted
+from conduit import ConduitError, Event, ModelCallFinishedEvent, Usage, sanitise_untrusted
 from conduit.compaction import CompactionEvent
-from conduit.core.events import ModelCallFinishedEvent
 from conduit.skills import (
     SkillLoadedEvent,
     SkillRefusedEvent,

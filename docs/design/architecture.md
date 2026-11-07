@@ -50,7 +50,8 @@ src/conduit/
     registry.py    the provider registry, MeteredProvider and MeteredEmbedder, the model
                    call and embedding call events, and guarded_client (the client
                    construction guard)
-    runtime.py     ConduitSettings, start, Runtime and TaskBinding
+    runtime.py     ConduitSettings, start, Runtime (with its read-only events sink
+                   and capture policy) and TaskBinding
     settings.py    ProviderSettings and AssignmentSettings; credential and echo rules
     catalogue.py   the catalogue, its entries and overlays; data/catalogue.json
     tasks.py       task classes, capability floors and the resolution of assignments
@@ -61,6 +62,7 @@ src/conduit/
     transcript.py  transcript entries, Transcript and the transcript store protocol
     backends.py    token store, skill source and approval handler protocols
     facade.py      the sync facade: LoopThread, sync, start_sync and the sync views
+    untrusted.py   the untrusted-content sanitiser and frame every layer uses
     errors.py, identifiers.py
   providers/       stub (no extra), bedrock, bedrock_mantle, anthropic, openai_compat
                    (OpenAI, X.AI and Microsoft Foundry, with entra.py shared by the
@@ -69,7 +71,7 @@ src/conduit/
                    gemini, ollama and stub embedders; local/ (sentence-transformers,
                    behind local-embeddings); builtin_embedding_factories()
   agent/           runner (AgentRunner, AgentTask, AgentRun), budgets, contracts
-                   (output contracts, one retry), untrusted (framing), hooks (output
+                   (output contracts, one retry), untrusted (the core's framing), hooks (output
                    filter, approvals mark, compaction, system and tool hooks), events,
                    results
   compaction/      compactor (the runner's compaction hook, forced compaction),
@@ -97,7 +99,7 @@ src/conduit/
                    demonstration script and tools)
 ```
 
-Hatchling reads `_version.txt` for the distribution metadata, and `conduit.__version__` reads it at import. The public API is whatever is importable from `conduit`, or from a layer's package (`conduit.agent`, `conduit.stores`, `conduit.mcp`, `conduit.providers.bedrock`), without a leading underscore. Every core name an integration needs (the types, protocols, events, errors, tools, transcript entries, backend models, assignments and the sync facade's `LoopThread`) is re-exported from `conduit` itself, and is imported from there rather than from the `conduit.core` submodule it lives in. Each other layer's names are imported from its package; the top level never imports a layer, so importing `conduit` loads the core alone. `tests/test_package.py` pins both sets of exports, and the documentation's examples are checked to import each name from the package that exports it, never a core module or a covered layer module as a module, and never with `import *`.
+Hatchling reads `_version.txt` for the distribution metadata, and `conduit.__version__` reads it at import. The public API is whatever is importable from `conduit`, or from a layer's package (`conduit.agent`, `conduit.stores`, `conduit.mcp`, `conduit.providers.bedrock`), without a leading underscore. Every core name an integration needs (the types, protocols, events, errors, tools, transcript entries, backend models, assignments and the sync facade's `LoopThread`) is re-exported from `conduit` itself, and is imported from there rather than from the `conduit.core` submodule it lives in. Each other layer's names are imported from its package; the top level never imports a layer, so importing `conduit` loads the core alone. `tests/test_package.py` pins both sets of exports, and the documentation's examples are checked to import each name from the package that exports it, never a core module or a covered layer module as a module, never a private module path (a segment with a leading underscore), and never with `import *`. A document whose examples import a layer behind an extra that is not installed is skipped, naming the extra; CI installs every extra, so nothing is skipped there.
 
 ## 4. Dependency direction
 
@@ -113,7 +115,7 @@ Hatchling reads `_version.txt` for the distribution metadata, and `conduit.__ver
 - `conduit.core` imports nothing from any other conduit package, nor the top-level `conduit` package. Its only runtime dependency is pydantic.
 - Upper layers import the core. Each is usable alone; none imports another upper layer, except that the embeddings adapters reuse their chat adapter's settings and client (`conduit.embeddings.bedrock` uses `conduit.providers.bedrock`), the bedrock-mantle adapter reuses the Bedrock presign step and the Anthropic request mapping, and the Anthropic adapter's Foundry endpoint reuses the OpenAI-compatible adapter's Entra ID support. The compaction layer reaches the runner only through the core's hook shapes, and the skills layer reaches it through `AgentTask.system_hook` and `tool_wrapper`.
 - Each optional third-party library (a provider SDK, or a layer's own dependency) is imported only inside the layer of the extra that installs it, and only when a client is built or the layer is used. Without the extra installed, nothing else in conduit fails to import.
-- Nothing outside `conduit.cli` imports `conduit.cli`; the terminal interface uses the public API only, which its own tests check, and rich is imported only inside it.
+- Nothing outside `conduit.cli` imports `conduit.cli`; the terminal interface uses the public API only, importing each name from the package that exports it (never from `conduit.core` or a module a package covers), which its own tests check, and rich is imported only inside it.
 - No module constructs a provider client outside the provider registry, only the registry wraps a provider in metering, and no event carries content unless the content-capture policy allows it.
 
 `tests/tripwires/` enforces these rules by scanning the source tree statically, so an import inside a function, a `TYPE_CHECKING` block or an `importlib.import_module` call with a literal name is caught whether or not the extra is installed. The tripwires are never skipped or weakened.
@@ -147,7 +149,9 @@ The policy is checked when assignments are resolved at start-up, again when a pr
 
 Every layer emits typed events through the product's event sink: model and embedding calls (the registry), runs, tool calls, approvals, hand-offs, budgets and output contracts (the runner), skills, MCP calls and compaction. An event's string fields are identifiers, which cannot hold prose; content (prompts, model output, tool arguments and results, summaries) appears only inside a `CapturedContent` field, which always carries the content's SHA-256 hash and size and carries its text only when the `CapturePolicy` allows that kind (`prompts`, `tool_content`; neither by default). A field declared as tool content is held to the tool-content setting whatever its emitter labelled it.
 
-`FanOutSink` delivers each event to several sinks concurrently and enforces its own capture policy on the way through, so a sink never receives content its policy does not allow; a failing sink is logged by class name and never stops the others. The warden and otel sinks record metadata only, whatever the policy allows. The event-content tripwire checks every event class in conduit.
+`FanOutSink` delivers each event to several sinks concurrently and enforces its own capture policy on the way through, so a sink never receives content its policy does not allow; a failing sink is logged by class name and never stops the others, and a sink's own cancellation propagates to the emitter unchanged. A started runtime's `Runtime.events` is such a fan-out over the product's sink, under the runtime's `Runtime.capture`, with a policy nothing can loosen; the agent runner uses both unless given its own. The warden and otel sinks record metadata only, whatever the policy allows. The event-content tripwire checks every event class in conduit.
+
+Text a product did not write reaches a model in one frame, from `conduit.core.untrusted`: `frame_untrusted` sanitises the text (escaping anything resembling a frame marker, showing hidden characters, replacing long base64 runs), caps it, and wraps it in `<<UNTRUSTED ...>>` markers with a fresh nonce and a code-chosen source. The agent runner frames tool results, and the MCP bridge its servers' results, with it; `FRAMING_NOTE` describes the frame for a system prompt.
 
 Errors follow the same rule: a conduit error never keeps the exception it was raised for (`__cause__` and `__context__` are `None`), and its message names fields, models and classes, never a value, a credential or provider text.
 
@@ -182,6 +186,7 @@ Each adapter passes its SDK every setting the SDK could otherwise take from the 
 | `konfig` | `conduit.integrations.konfig` | cognisn-konfig |
 | `warden` | `conduit.integrations.warden` | cognisn-warden (a pre-release), whose audit recorder needs psycopg (LGPL-3.0, a named licence exception) |
 | `otel` | `conduit.integrations.otel` | the OpenTelemetry API (the product supplies the SDK and exporters) |
+| `testing` | `conduit.testing` | pytest, for the conformance suites' pytest plugin |
 | `cli` | `conduit.cli` | rich, and the `mcp` extra; the `conduit` console script |
 
 The agent, compaction and skills layers, the stub provider, and the memory and JSON stores need no extra. Every runtime extra's dependency tree is held to the licence policy (`scripts/licence_audit.py --all-extras`); weak copyleft is accepted only as a named, reviewed exception in that script.

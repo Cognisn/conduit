@@ -4,6 +4,8 @@ conduit's embeddings layer turns text into vectors through the same machinery as
 
 Embedding task classes have a floor of kind `embedding`, so a chat model can never serve one (and an embedding model never serves a chat task class). `start_embeddings` resolves them from the same `ConduitSettings` as `start`, and builds their providers through the provider registry. Assignments in the settings for other task classes are left for `start`.
 
+Declare all your task classes once. Pass every task class to `start()`: it sets embedding task classes (a floor with `kind="embedding"`), their assignments and any provider only they use aside, without validating or building them. Pass the embedding task classes to `start_embeddings()` with the same settings to resolve and build them. Each start-up refuses a bad assignment before any client exists.
+
 ```python
 import asyncio
 
@@ -43,6 +45,56 @@ async def embed() -> list[list[float]]:
 
 vectors = asyncio.run(embed())
 assert len(vectors) == 2 and all(len(v) == 8 for v in vectors)
+```
+
+One settings object and one list of task classes serve both start-ups:
+
+```python
+from conduit import Message, start
+from conduit.providers import builtin_factories
+
+TRIAGE = TaskClass(name="triage")
+TASK_CLASSES = [TRIAGE, SEARCH_INDEX]
+both = ConduitSettings.model_validate(
+    {
+        "providers": {
+            "chat": {"kind": "stub", "not_for_production": True},
+            "vectors": {"kind": "stub", "not_for_production": True},
+        },
+        "assignments": {
+            "triage": {"provider": "chat", "model": "stub-echo"},
+            "search_index": {"provider": "vectors", "model": "stub-embed"},
+        },
+    }
+)
+
+
+async def start_both() -> None:
+    chat = await start(
+        both,
+        task_classes=TASK_CLASSES,
+        factories=builtin_factories(),
+        secrets=LiteralSecretResolver({}),
+    )
+    vectors = await start_embeddings(
+        both,
+        task_classes=[c for c in TASK_CLASSES if c.floor.kind == "embedding"],
+        factories=builtin_embedding_factories(),
+        secrets=LiteralSecretResolver({}),
+    )
+    try:
+        assert set(chat.assignments) == {"triage"}  # the embedding class was set aside
+        binding = chat.for_task("triage")
+        reply = await binding.provider.complete(binding.request(messages=[Message.user("hi")]))
+        assert reply.text == "hi"
+        response = await vectors.for_task("search_index").embed(["login failures"])
+        assert len(response.vectors) == 1
+    finally:
+        await vectors.aclose()
+        await chat.aclose()
+
+
+asyncio.run(start_both())
 ```
 
 Pass `dimensions={"search_index": 256}` to `start_embeddings` to ask a model that offers shorter vectors for them; the length must meet the floor's `min_embedding_dimensions` and be one the model offers, and is fixed at start-up. Every response is checked (one finite vector of the expected length per text), and each call emits an `embedding_call_started` and an `embedding_call_finished` event. The texts are prompt content, captured only when the capture policy captures prompts.

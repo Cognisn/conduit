@@ -161,9 +161,11 @@ async def ask_the_server() -> list[Event]:
                 )
             )
             assert result.status is RunStatus.COMPLETED
-            # The server's answer, framed as untrusted content on its way to the model.
+            # The server's answer, framed once by the bridge on its way to the model.
             assert "3 open tickets for 192.0.2.10" in result.text
-            assert result.text != "3 open tickets for 192.0.2.10"
+            assert result.text.startswith(
+                '<<UNTRUSTED source="mcp" server="tickets" tool="open_tickets" nonce="'
+            )
     finally:
         await runtime.aclose()
     return sink.events
@@ -174,13 +176,15 @@ mcp_events = asyncio.run(ask_the_server())
 assert call.outcome == "ok"
 ```
 
-Combine MCP tools with the product's own in one catalogue: `ToolCatalogue.from_tools([*product_tools, *await bridge.tools()])`. Each MCP tool's description is the server's, so it is untrusted; the bridge prefixes it with the server's name and caps its length. Every result is framed as untrusted content before the model sees it, and capped at `max_result_chars`. Each call emits an `McpCallEvent` (server, tool, outcome, duration, and the arguments and result as captured content under the capture policy).
+Combine MCP tools with the product's own in one catalogue: `ToolCatalogue.from_tools([*product_tools, *await bridge.tools()])`. Each MCP tool's description is the server's, so it is untrusted; the bridge prefixes it with the server's name and caps its length. Server-supplied tool descriptions, and the descriptions and titles in their input schemas, reach the model through `sanitise_untrusted`; a tool whose other schema text (property names, enum values, defaults, patterns) holds hidden characters or frame markers is left out, with a warning. Results are framed once, by the bridge, as the core's untrusted blocks: `<<UNTRUSTED source="mcp" server="<server>" tool="<tool>" nonce="...">>` ... `<<END UNTRUSTED nonce="...">>`, capped at `max_result_chars`; `FRAMING_NOTE` describes them (see [Untrusted content](integration.md#untrusted-content)). Give `McpTool`s only to `McpToolBridge.executor()`. Each call emits an `McpCallEvent` (server, tool, outcome, duration, and the arguments and result as captured content under the capture policy).
 
 From sync code, connect on the facade's loop (`loop.run(connection.connect())`) and close the same way, as [the sync facade](integration.md#the-sync-facade) explains.
 
 ## OAuth sign-in
 
 With `auth: {"type": "oauth"}`, conduit's OAuth 2.1 client obtains tokens for the server: it discovers the authorisation server from the MCP server's metadata, registers itself dynamically (or uses a pre-registered `client_id`, with an optional `client_secret` reference), runs the authorisation code flow with PKCE, and rotates refresh tokens. Tokens and registrations are persisted only through the product's `TokenStore` (under `mcp:<server>` and `mcp:<server>:client`); conduit writes no token file of its own.
+
+A `SignInHook` is given an authorisation URL with exactly one `state`; `LoopbackSignIn` refuses anything else.
 
 `issuer` pins the authorisation server: discovery that names any other is refused before a request goes to it. A client secret needs the pin, so it can only ever be sent to the server that issued it.
 

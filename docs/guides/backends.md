@@ -153,6 +153,12 @@ class DictTranscriptStore:
 
 ## Running a conformance suite
 
+The suites are a pytest plugin: install the `testing` extra, which brings pytest.
+
+```sh
+pip install "cognisn-conduit[testing]"
+```
+
 Each suite is a class in `conduit.testing.conformance`. Subclass it in a test module and say how to make the backend; pytest collects the scenarios as tests:
 
 ```python
