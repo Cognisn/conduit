@@ -20,9 +20,11 @@ the core's ``sanitise_untrusted``, then its whitespace collapsed to single space
 descriptions and titles inside its input schema are made safe the same way. Every other
 string in the schema (property names, ``enum``, ``const``, ``default``, ``examples``,
 ``$comment``, ``pattern`` and the rest) is kept as the server sent it, since changing
-it would change what the tool accepts; a tool with such a string holding a control,
-format or surrogate character, a line or paragraph separator, or anything resembling
-a frame marker is left out instead, as a tool whose name cannot be namespaced is.
+it would change what the tool accepts; a tool with such a string holding a hidden
+character (by the core's rule, ``conduit.core.untrusted.is_hidden_character``: a
+control, format or surrogate character, a default-ignorable character, or a line or
+paragraph separator) or anything resembling a frame marker is left out instead, as a
+tool whose name cannot be namespaced is.
 
 Results are untrusted. A result goes back to the model as the core's untrusted block
 (``conduit.core.untrusted.frame_untrusted``), ``<<UNTRUSTED source="mcp"
@@ -48,7 +50,6 @@ import logging
 import re
 import sys
 import time
-import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
@@ -58,7 +59,12 @@ from pydantic import ValidationError
 from conduit.core.errors import ConfigurationError, UnknownTool
 from conduit.core.events import CapturePolicy, ContentKind, EventSink
 from conduit.core.tools import ToolCallContext, ToolExecutor, ToolOutcome
-from conduit.core.untrusted import ESCAPED_DELIMITER, frame_untrusted, sanitise_untrusted
+from conduit.core.untrusted import (
+    ESCAPED_DELIMITER,
+    frame_untrusted,
+    is_hidden_character,
+    sanitise_untrusted,
+)
 from conduit.mcp.client import CallResult, McpConnection, RemoteTool
 from conduit.mcp.errors import McpError
 from conduit.mcp.events import McpCallEvent
@@ -73,9 +79,6 @@ _SEPARATOR = "__"
 _DESCRIPTION_LIMIT = 1024
 #: The schema keys whose text a model reads as prose.
 _SCHEMA_PROSE = frozenset({"description", "title"})
-_KEPT_CONTROLS = frozenset({"\n", "\t"})
-_SEPARATORS = frozenset({"\u2028", "\u2029"})
-_HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Cs"})
 #: The default cap on a result's length, in characters, as the agent runner's.
 DEFAULT_MAX_RESULT_CHARS = 20_000
 #: What frames a result with no cap: longer than any result a server can send.
@@ -94,13 +97,10 @@ def namespaced_name(server: str, tool: str) -> str | None:
 
 
 def _raw_safe(text: str) -> bool:
-    """Whether ``text`` can reach a model as it is: no hidden character (newlines and
-    tabs aside) and nothing ``sanitise_untrusted`` would escape as a frame marker."""
-    if any(
-        char not in _KEPT_CONTROLS
-        and (unicodedata.category(char) in _HIDDEN_CATEGORIES or char in _SEPARATORS)
-        for char in text
-    ):
+    """Whether ``text`` can reach a model as it is: no character the core's rule hides
+    (``is_hidden_character``) and nothing ``sanitise_untrusted`` would escape as a frame
+    marker."""
+    if any(is_hidden_character(char) for char in text):
         return False
     return sanitise_untrusted(text).count(ESCAPED_DELIMITER) == text.count(ESCAPED_DELIMITER)
 
