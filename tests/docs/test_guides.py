@@ -765,12 +765,22 @@ def test_a_document_needing_a_missing_extra_is_skipped_before_it_runs(
     "line",
     [
         "import conduit.core._hidden as hidden",
+        "import conduit.integrations._hidden as hidden",
+        "from conduit.integrations._hidden import thing",
         "from conduit.integrations.otel import *",
         "import conduit.core.tools",
         "from conduit.core.tools import TaskTools",
         "from conduit import core",
     ],
-    ids=["private-path", "import-star", "core-module", "core-name", "core-by-name"],
+    ids=[
+        "private-core-path",
+        "private-path",
+        "private-from-path",
+        "import-star",
+        "core-module",
+        "core-name",
+        "core-by-name",
+    ],
 )
 def test_a_skipped_document_still_has_its_static_import_checks(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, line: str
