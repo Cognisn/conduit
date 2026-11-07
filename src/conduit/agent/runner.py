@@ -57,7 +57,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel
 
-from conduit.agent.budgets import BudgetMeter, Exhausted, RunBudget, TokenCount
+from conduit.agent.budgets import BudgetKind, BudgetMeter, Exhausted, RunBudget, TokenCount
 from conduit.agent.contracts import CUT_OFF, ContractCheck, OutputContract, parse_output
 from conduit.agent.events import (
     ApprovalDecidedEvent,
@@ -91,12 +91,6 @@ from conduit.agent.results import (
     RunStatus,
     SystemPromptRefused,
 )
-from conduit.agent.untrusted import (
-    DEFAULT_MAX_LENGTH,
-    UntrustedText,
-    frame_untrusted,
-    untrusted_text_block,
-)
 from conduit.core.backends import ApprovalDecision, ApprovalHandler, ApprovalRequest
 from conduit.core.errors import ConfigurationError, ProviderError, ProviderFailure, UnknownTool
 from conduit.core.events import (
@@ -125,6 +119,12 @@ from conduit.core.types import (
     ToolSpec,
     ToolUseBlock,
     Usage,
+)
+from conduit.core.untrusted import (
+    DEFAULT_MAX_LENGTH,
+    UntrustedText,
+    frame_untrusted,
+    untrusted_text_block,
 )
 
 logger = logging.getLogger("conduit.agent")
@@ -234,7 +234,9 @@ class _Run:
 class _Charge:
     """A run's ``ModelCallCharge``: a hook's own model calls, counted and charged to the
     run's budget like the runner's. A limit reached is kept on the run, which ends on it
-    once the hook returns."""
+    once the hook returns. Usage that spends the token budget exactly reaches it too, so
+    the run's own call is not made with nothing left. Valid only during the
+    ``before_model_call`` it was given to."""
 
     __slots__ = ("_run",)
 
@@ -260,6 +262,9 @@ class _Charge:
     def record(self, usage: Usage) -> bool:
         run = self._run
         over = run.meter.record_usage(usage)
+        limit = run.meter.budget.max_tokens
+        if over is None and limit is not None and run.meter.tokens_used >= limit:
+            over = Exhausted(BudgetKind.TOKENS, limit, run.meter.tokens_used)
         if over is not None and run.charged_over is None:
             run.charged_over = over
         return over is None and run.charged_over is None
@@ -351,8 +356,10 @@ class AgentRunner:
 
     ``tools`` gives each task class its ``TaskTools``; a class without an entry has no
     tools. ``events`` receives every run event but the text deltas, and ``capture`` is
-    the content-capture policy for the stream and the sink (nothing by default: pass the
-    deployment's ``ConduitSettings.capture`` to match the providers' events).
+    the content-capture policy for the stream and the sink. Both default to the
+    runtime's (``Runtime.events`` and ``Runtime.capture``), so run events reach the
+    product's sink under the deployment's policy; an explicit argument overrides either.
+    Events delivered through the runtime's sink are also held to the runtime's policy.
     ``requires_approval`` marks the tools that need ``approvals``, and ``preframed`` the
     tools whose executor frames its results as untrusted itself (``tool_results_preframed``).
     ``clock`` measures the wall-time budget.
@@ -390,6 +397,14 @@ class AgentRunner:
         self._preframed = preframed
         self._filter = output_filter
         self._transcripts = transcripts
+        # Unless the product gives its own, run events go to the runtime's sink under the
+        # runtime's capture policy (Q0027); bindings without them fall back to none.
+        if capture is None:
+            runtime_capture = getattr(bindings, "capture", None)
+            capture = runtime_capture if isinstance(runtime_capture, CapturePolicy) else None
+        if events is None:
+            runtime_events = getattr(bindings, "events", None)
+            events = runtime_events if isinstance(runtime_events, EventSink) else None
         self._capture = capture if capture is not None else CapturePolicy()
         self._sink = FanOutSink([events] if events is not None else [], policy=self._capture)
         self._compaction = compaction

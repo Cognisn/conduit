@@ -362,10 +362,52 @@ async def test_a_charged_call_on_a_spent_token_budget_ends_the_run() -> None:
     )
     result = await AgentRunner(rt, compaction=hook).run(task)
     assert hook.allowed == [300, None]
-    assert hook.recorded == [True]
+    assert hook.recorded == [False]  # spending the budget exactly leaves nothing
     assert result.failure is RunFailure.BUDGET_EXHAUSTED
     assert result.budget is BudgetKind.TOKENS
     assert log.requests == []
+
+
+async def test_charged_usage_spending_the_token_budget_exactly_ends_the_run() -> None:
+    # Nothing is left for the run's own call, so it is not made (review M2).
+    hook = Charging(
+        Usage(input_tokens=5_000, output_tokens=0, cache_read_tokens=0, cache_write_tokens=0)
+    )
+    log = _script()
+    sink = Sink()
+    rt = await runtime(log)
+    task = AgentTask(
+        task_class="chat",
+        messages=(Message.user("go"),),
+        budget=RunBudget(max_tokens=5_000),
+    )
+    result = await AgentRunner(rt, compaction=hook, events=sink).run(task)
+    assert hook.recorded == [False]
+    assert result.failure is RunFailure.BUDGET_EXHAUSTED
+    assert result.budget is BudgetKind.TOKENS
+    assert log.requests == []
+    [exhausted] = sink.of(BudgetExhaustedEvent)
+    assert (exhausted.budget, exhausted.limit, exhausted.used) == (
+        BudgetKind.TOKENS,
+        5_000,
+        5_000,
+    )
+
+
+async def test_charged_usage_short_of_the_token_budget_lets_the_call_go_ahead() -> None:
+    hook = Charging(
+        Usage(input_tokens=4_999, output_tokens=0, cache_read_tokens=0, cache_write_tokens=0)
+    )
+    log = _script()
+    rt = await runtime(log)
+    task = AgentTask(
+        task_class="chat",
+        messages=(Message.user("go"),),
+        budget=RunBudget(max_tokens=5_000, counted_tokens=frozenset({TokenCount.INPUT})),
+    )
+    await AgentRunner(rt, compaction=hook).run(task)
+    assert hook.recorded == [True]
+    assert len(log.requests) == 1
 
 
 async def test_charged_usage_past_the_token_budget_ends_the_run() -> None:

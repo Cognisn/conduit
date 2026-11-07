@@ -85,7 +85,11 @@ class ModelCallCharge(Protocol):
     Either refusal ends the run as soon as the hook returns, as any other over-budget
     call does (``BUDGET_EXHAUSTED``, with a ``BudgetExhaustedEvent``), whatever the hook
     returns or raises. A charged call is counted on top of the run's own call it comes
-    before, which is counted already.
+    before, which is counted already. Usage that spends the token budget exactly is
+    refused too: nothing would be left for that call.
+
+    A charge is valid only during the ``before_model_call`` it is given to; it must not
+    be kept and used later.
     """
 
     def begin(self, max_output_tokens: int) -> int | None: ...
