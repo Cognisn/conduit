@@ -26,7 +26,8 @@ Every layer shares these, so the rules are the same wherever external text enter
   line and paragraph separators. Newlines and tabs are kept, as is other white space
   that is not a control character or a line or paragraph separator, and the result
   always encodes as UTF-8. A variation selector is marked in ordinary text too, so an
-  emoji's presentation selector shows as ``[U+FE0F]``;
+  emoji's presentation selector shows as ``[U+FE0F]``. ``is_hidden_character`` is this
+  rule for one character, so a layer that refuses such text uses the same rule;
 - a run of ``BASE64_RUN_THRESHOLD`` or more base64 characters is replaced by a note of
   its length.
 
@@ -165,7 +166,16 @@ def _default_ignorable(code_point: int) -> bool:
     return index >= 0 and code_point <= _DEFAULT_IGNORABLE[index][1]
 
 
-def _hidden(char: str) -> bool:
+def is_hidden_character(char: str) -> bool:
+    """Whether ``char`` is hidden by the sanitiser's rule, so ``sanitise_untrusted`` shows
+    it as ``[U+XXXX]``: a control, format or surrogate character (Cc, Cf, Cs) other than
+    newline and tab, U+2028 or U+2029, or any Default_Ignorable_Code_Point.
+
+    This is the one rule: the sanitiser uses it, and a layer that must refuse text it
+    cannot change (rather than mark it) uses it too. ``char`` must be exactly one
+    character; anything else raises ``TypeError``. A carriage return is hidden here; the
+    sanitiser turns it into a newline before marking, so it never shows as a marker.
+    """
     return char not in _KEPT_CONTROLS and (
         unicodedata.category(char) in _HIDDEN_CATEGORIES
         or char in _MARKED_SEPARATORS
@@ -174,14 +184,14 @@ def _hidden(char: str) -> bool:
 
 
 def _replace_invisible(text: str) -> str:
-    return "".join(f"[U+{ord(char):04X}]" if _hidden(char) else char for char in text)
+    return "".join(f"[U+{ord(char):04X}]" if is_hidden_character(char) else char for char in text)
 
 
 def _fold(char: str) -> str:
     """``char`` as the marker check sees it: hidden characters other than whitespace
     dropped, so none can split a marker; compatibility forms folded (NFKC), so fullwidth
     and small-form lookalikes read as ASCII; other angle lookalikes read as ``<``."""
-    if _hidden(char) and not char.isspace():
+    if is_hidden_character(char) and not char.isspace():
         return ""
     return unicodedata.normalize("NFKC", char).translate(_ANGLE_LOOKALIKES)
 
@@ -292,6 +302,7 @@ __all__ = [
     "UntrustedBlock",
     "UntrustedText",
     "frame_untrusted",
+    "is_hidden_character",
     "sanitise_untrusted",
     "untrusted_text_block",
 ]

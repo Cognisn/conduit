@@ -225,6 +225,7 @@ REEXPORTS: dict[str, tuple[str, ...]] = {
         "UntrustedBlock",
         "UntrustedText",
         "frame_untrusted",
+        "is_hidden_character",
         "sanitise_untrusted",
         "untrusted_text_block",
     ),

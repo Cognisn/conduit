@@ -18,7 +18,8 @@ from conduit.agent import AgentRunner, AgentTask, tool_results_preframed
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.core.tools import TaskTools, ToolCatalogue, tool_spec
 from conduit.core.types import Message, TextBlock, ToolResultBlock
-from conduit.mcp.bridge import McpTool, McpToolBridge, _schema
+from conduit.core.untrusted import is_hidden_character
+from conduit.mcp.bridge import McpTool, McpToolBridge, _raw_safe, _schema
 from conduit.mcp.client import McpConnection, RemoteTool
 from conduit.mcp.settings import McpServerSettings
 from conduit.providers.stub import StubToolCall, StubTurn, answer_tool_results
@@ -222,3 +223,90 @@ async def test_the_bridge_leaves_such_a_tool_out() -> None:
         names = {t.name for t in await McpToolBridge([conn]).tools()}
     assert "docs__pick" not in names
     assert "docs__echo" in names
+
+
+# Q0053: the raw-schema check is the core's hidden-character rule ----------------------
+
+DEFAULT_IGNORABLES = [
+    pytest.param("\u3164", id="hangul-filler"),
+    pytest.param("\ufe0f", id="variation-selector-16"),
+    pytest.param("\u034f", id="combining-grapheme-joiner"),
+    pytest.param("\U000e0100", id="variation-selector-17"),
+]
+
+
+def _placed(char: str, place: str) -> tuple[dict[str, Any], str]:
+    """A property and its key with ``char`` in the key or one schema string kept raw."""
+    if place == "key":
+        return {"type": "string"}, f"q{char}"
+    if place == "nested-key":
+        return {"type": "object", "properties": {f"in{char}": {"type": "string"}}}, "q"
+    value = {"enum": ["a", f"b{char}"], "examples": [f"e{char}"]}.get(place, f"v{char}")
+    return {"type": "string", place: value}, "q"
+
+
+@pytest.mark.parametrize(
+    "place",
+    ["key", "nested-key", "enum", "const", "default", "examples", "pattern", "$comment"],
+)
+@pytest.mark.parametrize("char", DEFAULT_IGNORABLES)
+def test_a_default_ignorable_in_raw_schema_text_leaves_the_tool_out(char: str, place: str) -> None:
+    prop, key = _placed(char, place)
+    assert _schema(_with(prop, key)) is None
+
+
+@pytest.mark.parametrize("char", DEFAULT_IGNORABLES)
+def test_a_default_ignorable_in_prose_is_marked_not_refused(char: str) -> None:
+    prop = {"type": "string", "description": f"a{char}b", "title": f"t{char}"}
+    schema = _schema(_with(prop))
+    assert schema is not None
+    marker = f"[U+{ord(char):04X}]"
+    assert schema["properties"]["q"]["description"] == f"a{marker}b"
+    assert schema["properties"]["q"]["title"] == f"t{marker}"
+
+
+@pytest.mark.parametrize("value", ["caf\u00e9", "\u65e5\u672c", "na\u00efve r\u00e9sum\u00e9"])
+def test_ordinary_unicode_schema_values_keep_the_tool(value: str) -> None:
+    prop = {
+        "type": "string",
+        "enum": [value, "plain"],
+        "const": value,
+        "default": value,
+        "examples": [value],
+        "pattern": f"^{value}$",
+    }
+    schema = _schema(_with(prop, key=value))
+    assert schema is not None
+    assert schema["properties"][value] == prop
+
+
+def test_the_raw_check_refuses_exactly_the_core_s_hidden_characters() -> None:
+    # Every hidden code point is refused; a sample of visible ones (every code point
+    # below U+3000, and each neighbour of a hidden one) is kept.
+    hidden = [chr(cp) for cp in range(0x110000) if is_hidden_character(chr(cp))]
+    assert all(not _raw_safe(f"a{c}b") for c in hidden)
+    hidden_points = {ord(c) for c in hidden}
+    neighbours = {cp + d for cp in hidden_points for d in (-1, 1)} - hidden_points
+    visible = (set(range(0x3000)) - hidden_points) | {cp for cp in neighbours if 0 <= cp < 0x110000}
+    kept = [cp for cp in sorted(visible) if chr(cp) not in "<&"]
+    refused = [f"U+{cp:04X}" for cp in kept if not _raw_safe(f"a{chr(cp)}b")]
+    assert refused == []
+
+
+async def test_the_bridge_leaves_a_tool_with_a_default_ignorable_out_with_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    server = build_server("docs")
+
+    @server.tool(description="Pick one.")
+    def pick(choice: Literal["plain", "sly\u3164"]) -> str:
+        return choice
+
+    with caplog.at_level("WARNING", logger="conduit.mcp"):
+        async with _connection(server) as conn:
+            names = {t.name for t in await McpToolBridge([conn]).tools()}
+    assert "docs__pick" not in names
+    assert "docs__echo" in names
+    assert [r.getMessage() for r in caplog.records if r.name == "conduit.mcp"] == [
+        "MCP server docs: a tool's input schema holds unsafe text; left out"
+    ]

@@ -21,6 +21,7 @@ from conduit.core.untrusted import (
     UntrustedBlock,
     UntrustedText,
     frame_untrusted,
+    is_hidden_character,
     sanitise_untrusted,
     untrusted_text_block,
 )
@@ -446,3 +447,61 @@ class TestTextBlock:
 
 def test_the_framing_note_describes_the_markers() -> None:
     assert "<<UNTRUSTED" in FRAMING_NOTE and "<<END UNTRUSTED" in FRAMING_NOTE
+
+
+class TestHiddenCharacterPredicate:
+    """``is_hidden_character`` is the sanitiser's own rule, so other layers share it."""
+
+    @pytest.mark.parametrize(
+        "char",
+        [
+            pytest.param("\x00", id="nul"),
+            pytest.param("\x1b", id="escape"),
+            pytest.param("\r", id="carriage-return"),
+            pytest.param("\x85", id="next-line"),
+            pytest.param("\u200b", id="zero-width-space"),
+            pytest.param("\u202e", id="right-to-left-override"),
+            pytest.param("\ufeff", id="byte-order-mark"),
+            pytest.param("\U000e0041", id="tag-latin-a"),
+            pytest.param(chr(0xD800), id="lone-surrogate"),
+            pytest.param("\u2028", id="line-separator"),
+            pytest.param("\u2029", id="paragraph-separator"),
+            pytest.param("\u00ad", id="soft-hyphen"),
+            pytest.param("\u034f", id="combining-grapheme-joiner"),
+            pytest.param("\u3164", id="hangul-filler"),
+            pytest.param("\ufe0f", id="variation-selector-16"),
+            pytest.param("\U000e0100", id="variation-selector-17"),
+        ],
+    )
+    def test_hidden_characters(self, char: str) -> None:
+        assert is_hidden_character(char) is True
+
+    @pytest.mark.parametrize(
+        "char",
+        ["\n", "\t", " ", "\u00a0", "\u3000", "a", "\u00e9", "\u65e5", "<", "\u2764", "\u0301"],
+    )
+    def test_visible_characters_and_kept_white_space(self, char: str) -> None:
+        assert is_hidden_character(char) is False
+
+    def test_it_equals_the_sanitiser_s_marking_for_every_code_point(self) -> None:
+        # Each code point on its own line, so no two can form a marker or a base64 run.
+        # A carriage return never reaches the marking (it becomes a newline first), and
+        # the newline is the separator, so both are checked on their own.
+        chars = [chr(cp) for cp in range(0x110000) if cp not in (0x0A, 0x0D)]
+        got = sanitise_untrusted("\n".join(chars)).split("\n")
+        assert len(got) == len(chars)
+        wrong = [
+            f"U+{ord(c):04X}"
+            for c, g in zip(chars, got, strict=True)
+            if g != (f"[U+{ord(c):04X}]" if is_hidden_character(c) else c)
+        ]
+        assert wrong == []
+        assert sanitise_untrusted("a\nb") == "a\nb"
+        assert is_hidden_character("\n") is False
+        assert sanitise_untrusted("a\rb") == "a\nb"
+        assert is_hidden_character("\r") is True
+
+    @pytest.mark.parametrize("text", ["", "ab"])
+    def test_it_takes_exactly_one_character(self, text: str) -> None:
+        with pytest.raises(TypeError):
+            is_hidden_character(text)
