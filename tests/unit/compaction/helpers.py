@@ -150,6 +150,7 @@ class Request:
     usage: Usage
     last_usage: Usage | None
     model_calls: int
+    charge: Any = None
 
 
 def request(

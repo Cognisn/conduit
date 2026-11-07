@@ -24,6 +24,7 @@ REASONS = frozenset(
         "transcript_mismatch",
         "store_failed",
         "strategy_failed",
+        "budget_exhausted",
     }
 )
 _CLASS_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
@@ -53,7 +54,9 @@ class CompactionFailed(CompactionError):
     - ``transcript_mismatch``: the stored transcript's active conversation is not the
       conversation the hook was shown, so no compaction point can be placed;
     - ``store_failed``: the transcript store failed (``error_class`` names the error);
-    - ``strategy_failed``: a product strategy raised (``error_class`` names the error).
+    - ``strategy_failed``: a product strategy raised (``error_class`` names the error);
+    - ``budget_exhausted``: the run's budget refused the summary call, or the summary's
+      usage took the run past it (D0085); the runner ends the run on its budget.
 
     A product strategy may raise it too, so nothing here can carry free text: a reason
     that is not one of these codes becomes ``strategy_failed``, and an ``error_class``

@@ -13,7 +13,10 @@
 - ``CompactionHook``: called before every model call with the conversation about to be
   sent; it may return a replacement conversation (a summary followed by recent messages)
   or ``None`` to send it unchanged. The compaction layer implements it; the runner only
-  calls it, checks what comes back, and records a ``ConversationCompactedEvent``. Writing
+  calls it, checks what comes back, and records a ``ConversationCompactedEvent``. A hook
+  that raises ends the run with ``RunFailure.COMPACTION_FAILED`` (the error itself is not
+  kept), and a model call it makes itself is charged to the run's budget through the
+  request's ``charge`` (``ModelCallCharge``). Writing
   a ``CompactionPoint`` to the transcript is the hook's own business: the runner does not
   append the replacement.
 - ``SystemHook`` (per run, ``AgentTask.system_hook``): given the run's base system blocks
@@ -68,6 +71,32 @@ def tool_results_preframed(tool: Any) -> bool:
     return getattr(tool, "untrusted_framed", False) is True
 
 
+@runtime_checkable
+class ModelCallCharge(Protocol):
+    """Charges a hook's own model calls (a summary, say) to the run's budget (D0085).
+
+    ``begin`` counts a call about to be made against the run's model-call budget, and
+    returns the output tokens it may produce: ``max_output_tokens``, or less when the
+    run's token budget counts output and has less left. It returns ``None`` when the
+    run's budget refuses the call (model calls, tokens or wall time spent); the hook must
+    not make it then. ``record`` charges the call's usage once it is made, and returns
+    ``False`` when that takes the run past its token budget.
+
+    Either refusal ends the run as soon as the hook returns, as any other over-budget
+    call does (``BUDGET_EXHAUSTED``, with a ``BudgetExhaustedEvent``), whatever the hook
+    returns or raises. A charged call is counted on top of the run's own call it comes
+    before, which is counted already. Usage that spends the token budget exactly is
+    refused too: nothing would be left for that call.
+
+    A charge is valid only during the ``before_model_call`` it is given to; it must not
+    be kept and used later.
+    """
+
+    def begin(self, max_output_tokens: int) -> int | None: ...
+
+    def record(self, usage: Usage) -> bool: ...
+
+
 @dataclass(frozen=True, slots=True)
 class CompactionRequest:
     """What the compaction hook is shown before a model call.
@@ -77,6 +106,8 @@ class CompactionRequest:
     context window). ``usage`` is the run's total so far; ``last_usage`` the previous
     call's (its input counts are the best estimate of the prompt's size), or ``None``
     before the first call. ``model_calls`` is how many calls the run has made so far.
+    ``charge`` charges any model call the hook makes itself to the run's budget; the
+    runner always sets it.
     """
 
     run_id: str
@@ -89,6 +120,7 @@ class CompactionRequest:
     usage: Usage
     last_usage: Usage | None
     model_calls: int
+    charge: ModelCallCharge | None = None
 
 
 @runtime_checkable

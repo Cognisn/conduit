@@ -78,24 +78,52 @@ _SECRET_METHODS = frozenset({"client_secret_post", "client_secret_basic"})
 _BEARER = "Bearer"
 _ISSUER_MARK = ";iss="
 
+_LoopLocks = weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]
+
 #: One lock per (store, event loop, key), shared by every OAuthClient of that store in
 #: the process, so clients of one store never refresh the same token twice at once.
-_SHARED_LOCKS: weakref.WeakKeyDictionary[
-    Any, weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]
-] = weakref.WeakKeyDictionary()
+_SHARED_LOCKS: weakref.WeakKeyDictionary[Any, _LoopLocks] = weakref.WeakKeyDictionary()
+#: The same, by identity, for stores that can be weakly referenced but not hashed (a
+#: plain dataclass, say). Each entry goes when its store does.
+_ID_LOCKS: dict[int, _LoopLocks] = {}
+#: The same, by identity, for stores that cannot be weakly referenced at all. Each such
+#: store is held here for the life of the process, so its identity is never reused; a
+#: process has few stores, so this stays small.
+_PINNED_LOCKS: dict[int, tuple[Any, _LoopLocks]] = {}
 
 
-def _shared_lock(store: Any, key: str) -> asyncio.Lock | None:
-    """The process-wide lock for ``key`` in ``store``, or ``None`` if ``store`` cannot
-    be weakly referenced (the client's own lock is used then)."""
+def _loop_locks(store: Any) -> _LoopLocks:
     try:
         loops = _SHARED_LOCKS.get(store)
         if loops is None:
             loops = weakref.WeakKeyDictionary()
             _SHARED_LOCKS[store] = loops
+        return loops
     except TypeError:
-        return None
-    keys = loops.setdefault(asyncio.get_running_loop(), {})
+        pass  # not weakly referenceable, or not hashable: kept by identity below
+    referenceable = True
+    try:
+        weakref.ref(store)
+    except TypeError:
+        referenceable = False
+    key = id(store)
+    if referenceable:
+        found = _ID_LOCKS.get(key)
+        if found is None:
+            found = weakref.WeakKeyDictionary()
+            _ID_LOCKS[key] = found
+            weakref.finalize(store, _ID_LOCKS.pop, key, None)
+        return found
+    pinned = _PINNED_LOCKS.get(key)
+    if pinned is None:
+        pinned = (store, weakref.WeakKeyDictionary())
+        _PINNED_LOCKS[key] = pinned
+    return pinned[1]
+
+
+def _shared_lock(store: Any, key: str) -> asyncio.Lock:
+    """The process-wide lock for ``key`` in ``store`` on the running event loop."""
+    keys = _loop_locks(store).setdefault(asyncio.get_running_loop(), {})
     return keys.setdefault(key, asyncio.Lock())
 
 
@@ -200,13 +228,12 @@ class OAuthClient:
         self._http_transport = http_transport
         self._clock = clock or (lambda: datetime.now(UTC))
         self._metadata_cache: _Metadata | None = None
-        self._own_lock = asyncio.Lock()
 
     def __repr__(self) -> str:
         return f"OAuthClient({self._server!r})"
 
     def _lock(self) -> asyncio.Lock:
-        return _shared_lock(self._store, self._settings.token_key) or self._own_lock
+        return _shared_lock(self._store, self._settings.token_key)
 
     def _fail(self, reason: OAuthFailure) -> McpAuthError:
         logger.warning("MCP server %s: OAuth failed: %s", self._server, reason.value)

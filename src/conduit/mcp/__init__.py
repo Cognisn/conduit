@@ -27,7 +27,7 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from conduit.mcp.bridge import McpTool, McpToolBridge, frame_untrusted, namespaced_name
+    from conduit.mcp.bridge import McpTool, McpToolBridge, namespaced_name
     from conduit.mcp.client import CallResult, McpConnection, RemoteTool, TransportOpener
     from conduit.mcp.errors import McpAuthError, McpError, McpFailure, OAuthFailure
     from conduit.mcp.events import McpCallEvent
@@ -47,7 +47,6 @@ if TYPE_CHECKING:
 _HOMES = {
     "McpTool": "bridge",
     "McpToolBridge": "bridge",
-    "frame_untrusted": "bridge",
     "namespaced_name": "bridge",
     "CallResult": "client",
     "McpConnection": "client",
@@ -98,7 +97,6 @@ __all__ = [
     "StdioTransport",
     "StreamableHttpTransport",
     "TransportOpener",
-    "frame_untrusted",
     "namespaced_name",
 ]
 

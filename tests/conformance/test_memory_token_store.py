@@ -36,6 +36,13 @@ class _DropsRefresh(MemoryTokenStore):
         await super().put(key, tokens.model_copy(update={"refresh_token": None}))
 
 
+class _CutsTokenType(MemoryTokenStore):
+    """Keeps at most 255 characters of the token type, as a narrow column would."""
+
+    async def put(self, key: str, tokens: TokenSet) -> None:
+        await super().put(key, tokens.model_copy(update={"token_type": tokens.token_type[:255]}))
+
+
 class _OneSlot(MemoryTokenStore):
     """Holds a single key: a store that ignores the key entirely."""
 
@@ -72,6 +79,7 @@ def _suite(store: type[MemoryTokenStore]) -> TokenStoreSuite:
         (_ForgetsOverwrites, "test_a_put_overwrites_the_earlier_tokens"),
         (_DeleteIgnored, "test_a_deleted_key_is_gone"),
         (_DropsRefresh, "test_every_field_round_trips"),
+        (_CutsTokenType, "test_every_field_round_trips"),
         (_OneSlot, "test_concurrent_keys_do_not_interfere"),
         (_RaisesOnUnknown, "test_an_unknown_key_is_none"),
     ],

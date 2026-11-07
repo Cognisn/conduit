@@ -30,6 +30,7 @@ class RunFailure(StrEnum):
     MODEL_FAILED = "model_failed"  # the provider failed; see RunResult.provider_failure
     MODEL_REFUSED = "model_refused"  # the model declined (stop reason refusal)
     TOOL_FAILED = "tool_failed"  # the product's tool executor raised
+    COMPACTION_FAILED = "compaction_failed"  # the compaction hook raised
 
 
 class AgentError(ConduitError):
