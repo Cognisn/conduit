@@ -2,7 +2,8 @@
 
 The stdio server is the MCP tests' synthetic one, run as a subprocess. The OAuth server
 and the protected MCP server are the MCP tests' fakes, served on 127.0.0.1 inside this
-worktree's slot (``CONDUIT_MCP_TEST_PORT_BASE``) at offsets the MCP tests do not use.
+worktree's slot (``CONDUIT_MCP_TEST_PORT_BASE``) at offsets the MCP tests do not use,
+or on ports the operating system assigns when that is unset (the MCP tests' plan).
 The browser is simulated; every value the fake server issues is synthetic.
 """
 
@@ -19,16 +20,25 @@ import pytest
 pytest.importorskip("mcp")
 
 from conduit.cli.servers import token_store
-from conduit.stores.json import JsonTokenStore
-from conduit.stores.memory import MemoryTokenStore
+from conduit.stores import JsonTokenStore, MemoryTokenStore
 from tests.unit.cli.helpers import STDIO_SERVER, cli, lines, write_config
 from tests.unit.mcp.fake_auth import FakeAuthServer
-from tests.unit.mcp.servers import PORT_BASE, LoopbackServer, build_server
+from tests.unit.mcp.servers import LoopbackServer, build_server, port
 from tests.unit.mcp.test_signin import protect
 
-AUTH_PORT = PORT_BASE + 50
-PROTECTED_PORT = PORT_BASE + 51
-CALLBACK_PORT = PORT_BASE + 52
+AUTH_PORT = port("cli_auth")
+PROTECTED_PORT = port("cli_protected")
+CALLBACK_PORT = port("cli_callback")
+
+
+def test_the_servers_take_the_mcp_tests_port_plan() -> None:
+    # D0105: the slot's offsets when CONDUIT_MCP_TEST_PORT_BASE is set, otherwise ports
+    # the operating system assigns, so these tests never collide with another run's.
+    assert (
+        port("cli_auth"),
+        port("cli_protected"),
+        port("cli_callback"),
+    ) == (AUTH_PORT, PROTECTED_PORT, CALLBACK_PORT)
 
 
 def stdio_server(**extra: Any) -> dict[str, Any]:
