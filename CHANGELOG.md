@@ -16,7 +16,7 @@ First release candidate, from 0.1.0b9 with no change to the code, and the first 
 
 ### Added
 
-- A publish workflow, run by hand, that builds, checks and publishes to PyPI with trusted publishing. It refuses a version that does not match the branch's version file, a pre-release from anywhere but a release branch, and a final version from anywhere but `main`.
+- A publish workflow, run by pushing a version tag such as `v0.1.0rc1`, that builds, checks and publishes to PyPI with trusted publishing. It refuses a tag that does not match the tagged commit's version file, a pre-release whose commit is not on a release branch, and a final version whose commit is not on `main`.
 
 ## [0.1.0b9] - 2026-11-07
 
