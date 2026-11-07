@@ -23,9 +23,11 @@ layer's package, is never imported from the submodule it lives in, and no exampl
 imports a private module path (a segment with a leading underscore), aliased or not.
 
 A document whose examples import a layer behind an extra that is not installed locally
-is skipped, naming the extra. CI installs every extra, so nothing is skipped there;
-``CONDUIT_REQUIRE_ALL_EXTRAS=1`` turns that skip into a failure, and makes a check fail
-when any runtime extra is missing.
+is skipped, naming the extra; the checks that import nothing (private paths, core
+modules, ``import *``) run first, so a skipped document still has them. CI installs
+every extra and sets ``CONDUIT_ALL_EXTRAS=require``, the core's switch, which turns
+that skip into a failure and makes a check fail when any runtime extra is missing; any
+other value of the switch is refused.
 """
 
 from __future__ import annotations
@@ -34,7 +36,6 @@ import ast
 import functools
 import importlib
 import importlib.metadata
-import os
 import re
 import sys
 import types
@@ -46,6 +47,7 @@ from packaging.requirements import Requirement
 
 from licence_audit import audit
 from tests.tripwires.importscan import OPTIONAL_LIBRARIES
+from tests.tripwires.test_event_content import EVERY_EXTRA_SWITCH, every_extra_required
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -171,7 +173,11 @@ def _module_problem(module: str) -> str | None:
     return None
 
 
-def import_problems(text: str) -> list[str]:
+def _core_path(name: str) -> bool:
+    return name == "conduit.core" or name.startswith("conduit.core.")
+
+
+def import_problems(text: str, *, resolve: bool = True) -> list[str]:
     """Imports in ``text``'s Python examples that bypass a package exporting the name.
 
     A name exported from ``conduit`` is imported from ``conduit``, and a name a layer's
@@ -179,6 +185,9 @@ def import_problems(text: str) -> list[str]:
     it lives in, so the guides show the public import path (Wave 6 ruling Q0044). The
     same holds for importing such a submodule as a module, and every conduit import
     names what it takes (no ``import *``).
+
+    With ``resolve`` false only the checks that import nothing run: private paths,
+    ``import *`` and the core's modules. They hold even where a layer's extra is missing.
     """
     problems: list[str] = []
     for language, start, code in _blocks(text):
@@ -190,6 +199,12 @@ def import_problems(text: str) -> list[str]:
                 for alias in node.names:
                     if _private_path(alias.name):
                         problems.append(f"{where}: {alias.name} is a private module path")
+                        continue
+                    if not resolve:
+                        if _core_path(alias.name):
+                            problems.append(
+                                f"{where}: import {alias.name}: use the names conduit exports"
+                            )
                         continue
                     problem = _module_problem(alias.name)
                     if problem:
@@ -212,6 +227,13 @@ def import_problems(text: str) -> list[str]:
                 if alias.name == "*":
                     problems.append(f"{where}: import * from {node.module}: name each import")
                     continue
+                if not resolve:
+                    if _core_path(f"{node.module}.{alias.name}"):
+                        problems.append(
+                            f"{where}: {alias.name} from {node.module}: use the names conduit "
+                            "exports"
+                        )
+                    continue
                 submodule = _submodule(node.module, alias.name)
                 if submodule is not None:
                     problem = _module_problem(submodule)
@@ -228,9 +250,6 @@ def import_problems(text: str) -> list[str]:
     return problems
 
 
-#: Set to ``1`` (as CI does) to fail, not skip, a document whose extra is missing.
-REQUIRE_ALL_EXTRAS = "CONDUIT_REQUIRE_ALL_EXTRAS"
-
 #: The extra each conduit layer behind one needs, by module prefix.
 LAYER_EXTRAS: dict[str, str] = {
     "conduit.providers.bedrock": "bedrock",
@@ -245,6 +264,7 @@ LAYER_EXTRAS: dict[str, str] = {
     "conduit.embeddings.ollama": "ollama",
     "conduit.embeddings.local": "local-embeddings",
     "conduit.mcp": "mcp",
+    "conduit.testing": "testing",
     "conduit.stores.sql": "sql",
     "conduit.integrations.konfig": "konfig",
     "conduit.integrations.warden": "warden",
@@ -324,9 +344,11 @@ def extra_installed(extra: str) -> bool:
 def require_extras(text: str) -> None:
     """Skip, naming the extra, when ``text`` imports a layer whose extra is missing.
 
-    With ``CONDUIT_REQUIRE_ALL_EXTRAS=1`` (CI installs every extra) it fails instead, so
-    a run that should check every document cannot quietly check fewer.
+    With ``CONDUIT_ALL_EXTRAS=require`` (CI installs every extra) it fails instead, so
+    a run that should check every document cannot quietly check fewer. Any other value
+    of the switch is refused (the core's rule), so a misspelt switch cannot turn it off.
     """
+    required = every_extra_required()
     missing = [
         extras
         for extras in extras_needed(text)
@@ -338,8 +360,11 @@ def require_extras(text: str) -> None:
         f'the {" or ".join(extras)} extra (pip install "cognisn-conduit[{extras[0]}]")'
         for extras in missing
     )
-    if os.environ.get(REQUIRE_ALL_EXTRAS) == "1":
-        pytest.fail(f"needs {named}, not installed, and {REQUIRE_ALL_EXTRAS}=1 requires it")
+    if required:
+        pytest.fail(
+            f"needs {named}, not installed, but {EVERY_EXTRA_SWITCH}=require says every "
+            "extra is installed"
+        )
     pytest.skip(f"needs {named}, not installed")
 
 
@@ -660,7 +685,7 @@ def _outcome(text: str) -> BaseException | None:
 
 
 def test_a_missing_extra_skips_the_document_naming_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(REQUIRE_ALL_EXTRAS, raising=False)
+    monkeypatch.delenv(EVERY_EXTRA_SWITCH, raising=False)
     monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: extra != "otel")
     stopped = _outcome(_OTEL_TEXT)
     assert isinstance(stopped, pytest.skip.Exception), stopped
@@ -668,7 +693,7 @@ def test_a_missing_extra_skips_the_document_naming_it(monkeypatch: pytest.Monkey
 
 
 def test_a_missing_shared_library_names_each_extra(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(REQUIRE_ALL_EXTRAS, raising=False)
+    monkeypatch.delenv(EVERY_EXTRA_SWITCH, raising=False)
     monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: False)
     stopped = _outcome("```python\nimport httpx\n```\n")
     assert isinstance(stopped, pytest.skip.Exception), stopped
@@ -676,7 +701,7 @@ def test_a_missing_shared_library_names_each_extra(monkeypatch: pytest.MonkeyPat
 
 
 def test_one_extra_of_a_shared_library_is_enough(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(REQUIRE_ALL_EXTRAS, raising=False)
+    monkeypatch.delenv(EVERY_EXTRA_SWITCH, raising=False)
     monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: extra == "ollama")
     assert _outcome("```python\nimport httpx\n```\n") is None
 
@@ -684,30 +709,42 @@ def test_one_extra_of_a_shared_library_is_enough(monkeypatch: pytest.MonkeyPatch
 def test_a_missing_extra_fails_when_every_extra_is_required(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(REQUIRE_ALL_EXTRAS, "1")
+    monkeypatch.setenv(EVERY_EXTRA_SWITCH, "require")
     monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: extra != "otel")
     stopped = _outcome(_OTEL_TEXT)
     assert isinstance(stopped, pytest.fail.Exception), stopped
-    assert re.search(f"the otel extra .*{REQUIRE_ALL_EXTRAS}", str(stopped)), stopped
+    assert re.search(f"the otel extra .*{EVERY_EXTRA_SWITCH}=require", str(stopped)), stopped
 
 
-def test_only_the_value_1_requires_every_extra(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(REQUIRE_ALL_EXTRAS, "0")
+@pytest.mark.parametrize("value", ["1", "true", "Require", "skip"])
+def test_any_other_switch_value_is_refused(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    # The core's rule (Q0051): a misspelt switch cannot quietly turn the check off.
+    monkeypatch.setenv(EVERY_EXTRA_SWITCH, value)
     monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: extra != "otel")
-    assert isinstance(_outcome(_OTEL_TEXT), pytest.skip.Exception)
+    stopped = _outcome(_OTEL_TEXT)
+    assert isinstance(stopped, ValueError), stopped
+    assert EVERY_EXTRA_SWITCH in str(stopped)
+
+
+def test_the_switch_is_the_cores(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert EVERY_EXTRA_SWITCH == "CONDUIT_ALL_EXTRAS"
+    monkeypatch.setenv("CONDUIT_REQUIRE_ALL_EXTRAS", "1")
+    monkeypatch.delenv(EVERY_EXTRA_SWITCH, raising=False)
+    monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: extra != "otel")
+    assert isinstance(_outcome(_OTEL_TEXT), pytest.skip.Exception), "the old switch is gone"
 
 
 def test_an_installed_extra_runs_the_document(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(REQUIRE_ALL_EXTRAS, "1")
+    monkeypatch.setenv(EVERY_EXTRA_SWITCH, "require")
     monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: True)
     assert _outcome(_OTEL_TEXT) is None
 
 
 def test_a_run_requiring_every_extra_has_every_extra() -> None:
-    # CI installs every runtime extra; with the switch set, as CI's test jobs are to set
-    # it, this fails if an extra did not install, so nothing is quietly skipped.
-    if os.environ.get(REQUIRE_ALL_EXTRAS) != "1":
-        pytest.skip(f"set {REQUIRE_ALL_EXTRAS}=1 to check that every extra is installed")
+    # CI's test jobs install every runtime extra and set CONDUIT_ALL_EXTRAS=require, so
+    # this fails there if an extra did not install, and nothing is quietly skipped.
+    if not every_extra_required():
+        pytest.skip(f"set {EVERY_EXTRA_SWITCH}=require to check that every extra is installed")
     missing = sorted(e for e in _provided_extras() - {"dev"} if not extra_installed(e))
     assert missing == []
 
@@ -715,13 +752,42 @@ def test_a_run_requiring_every_extra_has_every_extra() -> None:
 def test_a_document_needing_a_missing_extra_is_skipped_before_it_runs(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.delenv(REQUIRE_ALL_EXTRAS, raising=False)
+    monkeypatch.delenv(EVERY_EXTRA_SWITCH, raising=False)
     monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: extra != "warden")
     document = ROOT / "docs" / "guides" / "observability.md"
     with pytest.raises(pytest.skip.Exception, match="the warden extra"):
         test_every_example_imports_from_the_public_path(document)
     with pytest.raises(pytest.skip.Exception, match="the warden extra"):
         test_every_python_example_runs(document, tmp_path, monkeypatch)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "import conduit.core._hidden as hidden",
+        "from conduit.integrations.otel import *",
+        "import conduit.core.tools",
+        "from conduit.core.tools import TaskTools",
+        "from conduit import core",
+    ],
+    ids=["private-path", "import-star", "core-module", "core-name", "core-by-name"],
+)
+def test_a_skipped_document_still_has_its_static_import_checks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, line: str
+) -> None:
+    # Review M2: the checks that import nothing run before the missing-extra skip, so a
+    # private path, an import * or a core module import fails even where the extra is
+    # missing.
+    monkeypatch.delenv(EVERY_EXTRA_SWITCH, raising=False)
+    monkeypatch.setattr(sys.modules[__name__], "extra_installed", lambda extra: extra != "otel")
+    document = tmp_path / "guide.md"
+    document.write_text(f"```python\n{_OTEL_TEXT.splitlines()[1]}\n{line}\n```\n")
+    try:
+        test_every_example_imports_from_the_public_path(document)
+    except BaseException as stopped:  # skip and fail are BaseExceptions
+        assert isinstance(stopped, AssertionError), stopped
+    else:
+        pytest.fail("the document passed")
 
 
 def _readme_row(extra: str) -> str:
@@ -746,16 +812,19 @@ def test_the_readme_names_the_warden_extras_licence_exception() -> None:
     assert "psycopg (LGPL-3.0) under its named licence exception" in row, row
 
 
-def test_the_readme_counts_what_the_warden_extra_installs_on_linux() -> None:
-    # Platform markers change the tree (keyring's backends, greenlet on arm64, tzdata on
-    # Windows), so the README gives the count on Linux, where CI's licence job audits.
-    if not sys.platform.startswith("linux"):
-        pytest.skip("the README counts the warden extra's packages on Linux")
+def test_the_readme_counts_what_the_warden_extra_installs() -> None:
+    # Platform markers change the tree (keyring's backends, greenlet on arm64), so macOS
+    # installs fewer; Linux and Windows install the same count, which the README gives.
+    if sys.platform == "darwin":
+        pytest.skip("the README counts the warden extra's packages on Linux and Windows")
     require_extras(_WARDEN_TEXT)
     core = len(audit().checked) - 1
     total = len(audit(extras=["warden"]).checked) - 1
     row = _readme_row("warden")
-    assert f"installs {total - core} runtime packages on Linux beyond the core's {core}" in row
+    assert (
+        f"installs {total - core} runtime packages on Linux and Windows beyond the core's {core}"
+        in row
+    ), row
     assert f"({total} in all" in row, row
 
 
@@ -781,6 +850,9 @@ def test_no_example_can_escape_the_run(document: Path) -> None:
 @pytest.mark.parametrize("document", DOCUMENTS, ids=_name)
 def test_every_example_imports_from_the_public_path(document: Path) -> None:
     text = document.read_text(encoding="utf-8")
+    # The checks that import nothing first, so a document skipped for a missing extra
+    # still has them (review M2).
+    assert import_problems(text, resolve=False) == []
     require_extras(text)
     assert import_problems(text) == []
 
