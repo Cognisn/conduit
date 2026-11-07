@@ -79,6 +79,8 @@ otel = ["opentelemetry-api>=1.30,<2"]
 # The terminal interface (C10): rich for its output, and the mcp extra so the uvx form
 # connects MCP servers as it is (Q0039). Provider SDKs stay behind their own extras.
 cli = ["rich>=14,<16", "cognisn-conduit[mcp]"]
+# The conformance suites in conduit.testing are a pytest plugin (Q0031).
+testing = ["pytest>=8"]
 # Development only; never a runtime dependency.
 dev = [
     "pytest>=8",

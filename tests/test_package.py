@@ -48,6 +48,7 @@ EXTRAS = {
     "warden",
     "otel",
     "cli",
+    "testing",
 }
 
 VERSION_FILE = Path(conduit.__file__).with_name("_version.txt")

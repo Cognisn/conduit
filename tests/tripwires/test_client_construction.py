@@ -6,6 +6,8 @@ Never skipped or weakened. A failure names the file, line and call.
 from __future__ import annotations
 
 from tests.tripwires.clientscan import (
+    LOCAL_MODELS_MODULE,
+    METERED_EMBEDDER,
     REGISTRY,
     construction_violations,
     factory_call_violations,
@@ -42,3 +44,17 @@ def test_only_the_registry_wraps_a_provider_in_metering() -> None:
 def test_the_registry_is_where_providers_are_metered() -> None:
     # Guards against a vacuous pass: the scan must see the registry's own construction.
     assert any(found.module == REGISTRY for found in scan_tree().metered)
+
+
+def test_the_registry_is_where_embedders_are_metered() -> None:
+    # Guards against a vacuous pass: the scan must see the registry's MeteredEmbedder.
+    assert any(
+        found.module == REGISTRY and METERED_EMBEDDER in found.what for found in scan_tree().metered
+    )
+
+
+def test_local_models_are_loaded_only_by_the_registry_built_client() -> None:
+    # Guards against a vacuous pass: the scan must see the one place a local model is
+    # constructed, inside LocalModels (made only by the local factory's create_client).
+    found = scan_tree().local_models
+    assert [f.module for f in found] == [LOCAL_MODELS_MODULE], _report(list(found))

@@ -11,7 +11,9 @@ It enforces its own capture policy on the way through: content the policy does n
 allow is removed before any sink sees it, whatever policy the emitter used. A field
 declared as tool content (``ToolContent``) is treated as tool content whatever kind its
 emitter labelled it. A failing
-sink is logged (its class and the exception class only) and never stops the others.
+sink is logged (its class and the exception class only) and never stops the others. A
+cancellation is never swallowed: cancelling the fan-out cancels every sink, and a sink
+that raises ``CancelledError`` has it raised again, unchanged, after the others finish.
 
 Upper layers define their own event classes by subclassing ``Event``.
 """
@@ -259,23 +261,56 @@ def enforce_capture(event: Event, policy: CapturePolicy) -> Event:
     return enforced
 
 
+async def _deliver(sink: EventSink, event: Event) -> Exception | asyncio.CancelledError | None:
+    """``sink.emit(event)``, its failure or its own cancellation returned rather than
+    raised. A cancellation of this delivery (the fan-out being cancelled) is raised."""
+    try:
+        await sink.emit(event)
+    except asyncio.CancelledError as cancelled:
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            raise
+        return cancelled
+    except Exception as failure:
+        return failure
+    return None
+
+
 class FanOutSink:
-    """Delivers each event to every sink, concurrently, under one capture policy."""
+    """Delivers each event to every sink, concurrently, under one capture policy.
+
+    The policy is fixed when the fan-out is made: ``policy`` is read only, so whoever is
+    handed the sink cannot loosen what it lets through."""
 
     def __init__(self, sinks: Iterable[EventSink], *, policy: CapturePolicy | None = None) -> None:
         self._sinks = tuple(sinks)
-        self.policy = policy or CapturePolicy()
+        self._policy = policy or CapturePolicy()
+
+    @property
+    def policy(self) -> CapturePolicy:
+        """The capture policy every event is held to (immutable, and read only here)."""
+        return self._policy
 
     async def emit(self, event: Event) -> None:
+        """Deliver ``event`` to every sink. A cancellation always propagates unchanged:
+        a cancelled fan-out cancels every sink, and a sink that raises ``CancelledError``
+        itself has it raised again, once the other sinks have finished. Any other sink
+        failure is logged and never raised."""
         event = enforce_capture(event, self.policy)
-        results = await asyncio.gather(
-            *(sink.emit(event) for sink in self._sinks), return_exceptions=True
-        )
+        # Each sink's outcome comes back as a value, so a sink's own CancelledError is the
+        # very exception it raised (gather would hand back a new one). Cancelling the
+        # fan-out still cancels gather, which cancels every sink and raises here.
+        results = await asyncio.gather(*(_deliver(sink, event) for sink in self._sinks))
+        cancelled: asyncio.CancelledError | None = None
         for sink, result in zip(self._sinks, results, strict=True):
-            if isinstance(result, BaseException):
+            if isinstance(result, asyncio.CancelledError):
+                cancelled = cancelled or result
+            elif result is not None:
                 logger.warning(
                     "event sink %s failed on %s: %s",
                     type(sink).__name__,
                     event.type,
                     type(result).__name__,
                 )
+        if cancelled is not None:
+            raise cancelled
