@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0b9] - 2026-11-07
+
+Wave 9: one hidden-character rule for the untrusted-content sanitiser and the MCP bridge (`fix/0.1.0-mcp-schema-hidden`).
+
+### Added
+
+- `is_hidden_character`, the sanitiser's hidden-character rule for one character, exported from `conduit` and `conduit.core.untrusted`, and used by `sanitise_untrusted`.
+
+### Changed
+
+- The MCP bridge leaves out a tool whose schema keys or raw schema values hold a default-ignorable character (such as U+3164 or a variation selector), as it already did for control and format characters, using the core's `is_hidden_character`.
+
 ## [0.1.0b8] - 2026-11-06
 
 Wave 8, fourth and last merge: default-ignorable characters and more angle lookalikes in the untrusted-content sanitiser (`fix/0.1.0-sanitiser-ignorables`).
