@@ -11,8 +11,10 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import itertools
 import weakref
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -21,6 +23,7 @@ from pydantic import ValidationError
 
 from conduit.core.backends import TokenSet
 from conduit.core.secrets import LiteralSecretResolver
+from conduit.mcp import oauth
 from conduit.mcp.errors import McpAuthError, OAuthFailure
 from conduit.mcp.oauth import OAuthClient, _Client, _shared_lock
 from conduit.mcp.settings import McpServerSettings
@@ -261,6 +264,23 @@ class UnhashableStore(SharedBacking):
         return isinstance(other, UnhashableStore) and other._inner is self._inner
 
 
+@dataclass
+class DataclassStore:
+    """A plain dataclass store: weakly referenceable, but unhashable (``eq`` without
+    ``frozen``)."""
+
+    inner: MemoryTokenStore = field(default_factory=MemoryTokenStore)
+
+    async def get(self, key: str) -> TokenSet | None:
+        return await self.inner.get(key)
+
+    async def put(self, key: str, tokens: TokenSet) -> None:
+        await self.inner.put(key, tokens)
+
+    async def delete(self, key: str) -> None:
+        await self.inner.delete(key)
+
+
 class TestSharedRefreshFallback:
     """A store that cannot be weakly referenced still shares one refresh across clients."""
 
@@ -286,6 +306,28 @@ class TestSharedRefreshFallback:
         with pytest.raises(TypeError):
             hash(store)
         await self._shared_by_two_clients(store)
+
+    async def test_a_dataclass_store(self) -> None:
+        store = DataclassStore()
+        weakref.ref(store)
+        with pytest.raises(TypeError):
+            hash(store)
+        await self._shared_by_two_clients(store)
+
+    async def test_a_weakly_referenceable_store_is_not_kept_alive(self) -> None:
+        # Review M1: an unhashable store that can be weakly referenced goes, with its
+        # locks, when the product drops it; only stores without weak references stay.
+        gc.collect()
+        pinned, by_id = len(oauth._PINNED_LOCKS), len(oauth._ID_LOCKS)
+        stores = [DataclassStore() for _ in range(100)]
+        held = [_shared_lock(store, "mcp:docs") for store in stores]
+        assert len(oauth._ID_LOCKS) == by_id + 100
+        assert len(oauth._PINNED_LOCKS) == pinned
+        probe = weakref.ref(stores[0])
+        del stores, held
+        gc.collect()
+        assert probe() is None
+        assert len(oauth._ID_LOCKS) == by_id
 
     async def test_two_such_stores_do_not_share_a_lock(self) -> None:
         first, second = SlottedStore(), SlottedStore()

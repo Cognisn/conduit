@@ -83,9 +83,12 @@ _LoopLocks = weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyn
 #: One lock per (store, event loop, key), shared by every OAuthClient of that store in
 #: the process, so clients of one store never refresh the same token twice at once.
 _SHARED_LOCKS: weakref.WeakKeyDictionary[Any, _LoopLocks] = weakref.WeakKeyDictionary()
-#: The same, by identity, for stores that cannot be weakly referenced or hashed. Each
-#: such store is held here for the life of the process, so its identity is never
-#: reused; a process has few stores, so this stays small.
+#: The same, by identity, for stores that can be weakly referenced but not hashed (a
+#: plain dataclass, say). Each entry goes when its store does.
+_ID_LOCKS: dict[int, _LoopLocks] = {}
+#: The same, by identity, for stores that cannot be weakly referenced at all. Each such
+#: store is held here for the life of the process, so its identity is never reused; a
+#: process has few stores, so this stays small.
 _PINNED_LOCKS: dict[int, tuple[Any, _LoopLocks]] = {}
 
 
@@ -98,10 +101,23 @@ def _loop_locks(store: Any) -> _LoopLocks:
         return loops
     except TypeError:
         pass  # not weakly referenceable, or not hashable: kept by identity below
-    pinned = _PINNED_LOCKS.get(id(store))
+    referenceable = True
+    try:
+        weakref.ref(store)
+    except TypeError:
+        referenceable = False
+    key = id(store)
+    if referenceable:
+        found = _ID_LOCKS.get(key)
+        if found is None:
+            found = weakref.WeakKeyDictionary()
+            _ID_LOCKS[key] = found
+            weakref.finalize(store, _ID_LOCKS.pop, key, None)
+        return found
+    pinned = _PINNED_LOCKS.get(key)
     if pinned is None:
         pinned = (store, weakref.WeakKeyDictionary())
-        _PINNED_LOCKS[id(store)] = pinned
+        _PINNED_LOCKS[key] = pinned
     return pinned[1]
 
 
