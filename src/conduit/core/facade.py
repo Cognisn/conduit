@@ -192,7 +192,10 @@ class LoopThread:
 
         A caller waiting on a cancelled call gets ``FacadeError``, as does one whose call
         ignored cancellation past ``join_timeout``. Refused on the loop's own thread,
-        where it would wait on itself.
+        where it would wait on itself. Each of its three steps (the shutdown, the thread
+        join, and the settle that unwinds whatever the shutdown did not reach) may take
+        up to ``join_timeout`` (the settle, ``SETTLE_S`` when that is ``None``), so
+        ``close`` can take up to three times that.
         """
         if self.on_loop_thread():
             raise FacadeError(

@@ -357,6 +357,19 @@ def test_a_local_model_outside_the_registry_built_client_is_caught(
     assert len(found) == 1 and "SentenceTransformer" in found[0]
 
 
+def test_an_aliased_local_model_from_another_module_path_is_caught() -> None:
+    # Neither a known constructor's path nor the class's own name at the call: only the
+    # resolved target's last part names it.
+    source = """
+    from sentence_transformers.SentenceTransformer import SentenceTransformer as Model
+    model = Model("example-model")
+    """
+    found = _constructions(source, "conduit.agent.runner")
+    assert len(found) == 1 and "SentenceTransformer" in found[0]
+    scan = scan_source(textwrap.dedent(source), "conduit.agent.runner", path=PATH)
+    assert len(scan.local_models) == 1
+
+
 def test_a_computed_name_on_sentence_transformers_is_a_construction() -> None:
     source = """
     import sentence_transformers as library
