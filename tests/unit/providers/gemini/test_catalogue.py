@@ -13,7 +13,17 @@ import pytest
 from conduit.core.catalogue import Capabilities, default_catalogue
 from conduit.core.residency import ResidencyScope
 
-CHAT = ("gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite")
+#: gemini-4-carbon added 2026-11-10 from its page (Stable, 1,048,576 tokens in, 65,536
+#: out by default). Left out: gemini-3.1-pro-preview (preview), gemini-3.1-flash-lite
+#: (shuts down 7 May 2027), gemini-2.5-flash-lite (existing users only) and
+#: gemini-embedding-2 (no default output length stated).
+CHAT = (
+    "gemini-4-carbon",
+    "gemini-4-argon",
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+)
 
 
 def test_the_gemini_entries_are_exactly_these() -> None:

@@ -36,6 +36,7 @@ from conduit.providers.bedrock.mapping import (
     build_converse_request,
     events_from_converse_response,
     stop_reason_from_bedrock,
+    streams_tool_use,
     usage_from_bedrock,
 )
 
@@ -49,7 +50,8 @@ TOOL = ToolSpec(
 
 def request(**fields: Any) -> ModelRequest:
     fields.setdefault("messages", (Message.user("Hello"),))
-    return ModelRequest(model=MODEL, max_output_tokens=256, **fields)
+    fields.setdefault("model", MODEL)
+    return ModelRequest(max_output_tokens=256, **fields)
 
 
 def cache_points(params: dict[str, Any]) -> int:
@@ -224,6 +226,83 @@ class TestCachePoints:
         assert params["system"] == [{"text": "S."}]
         kept = [CACHE_POINT in m["content"] for m in params["messages"]]
         assert kept == [False, True, True, True, True]
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "amazon.nova-lite-v1:0",
+            "us.amazon.nova-pro-v1:0",
+            "apac.amazon.nova-micro-v1:0",
+            "global.amazon.nova-2-lite-v1:0",
+        ],
+    )
+    def test_amazon_nova_takes_cache_points_in_system_and_messages_only(self, model: str) -> None:
+        # Nova's model cards: "Fields that accept prompt cache checkpoints: system and
+        # messages". A tools cache point would be refused, so it is never sent.
+        params = build_converse_request(
+            request(
+                model=model,
+                system=(TextBlock(text="Stable."), CacheBreakpoint()),
+                tools=(TOOL,),
+                cache_tools=True,
+                messages=(
+                    Message(role="user", content=(TextBlock(text="Doc."), CacheBreakpoint())),
+                ),
+            ),
+            prompt_caching=True,
+        )
+        assert CACHE_POINT not in params["toolConfig"]["tools"]
+        assert params["system"] == [{"text": "Stable."}, CACHE_POINT]
+        assert params["messages"][0]["content"] == [{"text": "Doc."}, CACHE_POINT]
+
+    def test_for_nova_the_last_four_are_counted_without_the_tools(self) -> None:
+        messages = tuple(
+            Message(role="user", content=(TextBlock(text=f"part {i}"), CacheBreakpoint()))
+            for i in range(3)
+        )
+        params = build_converse_request(
+            request(
+                model="amazon.nova-lite-v1:0",
+                system=(TextBlock(text="S."), CacheBreakpoint()),
+                tools=(TOOL,),
+                cache_tools=True,
+                messages=messages,
+            ),
+            prompt_caching=True,
+        )
+        # Four breakpoints and no tools point: all four are kept.
+        assert cache_points(params) == 4
+        assert params["system"] == [{"text": "S."}, CACHE_POINT]
+        assert all(CACHE_POINT in m["content"] for m in params["messages"])
+
+
+class TestStreamingToolUse:
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "mistral.mistral-large-2402-v1:0",
+            "us.mistral.pixtral-large-2502-v1:0",
+            "eu.mistral.pixtral-large-2502-v1:0",
+            "meta.llama3-3-70b-instruct-v1:0",
+            "us.meta.llama4-maverick-17b-instruct-v1:0",
+            "writer.palmyra-x5-v1:0",
+        ],
+    )
+    def test_models_that_refuse_tools_on_converse_stream(self, model: str) -> None:
+        assert streams_tool_use(model) is False
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            MODEL,
+            "eu.anthropic.claude-sonnet-5",
+            "amazon.nova-lite-v1:0",
+            "qwen.qwen3-235b-a22b-2507-v1:0",
+            "mistral.mistral-small-2402-v1:0",
+        ],
+    )
+    def test_other_models_stream_tool_use(self, model: str) -> None:
+        assert streams_tool_use(model) is True
 
 
 class TestUsage:

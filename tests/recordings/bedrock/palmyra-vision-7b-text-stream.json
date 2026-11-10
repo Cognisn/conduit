@@ -1,0 +1,78 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "operation": "ConverseStream",
+        "params": {
+          "inferenceConfig": {
+            "maxTokens": 1024
+          },
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "Incident notes: host-a.example.com stopped answering on 192.0.2.10 at 09:00."
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "modelId": "writer.palmyra-vision-7b",
+          "system": [
+            {
+              "text": "You summarise incident notes for the operations team at example.com."
+            }
+          ]
+        },
+        "region": "us-east-1"
+      },
+      "response": [
+        {
+          "messageStart": {
+            "role": "assistant"
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 0,
+            "delta": {
+              "text": "host-a.example.com "
+            }
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 0,
+            "delta": {
+              "text": "stopped answering at 09:00."
+            }
+          }
+        },
+        {
+          "contentBlockStop": {
+            "contentBlockIndex": 0
+          }
+        },
+        {
+          "messageStop": {
+            "stopReason": "end_turn"
+          }
+        },
+        {
+          "metadata": {
+            "metrics": {
+              "latencyMs": 420
+            },
+            "usage": {
+              "inputTokens": 37,
+              "outputTokens": 11,
+              "totalTokens": 48
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "name": "palmyra-vision-7b-text-stream",
+  "provider": "bedrock"
+}

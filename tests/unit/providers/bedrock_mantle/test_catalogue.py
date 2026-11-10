@@ -40,6 +40,8 @@ EXPECTED: dict[str, tuple[frozenset[str], int, int, bool]] = {
     "anthropic.claude-sonnet-5-5": (frozenset({"us-gov-west-1"}), 1_000_000, 128_000, True),
     "anthropic.claude-haiku-5-5": (frozenset({"us-gov-west-1"}), 1_000_000, 128_000, True),
     "anthropic.claude-fable-5-1": (frozenset({"us-gov-west-1"}), 1_000_000, 128_000, True),
+    # Added 10 November 2026 from its card (Active, legacy): mantle in us-east-1.
+    "anthropic.claude-fable-5": (frozenset({"us-east-1"}), 1_000_000, 128_000, True),
     "anthropic.claude-opus-5": (
         frozenset({"us-east-1", "us-gov-west-1", "eu-north-1", "eu-west-1", MELBOURNE}),
         1_000_000,
@@ -122,8 +124,17 @@ def test_melbourne_has_single_region_claude() -> None:
     }
 
 
-@pytest.mark.parametrize("model_id", ["anthropic.claude-mythos-5", "anthropic.claude-fable-5"])
-def test_preview_and_superseded_models_are_not_declared(model_id: str) -> None:
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        # Preview and gated to verified organisations.
+        "anthropic.claude-mythos-5",
+        # Not served on bedrock-mantle (their cards: bedrock-runtime only).
+        "anthropic.claude-fable-5-2",
+        "anthropic.claude-sonnet-4-6",
+    ],
+)
+def test_gated_and_runtime_only_models_are_not_declared(model_id: str) -> None:
     assert default_catalogue().get("bedrock_mantle", model_id) is None
 
 

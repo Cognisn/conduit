@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -21,6 +22,7 @@ from conduit.core.types import (
     CacheBreakpoint,
     Message,
     ModelRequest,
+    ProviderStateBlock,
     StopReason,
     TextBlock,
     ToolResultBlock,
@@ -164,6 +166,143 @@ class TestInRegionSonnet:
         )
         assert response.usage.cache_write_tokens == 1200
         runtime.replay.assert_exhausted()
+
+
+def plain(model: str, *, tools: bool = False) -> ModelRequest:
+    """The vendor recordings' request: a cached system prompt, and the tool if asked."""
+    return ModelRequest(
+        model=model,
+        system=(TextBlock(text=SYSTEM), CacheBreakpoint()),
+        tools=(TOOL,) if tools else (),
+        cache_tools=tools,
+        messages=(Message.user(NOTES),),
+        max_output_tokens=1024,
+    )
+
+
+ANSWER = "host-a.example.com stopped answering at 09:00."
+
+
+class TestOtherVendors:
+    """Converse chat models from vendors other than Anthropic, against recordings."""
+
+    async def replay(self, build: Any, region: str) -> tuple[Any, RecordedRuntime]:
+        recording = load_recording(recordings.path(build()))
+        runtime = RecordedRuntime(recording, region=region)
+        provider, _ = await built(runtime, region=region)
+        return provider, runtime
+
+    @pytest.mark.parametrize(
+        ("build", "model", "region"),
+        [
+            (recordings.nova_lite_tools, "amazon.nova-lite-v1:0", "us-east-1"),
+            (recordings.qwen_tools, "qwen.qwen3-235b-a22b-2507-v1:0", "eu-west-2"),
+        ],
+        ids=["amazon", "qwen"],
+    )
+    async def test_a_streamed_tool_call(self, build: Any, model: str, region: str) -> None:
+        provider, runtime = await self.replay(build, region)
+        events = [e async for e in provider.stream(plain(model, tools=True))]
+        assert events[-3:-1] == [
+            ToolCallStarted(id="tooluse_example0001", name="lookup_host"),
+            ToolCallFinished(
+                id="tooluse_example0001", name="lookup_host", input={"host": "host-a.example.com"}
+            ),
+        ]
+        stopped = events[-1]
+        assert isinstance(stopped, StreamStopped)
+        assert stopped.stop_reason is StopReason.TOOL_USE
+        assert stopped.usage.input_tokens == 52
+        assert stopped.usage.output_tokens == 31
+        runtime.replay.assert_exhausted()
+
+    async def test_nova_writes_its_cache_from_the_system_point(self) -> None:
+        provider, runtime = await self.replay(recordings.nova_lite_tools, "us-east-1")
+        response = await provider.complete(plain("amazon.nova-lite-v1:0", tools=True))
+        assert response.usage.cache_write_tokens == 1200
+        runtime.replay.assert_exhausted()
+
+    async def test_tools_go_through_converse_where_the_stream_refuses_them(self) -> None:
+        # The provider streams by default; Mistral Large (24.02) refuses tools on
+        # ConverseStream, so the recording expects a Converse call.
+        provider, runtime = await self.replay(recordings.mistral_large_tools, "eu-west-2")
+        assert provider.settings.use_converse_stream
+        response = await provider.complete(plain("mistral.mistral-large-2402-v1:0", tools=True))
+        assert response.tool_uses == (
+            ToolUseBlock(
+                id="tooluse_example0002", name="lookup_host", input={"host": "host-a.example.com"}
+            ),
+        )
+        assert response.usage == Usage(
+            input_tokens=64, output_tokens=22, cache_read_tokens=0, cache_write_tokens=0
+        )
+        runtime.replay.assert_exhausted()
+
+    async def test_without_tools_the_same_model_streams(self) -> None:
+        # ScriptedRuntime fails any Converse call, so this passes only by streaming.
+        runtime = ScriptedRuntime(stream=iter(STOP))
+        provider, _ = await built(runtime)
+        response = await provider.complete(plain("mistral.mistral-large-2402-v1:0"))
+        assert response.stop_reason is StopReason.END_TURN
+        assert len(runtime.threads) == 1
+
+    @pytest.mark.parametrize(
+        ("build", "model", "region"),
+        [
+            (recordings.gpt_oss_reasoning, "openai.gpt-oss-120b-1:0", "us-west-2"),
+            (recordings.nemotron_reasoning, "nvidia.nemotron-super-3-120b", "eu-west-2"),
+        ],
+        ids=["openai-stream", "nvidia-converse"],
+    )
+    async def test_reasoning_without_a_signature_is_state_not_text(
+        self, build: Any, model: str, region: str
+    ) -> None:
+        recording = load_recording(recordings.path(build()))
+        runtime = RecordedRuntime(recording, region=region)
+        streaming = recording.interactions[0].request["operation"] == "ConverseStream"
+        provider, _ = await built(runtime, region=region, use_converse_stream=streaming)
+        response = await provider.complete(plain(model))
+        assert response.text == ANSWER
+        states = [b for b in response.content if isinstance(b, ProviderStateBlock)]
+        assert len(states) == 1
+        assert states[0].provider_kind == "bedrock"
+        assert json.loads(states[0].payload) == {"reasoningText": {"text": recordings.REASONING}}
+        runtime.replay.assert_exhausted()
+
+    @pytest.mark.parametrize(
+        ("build", "model", "region"),
+        [
+            (recordings.gpt_profile_text, "in.openai.gpt-5.6-terra", "ap-south-1"),
+            (recordings.deepseek_text, "deepseek.v3.2", "ap-southeast-2"),
+            (recordings.minimax_text, "minimax.minimax-m2.5", "eu-west-2"),
+            (recordings.kimi_text, "moonshotai.kimi-k2.5", "ap-southeast-2"),
+            (recordings.palmyra_text, "writer.palmyra-vision-7b", "us-east-1"),
+            (recordings.glm_text, "zai.glm-5", "us-west-2"),
+        ],
+        ids=["openai-profile", "deepseek", "minimax", "moonshot", "writer", "zai"],
+    )
+    async def test_a_streamed_answer_and_its_usage(
+        self, build: Any, model: str, region: str
+    ) -> None:
+        provider, runtime = await self.replay(build, region)
+        events = [e async for e in provider.stream(plain(model))]
+        assert [e.text for e in events if isinstance(e, TextDelta)] == [
+            "host-a.example.com ",
+            "stopped answering at 09:00.",
+        ]
+        stopped = events[-1]
+        assert isinstance(stopped, StreamStopped)
+        assert stopped.stop_reason is StopReason.END_TURN
+        assert stopped.usage.input_tokens > 0 and stopped.usage.output_tokens > 0
+        assert stopped.usage.cache_read_tokens == stopped.usage.cache_write_tokens == 0
+        runtime.replay.assert_exhausted()
+
+    @pytest.mark.parametrize("build", recordings.VENDORS, ids=lambda b: b.__name__)
+    def test_each_vendor_model_is_declared_for_its_recorded_region(self, build: Any) -> None:
+        request = build().interactions[0].request
+        entry = default_catalogue().require("bedrock", request["params"]["modelId"])
+        assert entry.residency_scope.value in {"in_region", "cross_region"}
+        assert request["region"] in entry.regions
 
 
 class TestCacheGating:
