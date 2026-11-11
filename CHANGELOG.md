@@ -6,9 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0rc2] - 2026-11-11
+
+Second release candidate. Wave 10 brings the default model catalogue up to each provider's documented models (`fix/0.1.0-catalogue-coverage`), and the licence audit admits a new dependency of the warden extra.
+
+### Added
+
+- The default catalogue (version 2026.11.11, 190 entries, up from 66) declares every current, documented model of each provider:
+  - on the Anthropic API, Claude Fable 5.2 and 5, Opus 5, 4.8, 4.7, 4.6 and 4.5, and Sonnet 5;
+  - on Bedrock, those Claude models with their in-Region ids and geographic and global profiles, and the current Converse chat models of Amazon Nova, DeepSeek, Mistral AI, OpenAI, Qwen, MiniMax, Moonshot AI, NVIDIA, Writer and Z.AI;
+  - Claude Fable 5 on bedrock-mantle;
+  - seven more OpenAI chat models and text-embedding-3-large;
+  - seven more X.AI chat models;
+  - Gemini 4 Carbon.
+
+  Each value is taken from the provider's own documentation. Bedrock entries from vendors other than Anthropic are tested against recorded responses until the next live verification pass.
+
 ### Changed
 
 - The licence audit names fido2 as an agreed exception: cognisn-warden requires it from 0.1.0b18, so the warden extra installs it. It is BSD-2-Clause with some files under Apache-2.0 and MPL-2.0, and is matched by exact package name only. The README's warden package count is now 33 beyond the core (38 in all).
+
+### Fixed
+
+- Bedrock: Amazon Nova requests carry no cache point after their tools, which Nova refuses.
+- Bedrock: a request with tools for a model that refuses tool use on ConverseStream (Llama 3.1, 3.3 and 4, Mistral Large 24.02 and 24.07, Pixtral Large, Palmyra X4 and X5) is sent through Converse.
+- The catalogue's text-embedding-3-small context window is 8,192 tokens, as OpenAI documents it.
+- The catalogue's gpt-6-astra and gpt-6.1-sol declare no tools, because OpenAI serves their tool calls only through the Responses API, which conduit does not use.
 
 ## [0.1.0rc1] - 2026-11-07
 
