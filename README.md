@@ -6,7 +6,7 @@ conduit gives a Python product model providers, a model catalogue with residency
 
 ## Status
 
-**Release candidate.** conduit 0.1.0rc1 is on PyPI as a pre-release, built from the `release/v0.1.0` branch. Every layer described here is built and tested; the public API may still change before 0.1.0 if testing of the release candidate finds a problem.
+**Release candidate.** conduit 0.1.0rc2 is on PyPI as a pre-release, built from the `release/v0.1.0` branch. Every layer described here is built and tested; the public API may still change before 0.1.0 if testing of the release candidate finds a problem.
 
 ## Design in brief
 
@@ -24,7 +24,7 @@ Python 3.12 or later.
 
 ## Installation
 
-The PyPI package is `cognisn-conduit` and the import name is `conduit`. Until 0.1.0 is final, ask for the pre-release explicitly, with `pip install --pre` or a pinned version such as `cognisn-conduit==0.1.0rc1`:
+The PyPI package is `cognisn-conduit` and the import name is `conduit`. Until 0.1.0 is final, ask for the pre-release explicitly, with `pip install --pre` or a pinned version such as `cognisn-conduit==0.1.0rc2`:
 
 ```sh
 pip install "cognisn-conduit[bedrock]"

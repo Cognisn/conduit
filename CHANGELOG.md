@@ -24,6 +24,7 @@ Second release candidate. Wave 10 brings the default model catalogue up to each 
 
 ### Changed
 
+- The README's status and installation notes name 0.1.0rc2 as the release candidate on PyPI.
 - The licence audit names fido2 as an agreed exception: cognisn-warden requires it from 0.1.0b18, so the warden extra installs it. It is BSD-2-Clause with some files under Apache-2.0 and MPL-2.0, and is matched by exact package name only. The README's warden package count is now 33 beyond the core (38 in all).
 
 ### Fixed
