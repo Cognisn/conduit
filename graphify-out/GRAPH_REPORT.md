@@ -1,30 +1,30 @@
-# Graph Report - conduit  (2026-11-07)
+# Graph Report - conduit  (2026-11-11)
 
 ## Corpus Check
-- 436 files · ~304,531 words
+- 448 files · ~313,898 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 4 file(s) not represented in the graph (top: (none) 3, .typed 1)
 
 ## Summary
-- 9055 nodes · 30264 edges · 301 communities (218 shown, 83 thin omitted)
-- Extraction: 82% EXTRACTED · 18% INFERRED · 0% AMBIGUOUS · INFERRED: 5303 edges (avg confidence: 0.91)
+- 9142 nodes · 30361 edges · 290 communities (218 shown, 72 thin omitted)
+- Extraction: 83% EXTRACTED · 17% INFERRED · 0% AMBIGUOUS · INFERRED: 5301 edges (avg confidence: 0.91)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `69185624`
+- Built from commit: `0459aa7c`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
 - typing
-- EmbeddingRequest
+- FakeBedrock
 - Message Content Blocks
 - MCP OAuth Test Fixtures
 - runtime
 - ConfigurationError
 - Otel Sink Tests
 - JSON Stores
-- MemorySkillSource
+- Recording
 - Filesystem Skill Source
 - Skill Disclosure Tests
 - MCP Connections and Transports
@@ -33,13 +33,13 @@
 - McpToolBridge
 - ProviderRegistry
 - FakeFactory
-- conformance/test_sql_stores.py
+- postgres.py
 - SQL Stores and Migrations
 - TextDelta
 - SyncProvider
 - test_compaction_hook.py
 - Anthropic Provider Tests
-- Skill Session and Cache Placement
+- SkillSession
 - _build
 - SKILL.md Parsing
 - test_evaluation.py
@@ -50,7 +50,7 @@
 - OAuth Client Refresh and Sign-in
 - Compactor
 - gemini/test_error_chains.py
-- ConfigurationError
+- TaskClass
 - Warden Sink Tests
 - Agent Runner
 - Otel Event Sink
@@ -60,73 +60,73 @@
 - tests/unit/embeddings (group 41)
 - tests/unit/providers/anthropic (group 42)
 - .github/workflows (group 43)
-- tools.py
+- with
 - disclosure.py
 - tests/unit/mcp (group 46)
 - filesystem.py
 - tests/unit/providers/bedrock (group 48)
 - tests/scripts (group 49)
-- strategies.py
+- conduit/compaction/__init__.py
 - src/conduit/providers/openai_compat (group 51)
-- AgentTask
+- CapturePolicy
 - started
 - tests/unit/core (group 55)
-- tests/unit/providers/bedrock (group 56)
-- bedrock_mantle/test_settings.py
+- bedrock/mapping.py
+- pytest
 - tests/unit/integrations/konfig (group 58)
 - SecretRef
-- .error
+- Runtime
 - src/conduit/core (group 61)
 - StubTurn
 - tests/unit/integrations/konfig (group 63)
 - tests/unit/embeddings/local (group 64)
 - BudgetMeter
 - sanitise_untrusted
-- assert_refused
-- tests/unit/providers/bedrock_mantle (group 68)
-- FakeClient
+- test_oauth_binding.py
+- Server
+- embeddings/test_start.py
 - tests/unit/providers/openai_compat (group 70)
 - test_skip_reasons.py
-- Sink
+- AgentTask
 - test_secret_resolvers.py
 - ApprovalRequest
-- builtin_factories
+- conversation
 - runtime
 - test_bridge_model_facing.py
 - tests/unit/providers/bedrock_mantle (group 78)
-- src/conduit/integrations/warden (group 79)
-- SampleTool
+- Integrating conduit into a product
+- Executor
 - .close
 - CatalogueOverlay
 - gemini/mapping.py
-- TestOtelEventSink
+- BedrockMantleFactory
 - cli
 - src/conduit/stores/sql (group 86)
 - tests/unit/providers/anthropic (group 87)
 - tests/unit/providers/openai_compat (group 88)
 - Service
-- tests/tripwires (group 90)
+- TestEveryEventClass
 - probes.py
 - importscan.py
 - live/test_catalogue.py
-- bedrock/mapping.py
+- migration.py
 - anthropic/fakes.py
 - Usage
 - runner.py
 - Verdict
 - classify
 - ToolOutcome
-- short_term_keys
+- RecordedRuntime
 - tests/tripwires (group 102)
 - ._attempt
 - ModelRequest
 - tests/tripwires (group 105)
 - LoopThread
-- tests/unit/providers/bedrock_mantle (group 107)
+- test_registry_follow_up.py
 - tests/unit/stores/sql (group 108)
 - test_charge.py
 - tests/unit/providers/bedrock (group 110)
-- tests/unit/providers/bedrock (group 111)
+- bedrock/test_auth.py
 - test_event_sinks.py
 - test_malformed.py
 - tests/scripts (group 114)
@@ -134,10 +134,10 @@
 - tests/unit/providers/gemini (group 117)
 - scan_tree
 - tests/unit/agent (group 119)
-- TranscriptStore
-- tests/unit/providers/openai_compat (group 121)
+- MessageEntry
+- ModelCallFinishedEvent
 - FreshRoot
-- tests/unit/providers/anthropic (group 123)
+- test_remote.py
 - Writing backends
 - tests/unit/providers/openai_compat (group 125)
 - evaluation.py
@@ -147,27 +147,27 @@
 - SkillSource
 - tests/unit/providers (group 131)
 - tests/unit/providers/bedrock (group 132)
-- tests/unit/providers/openai_compat (group 133)
+- Interaction
 - ollama/mapping.py
-- fails
+- test_run_hooks.py
 - ._guarded
-- EventSinkSuite
+- EventSink
 - tests/unit/providers/openai_compat (group 138)
 - Case
 - TestStream
-- json.py
+- conformance/test_sql_stores.py
 - CHANGELOG.md (group 142)
 - CHANGELOG.md (group 143)
 - docs/design (group 144)
 - Sink
-- Path
-- anthropic/test_recordings.py
+- pathlib
+- _registry
 - CHANGELOG.md (group 148)
 - write_config
 - test_the_rule_refuses_each_local_library_outside_the_local_layer
 - .handle
-- test_fanout_cancellation.py
-- core/untrusted.py
+- synthetic_vector
+- _registry
 - CHANGELOG.md (group 154)
 - _start
 - test_approval_handlers.py
@@ -180,116 +180,105 @@
 - tests/unit/integrations/konfig (group 165)
 - CHANGELOG.md (group 166)
 - MemoryTranscriptStore
-- _request
+- openai_compat/recordings.py
 - CHANGELOG.md (group 169)
-- default_catalogue
+- test_registry_guard.py
 - test_public_api.py
 - test_openai_compat.py
 - CHANGELOG.md (group 173)
 - frame_untrusted
 - test_guides.py
 - TestRefresh
-- connection
-- OutputContract
+- test_package.py
+- parametrize
 - ProviderFactory
 - docs/design (group 180)
 - docs/design (group 184)
 - pyproject.toml (group 185)
-- test_event_content_switch.py
+- Driver
 - LocalEmbeddingSettings
-- GeminiProvider
-- subprocess
-- harness.py
-- stub_conduit
+- test_anthropic.py
+- sys
+- conduit_core_catalogue
+- save_recording
 - test_facade.py
 - live/conftest.py
 - README.md
-- evaluation_cases.py
-- write_config
+- _outcome
+- cli
 - agent/test_untrusted.py
-- ._shared_by_two_clients
+- TokenSet
 - Screen
-- ProviderError
-- require_extras
+- ProviderFailure
+- providers/test_guarded_construction.py
 - Evaluating agent tasks
-- EnvironmentSecretResolver
-- Path
+- ReplayProvider
+- usage
 - sync
-- Integrating conduit into a product
-- Executor
-- test_gemini_ollama.py
-- status.py
+- ._failure
+- FakeEmbedFactory
+- FakeArray
+- chat.py
 - _renderings
 - live_env
-- _observe
-- test_approvals.py
+- ollama/recordings.py
+- test_stores.py
 - _http
-- test_memory_token_store.py
-- EmbeddingResponse
-- gemini/test_settings.py
+- test_a_missing_library_is_a_configuration_error
+- test_tiny_model.py
+- ollama/test_catalogue.py
 - json
 - extras_needed
-- TestEntryPoint
-- core/test_untrusted.py
-- chat.py
+- FakeClient
+- .patch
 - test_environment.py
-- .create_client
-- app.py
+- IdentifierMark
+- .dimensions
 - SyncRuntime
 - config.py
 - ._observe
-- stdio_server.py
+- test_a_request_error_never_quotes_the_input
 - _MappingSecrets
 - test_servers.py
 - setup.py
 - check_hidden
-- construction_cases.py
+- Any
 - rendered
 - McpTool
 - SignInRequest
 - OAuthFailure
 - .test_a_task_started_during_shutdown_is_cancelled_and_unwound
 - hidden
-- TestIteratorTimeout
 - is_hidden_character
-- ._converse_stream
-- build_server
-- QueuedApprovals
+- BedrockProvider
 - SyntheticFailure
-- TestCredentialFields
-- Amazon Bedrock
-- encode_short_term_key
-- _Slow
-- .executor
-- FakeEmbedder
-- Exception
-- _deliver
+- .build
+- EmbeddingResponse
 - _report_left_as_found
-- test_no_placeholder_reaches_the_failure_output
 
 ## God Nodes (most connected - your core abstractions)
-1. `Message` - 293 edges
+1. `Message` - 290 edges
 2. `ConfigurationError` - 218 edges
-3. `ProviderFailure` - 196 edges
-4. `TextBlock` - 192 edges
-5. `AgentRunner` - 187 edges
-6. `ProviderError` - 171 edges
-7. `ModelRequest` - 155 edges
-8. `Usage` - 155 edges
+3. `TextBlock` - 191 edges
+4. `AgentRunner` - 187 edges
+5. `ProviderFailure` - 184 edges
+6. `ProviderError` - 162 edges
+7. `ModelRequest` - 154 edges
+8. `Usage` - 152 edges
 9. `Event` - 141 edges
-10. `ProviderSettings` - 134 edges
+10. `ProviderSettings` - 131 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `Configuring a server` --references--> `command()`  [INFERRED]
-  docs/guides/mcp.md → src/conduit/cli/app.py
+- `Logging and credentials` --references--> `short_term_keys()`  [INFERRED]
+  docs/guides/providers.md → src/conduit/providers/bedrock/auth.py
 - `Prompt caching` --references--> `CacheBreakpoint`  [INFERRED]
   docs/guides/integration.md → src/conduit/core/types.py
-- `Residency` --references--> `ResidencyRefused`  [INFERRED]
-  docs/guides/providers.md → src/conduit/core/errors.py
 - `The model catalogue and overlays` --references--> `UndeclaredModel`  [INFERRED]
   docs/guides/integration.md → src/conduit/core/errors.py
 - `Termograph 0.8.0` --references--> `ResidencyPolicy`  [INFERRED]
   docs/guides/adoption.md → src/conduit/core/residency.py
+- `Summaries and the run's budget` --references--> `Summarise`  [INFERRED]
+  docs/guides/compaction.md → src/conduit/compaction/strategies.py
 
 ## Import Cycles
 - None detected.
@@ -299,427 +288,431 @@
 - **Upper layers depend one way on conduit.core** — docs_design_architecture_core_layer, docs_design_architecture_providers_layer, docs_design_architecture_embeddings_layer, docs_design_architecture_agent_layer, docs_design_architecture_compaction_layer, docs_design_architecture_skills_layer, docs_design_architecture_mcp_layer, docs_design_architecture_stores_layer, docs_design_architecture_integrations_layer, docs_design_architecture_testing_layer, docs_design_architecture_cli_layer [EXTRACTED 1.00]
 - **Conformance suites for product-supplied backends** — changelog_transcriptstoresuite, changelog_tokenstoresuite, changelog_skillsourcesuite, docs_design_architecture_c11_storage_agnostic [INFERRED 0.85]
 
-## Communities (301 total, 83 thin omitted)
+## Communities (290 total, 72 thin omitted)
 
 ### Community 0 - "typing"
 Cohesion: 0.03
-Nodes (21): _RepeatedKey, _now(), _finite_number(), _well_formed(), stub_vector(), _check_destination(), BedrockMantleSettings, mantle_base_url() (+13 more)
+Nodes (38): _RepeatedKey, tool_results_preframed(), _arguments_text(), CompactionError, AssignmentRefused, ConduitError, ModelNotAssigned, ToolRegistrationError (+30 more)
 
-### Community 1 - "EmbeddingRequest"
-Cohesion: 0.05
-Nodes (68): embedding_usage(), EmbeddingRequest, BedrockEmbedder, BedrockEmbeddingFactory, _family(), GeminiEmbeddingFactory, builtin_embedding_factories(), OllamaEmbeddingFactory (+60 more)
+### Community 1 - "FakeBedrock"
+Cohesion: 0.13
+Nodes (13): ClientError, FakeBedrock, test_a_failure_stops_calls_not_yet_started(), test_a_malformed_titan_body_is_a_protocol_failure(), test_a_titan_vector_of_the_wrong_length_is_caught_by_the_funnel(), test_bedrock_calls_run_concurrently_on_their_own_threads(), test_bedrock_closes_its_client(), test_bedrock_errors_are_classified_and_carry_nothing() (+5 more)
 
 ### Community 2 - "Message Content Blocks"
-Cohesion: 0.05
-Nodes (43): CacheBreakpoint, _Frozen, ImageBlock, Message, ProviderStateBlock, TextBlock, ToolResultBlock, ToolUseBlock (+35 more)
+Cohesion: 0.04
+Nodes (51): find_cut(), render_messages(), _result_text(), trim_text(), _prepared_block(), _result_text(), summary_messages(), _used_tools() (+43 more)
 
 ### Community 3 - "MCP OAuth Test Fixtures"
-Cohesion: 0.05
-Nodes (25): build(), MemoryTokenStore, FakeAuthServer, Grant, s256(), evil_server(), make(), routed() (+17 more)
+Cohesion: 0.07
+Nodes (17): McpAuthError, build(), MemoryTokenStore, FakeAuthServer, assert_refused(), client(), Clock, replace_param() (+9 more)
 
 ### Community 4 - "runtime"
-Cohesion: 0.11
-Nodes (52): The stub, AgentRunner, echo(), scripted(), script(), runtime(), ScriptLog, test_a_refused_task_class_keeps_no_chain() (+44 more)
+Cohesion: 0.09
+Nodes (53): The stub, OutputInvalidEvent, AgentRunner, answer_tool_results(), script(), echo(), scripted(), script() (+45 more)
 
 ### Community 5 - "ConfigurationError"
-Cohesion: 0.03
-Nodes (28): Writing a provider adapter, Catalogue, BaseProvider, EmbeddingProvider, Provider, _close_quietly(), ProviderSettings, read_titan() (+20 more)
+Cohesion: 0.02
+Nodes (63): Building clients, Writing a provider adapter, Catalogue, default_catalogue(), load_catalogue(), ConfigurationError, BaseEmbeddingProvider, BaseProvider (+55 more)
 
 ### Community 6 - "Otel Sink Tests"
-Cohesion: 0.08
-Nodes (27): ApprovalDecidedEvent, BudgetExhaustedEvent, SkillRefusedEvent, Telemetry, at(), compaction(), emit_all(), every_exported_text() (+19 more)
+Cohesion: 0.07
+Nodes (27): ApprovalDecidedEvent, ApprovalRequestedEvent, BudgetExhaustedEvent, Telemetry, at(), compaction(), emit_all(), every_exported_text() (+19 more)
 
 ### Community 7 - "JSON Stores"
-Cohesion: 0.09
-Nodes (37): _file_name(), _in_thread(), JsonTokenStore, JsonTranscriptStore, _files(), _message(), test_a_compaction_replacing_later_entries_is_refused(), test_a_damaged_transcript_file_is_refused_without_echo() (+29 more)
+Cohesion: 0.06
+Nodes (48): StoreError, _check_name(), _file_name(), _in_thread(), locked(), _is_record_name(), JsonTokenStore, JsonTranscriptStore (+40 more)
 
-### Community 8 - "MemorySkillSource"
-Cohesion: 0.05
-Nodes (20): The skill source, Skill, SkillSummary, MemorySkillSource, _DropsResources, _LastAsked, _ListsNothing, _ListsTwice (+12 more)
+### Community 8 - "Recording"
+Cohesion: 0.13
+Nodes (22): Recording, _answer_stream(), deepseek_text(), glm_text(), gpt_oss_reasoning(), gpt_profile_text(), kimi_text(), minimax_text() (+14 more)
 
 ### Community 9 - "Filesystem Skill Source"
 Cohesion: 0.07
 Nodes (18): FilesystemSkillSource, _guarded(), SourceLimits, _clean(), _junction(), _link(), _skill(), TestConfinement (+10 more)
 
 ### Community 10 - "Skill Disclosure Tests"
-Cohesion: 0.06
-Nodes (20): DisclosureLimits, clean(), skill(), unchained(), _session(), TestEvents, TestLimits, TestListing (+12 more)
+Cohesion: 0.05
+Nodes (19): render_skill(), clean(), skill(), unchained(), _session(), TestLimits, load_skill(), TestListing (+11 more)
 
 ### Community 11 - "MCP Connections and Transports"
 Cohesion: 0.05
-Nodes (22): Connecting and bridging tools, _lister(), make(), McpConnection, factory(), streamable(), render_content(), McpAuthError (+14 more)
+Nodes (22): Connecting and bridging tools, _lister(), make(), McpConnection, factory(), streamable(), render_content(), McpError (+14 more)
 
 ### Community 12 - "MCP Client and OAuth Module"
-Cohesion: 0.05
-Nodes (22): The configuration file, _CatalogueFile, FieldsRefused, SettingsModel, CallResult, __getattr__(), pkce_pair(), ApiKeyAuth (+14 more)
+Cohesion: 0.06
+Nodes (17): FieldsRefused, CallResult, __getattr__(), ApiKeyAuth, BearerTokenAuth, check_endpoint_url(), _credential_env_name(), _HttpTransport (+9 more)
 
 ### Community 13 - "Anthropic and OpenAI Factories"
-Cohesion: 0.05
-Nodes (23): Building clients, guarded_client(), build(), _check_environment(), _close(), _close_quietly(), FoundryEntraClient, AnthropicSettings (+15 more)
+Cohesion: 0.03
+Nodes (27): _CatalogueFile, SettingsModel, failure_for(), failure_for_stream_error(), build(), AnthropicProvider, _close(), _close_quietly() (+19 more)
 
 ### Community 14 - "McpToolBridge"
-Cohesion: 0.15
-Nodes (7): McpToolBridge, connection(), context(), TestBridging, TestCalling, product(), TestEvents
+Cohesion: 0.14
+Nodes (7): McpToolBridge, run(), connection(), context(), TestBridging, TestCalling, TestEvents
 
 ### Community 15 - "ProviderRegistry"
-Cohesion: 0.03
-Nodes (28): Residency, _CallContext, ProviderRegistry, LiteralSecretResolver, resolve_secret_fields(), BedrockFactory, StubFactory, StubSettings (+20 more)
+Cohesion: 0.07
+Nodes (16): ProviderRegistry, LiteralSecretResolver, resolve_secret_fields(), start_embeddings(), test_every_reference_field_is_resolved_by_dotted_path(), test_gemini_through_the_real_sdk_client(), TestThroughTheRegistry, TestCreateProvider (+8 more)
 
 ### Community 16 - "FakeFactory"
-Cohesion: 0.13
-Nodes (17): start(), FakeClient, FakeFactory, _settings(), test_a_binding_builds_requests_for_its_task_class(), test_a_binding_cannot_borrow_another_task_classes_model(), test_a_binding_refuses_an_explicit_budget_above_the_model_limit(), test_a_binding_validates_the_budget_before_checking_it() (+9 more)
+Cohesion: 0.12
+Nodes (21): Embeddings, Local embeddings, ConduitSettings, start(), FakeFactory, _overlay(), TestCatalogue, TestDeprecationAttribution (+13 more)
 
-### Community 17 - "conformance/test_sql_stores.py"
-Cohesion: 0.08
-Nodes (17): postgres_url(), _SqlBackend, _SqlTokenSuite, _SqlTranscriptSuite, TestPostgresTokenStore, TestPostgresTranscriptStore, TestSqliteTokenStore, TestSqliteTranscriptStore (+9 more)
+### Community 17 - "postgres.py"
+Cohesion: 0.12
+Nodes (10): postgres_url(), _watchdog(), mode(), postgres_server(), _unavailable(), watchdog(), test_the_watchdog_is_cancelled_after_the_test(), engine() (+2 more)
 
 ### Community 18 - "SQL Stores and Migrations"
-Cohesion: 0.06
-Nodes (41): The SQL backends, flush_text(), __getattr__(), _config(), current_revision(), downgrade(), head_revision(), _loop_lock() (+33 more)
+Cohesion: 0.13
+Nodes (26): current_revision(), head_revision(), migrate(), _message(), _no_schema(), _postgres(), _tables(), test_a_compaction_replacing_later_entries_is_refused() (+18 more)
 
 ### Community 19 - "TextDelta"
-Cohesion: 0.05
-Nodes (41): collect(), _Event, ProviderStateReported, StreamStopped, TextDelta, ToolCallFinished, ToolCallStarted, UsageReported (+33 more)
+Cohesion: 0.06
+Nodes (40): collect(), flush_text(), _Event, ProviderStateReported, StreamStopped, TextDelta, ToolCallFinished, ToolCallStarted (+32 more)
 
 ### Community 21 - "test_compaction_hook.py"
-Cohesion: 0.10
-Nodes (29): Sink, Charging, Hook, Raising, _script(), _task(), test_a_charged_call_counts_against_the_run(), test_a_charged_call_may_not_produce_more_output_than_the_budget_has_left() (+21 more)
+Cohesion: 0.11
+Nodes (29): runtime(), Charging, Hook, Raising, _script(), _task(), test_a_charged_call_counts_against_the_run(), test_a_charged_call_may_not_produce_more_output_than_the_budget_has_left() (+21 more)
 
 ### Community 22 - "Anthropic Provider Tests"
-Cohesion: 0.12
-Nodes (17): scripted_client(), text_block(), thinking_text_block(), tool_block(), _events(), _provider(), _request(), _simple() (+9 more)
+Cohesion: 0.11
+Nodes (18): redacted_block(), scripted_client(), text_block(), thinking_text_block(), tool_block(), _events(), _provider(), _request() (+10 more)
 
-### Community 23 - "Skill Session and Cache Placement"
-Cohesion: 0.07
-Nodes (13): ToolCallContext, SkillSession, SkillRefused, Driver, _load(), _prefix_text(), _refuse(), test_a_loaded_skill_is_cached_with_the_system_prompt_and_tools() (+5 more)
+### Community 23 - "SkillSession"
+Cohesion: 0.05
+Nodes (15): SkillSummary, ToolCallContext, DisclosureLimits, LoadedSkill, SkillSession, MemorySkillSource, _ListsNothing, _ListsTwice (+7 more)
 
 ### Community 24 - "_build"
 Cohesion: 0.08
-Nodes (25): handler(), body(), _build(), _done_lines(), _ndjson(), _overlaid(), handle(), _request() (+17 more)
+Nodes (25): handler(), _build(), _done_lines(), _ndjson(), _overlaid(), replaying(), handle(), _request() (+17 more)
 
 ### Community 25 - "SKILL.md Parsing"
 Cohesion: 0.06
-Nodes (21): check_resource_path(), _document(), _front_matter(), _inline_list(), is_skill_description(), is_skill_version(), _no_trailing(), parse_skill_md() (+13 more)
+Nodes (19): check_resource_path(), _document(), _front_matter(), _inline_list(), is_skill_description(), _no_trailing(), parse_skill_md(), _plain() (+11 more)
 
 ### Community 26 - "test_evaluation.py"
 Cohesion: 0.13
 Nodes (37): completed(), EvalCase, handed_off(), LiveHarness, StubHarness, _answer(), _ask(), _hand_off_case() (+29 more)
 
 ### Community 27 - "mcp/servers.py"
-Cohesion: 0.10
-Nodes (7): failing_transport(), hanging_transport(), memory_transport(), opener(), rejecting_server(), silent_transport(), stubborn_transport()
+Cohesion: 0.05
+Nodes (14): build_server(), failing_transport(), hanging_transport(), memory_transport(), opener(), rejecting_server(), silent_transport(), stubborn_transport() (+6 more)
 
 ### Community 28 - "CapturePolicy"
-Cohesion: 0.06
-Nodes (32): The event sink, Audit and telemetry, Metrics, OpenTelemetry, Spans, warden, CapturedContent, CapturePolicy (+24 more)
+Cohesion: 0.07
+Nodes (19): ContentKind, _declared_kind(), _enforce(), enforce_capture(), FanOutSink, _marked_kind(), _Failing, _started() (+11 more)
 
 ### Community 29 - "test_scenario_timeout.py"
 Cohesion: 0.05
-Nodes (25): _Bounded, _fails_within_the_bound(), _forever(), _HangingSink, _HangingSkills, _HangingTokens, _HangingTranscripts, _RecordedHangs (+17 more)
+Nodes (26): _fails_within_the_bound(), _forever(), _HangingResolver, _HangingSink, _HangingSkills, _HangingTokens, _HangingTranscripts, _ResolverClosedAfterTheBound (+18 more)
 
 ### Community 30 - "ollama/test_error_chains.py"
-Cohesion: 0.08
-Nodes (26): ProviderFailure, classify(), failure_for_status(), _from(), test_ollama_classifies_by_class_name_only(), test_a_timeout_is_a_timeout(), test_anything_else_is_unavailable(), test_status_codes() (+18 more)
+Cohesion: 0.11
+Nodes (22): handler(), assert_nothing_attached(), _body(), _failure(), _request(), test_a_close_that_fails_after_a_protocol_failure_keeps_protocol(), test_a_close_that_fails_during_a_failure_neither_replaces_nor_chains(), __aiter__() (+14 more)
 
 ### Community 31 - "OAuth Client Refresh and Sign-in"
-Cohesion: 0.07
-Nodes (11): _address(), _BearerFlow, _bound(), _Client, _default_port(), _Metadata, OAuthClient, _origin() (+3 more)
+Cohesion: 0.06
+Nodes (12): _address(), _BearerFlow, _bound(), _Client, _default_port(), _Metadata, OAuthClient, _origin() (+4 more)
 
 ### Community 32 - "Compactor"
-Cohesion: 0.08
-Nodes (68): Compactor, KeepLastTurns, chat(), conversation(), oversized(), request(), _chat_assignment(), _clean() (+60 more)
+Cohesion: 0.11
+Nodes (42): Compactor, KeepLastTurns, chat(), oversized(), request(), _chat_assignment(), _clean(), _over() (+34 more)
 
 ### Community 33 - "gemini/test_error_chains.py"
-Cohesion: 0.13
-Nodes (19): assert_nothing_attached(), _build(), _chunk(), _client(), _failure(), _Models, _request(), test_a_chunk_of_an_unexpected_type_is_a_protocol_failure() (+11 more)
+Cohesion: 0.07
+Nodes (31): assert_nothing_attached(), FakeClient, _build(), _chunk(), _client(), _failure(), _Models, _request() (+23 more)
 
-### Community 34 - "ConfigurationError"
-Cohesion: 0.02
-Nodes (68): Embeddings, Local embeddings, Errors, Events and the capture policy, _assignment_row(), ModelEntry, AssignmentRefused, CapabilityRefused (+60 more)
+### Community 34 - "TaskClass"
+Cohesion: 0.08
+Nodes (10): AssignmentSettings, CapabilityFloor, TaskClass, TestAssignmentSettings, _entry(), resolve(), TestFloors, TestResidency (+2 more)
 
 ### Community 35 - "Warden Sink Tests"
-Cohesion: 0.10
-Nodes (13): register_conduit_actions(), WardenAuditSink, everything(), model_finished(), prompt(), Recorder, registered(), TestFailures (+5 more)
+Cohesion: 0.08
+Nodes (16): action_for(), register_conduit_actions(), WardenAuditSink, telemetry(), test_no_content_reaches_the_audit_trail_under_any_policy(), everything(), model_finished(), prompt() (+8 more)
 
 ### Community 36 - "Agent Runner"
-Cohesion: 0.09
-Nodes (7): CompactionRequest, _arguments_text(), _Call, _Compaction, _identifier_or(), _Run, _Turn
+Cohesion: 0.08
+Nodes (8): ConversationCompactedEvent, _Call, _Charge, _Compaction, _identifier_or(), _replay(), _Run, _Turn
 
 ### Community 37 - "Otel Event Sink"
 Cohesion: 0.09
-Nodes (7): Event, pick(), _key(), _ns(), _Open, OtelEventSink, _token_counts()
+Nodes (10): Event, identifier(), metadata_attributes(), pick(), _key(), _ns(), _Open, OtelEventSink (+2 more)
 
 ### Community 38 - "test_sql_store_errors.py"
-Cohesion: 0.13
-Nodes (18): StoreError, _SqlStore, SqlTokenStore, _assert_clean(), _chain(), _migrated_sqlite(), postgres_url(), test_a_failing_put_carries_no_token_value_or_key() (+10 more)
+Cohesion: 0.17
+Nodes (17): SqlTokenStore, check(), _assert_clean(), _chain(), _migrated_sqlite(), postgres_url(), test_a_failing_put_carries_no_token_value_or_key(), test_a_session_id_the_transcript_refuses_is_not_echoed() (+9 more)
 
 ### Community 39 - "ToolSpec"
 Cohesion: 0.06
-Nodes (25): _used_tools(), ReplayMismatch, task_request(), ToolSpec, _differences(), _normal(), Replay, _Exact (+17 more)
+Nodes (26): ReplayMismatch, task_request(), ToolSpec, load_recording(), Replay, _Exact, TestToolSpec, _estimate() (+18 more)
 
 ### Community 40 - "TokenStore"
 Cohesion: 0.10
 Nodes (14): TokenStore, _long(), _revealed(), _tokens(), TokenStoreSuite, scenario(), body(), body() (+6 more)
 
 ### Community 41 - "tests/unit/embeddings (group 41)"
-Cohesion: 0.08
-Nodes (65): EmbeddingCallFinishedEvent, EmbeddingCallStartedEvent, _param(), FakeEmbedFactory, test_no_nvidia_package_is_installed(), _answering(), _clean(), _finished() (+57 more)
+Cohesion: 0.09
+Nodes (53): EmbeddingCallFinishedEvent, EmbeddingCallStartedEvent, _answering(), _clean(), _finished(), _inner(), _registry(), _request() (+45 more)
 
 ### Community 42 - "tests/unit/providers/anthropic (group 42)"
-Cohesion: 0.07
-Nodes (14): AnthropicFactory, _auth_headers(), credential(), fake_sdk(), _FakeSdk, _http_request(), _settings(), _StandInCredential (+6 more)
+Cohesion: 0.05
+Nodes (15): AnthropicFactory, _auth_headers(), credential(), fake_sdk(), _FakeSdk, _http_request(), _settings(), _StandInCredential (+7 more)
 
 ### Community 43 - ".github/workflows (group 43)"
 Cohesion: 0.06
 Nodes (53): runs-on, steps, concurrency, cancel-in-progress, group, CONDUIT_ALL_EXTRAS, CONDUIT_LOCAL_EMBEDDINGS_TESTS, CONDUIT_POSTGRES_TESTS (+45 more)
 
-### Community 44 - "tools.py"
-Cohesion: 0.08
-Nodes (13): UnknownTool, _check(), input_schema(), Tool, tool_spec(), ToolCatalogue, ToolRegistry, Lookup (+5 more)
+### Community 44 - "with"
+Cohesion: 0.06
+Nodes (33): runs-on, steps, concurrency, cancel-in-progress, group, TAG, name, url (+25 more)
 
 ### Community 45 - "disclosure.py"
 Cohesion: 0.07
-Nodes (15): _Ids, LoadedSkill, render_listing(), render_skill(), SkillError, SkillInvalid, SkillNotFound, SkillResourceRefused (+7 more)
+Nodes (18): _Ids, render_listing(), SkillError, SkillInvalid, SkillNotFound, SkillRefused, SkillResourceRefused, SkillUnavailable (+10 more)
 
 ### Community 46 - "tests/unit/mcp (group 46)"
 Cohesion: 0.08
 Nodes (25): _expected_state(), LoopbackSignIn, handle(), test_the_servers_take_the_mcp_tests_port_plan(), port(), browser(), oauth_settings(), port_is_free() (+17 more)
 
 ### Community 47 - "filesystem.py"
-Cohesion: 0.08
+Cohesion: 0.07
 Nodes (14): _fstat(), _identity(), _inside(), _open_fd(), _read_confined(), _read_up_to(), _real(), _text() (+6 more)
 
 ### Community 48 - "tests/unit/providers/bedrock (group 48)"
 Cohesion: 0.07
-Nodes (10): built(), ClientError, ConverseRuntime, ScriptedRuntime, TestConverseThread, TestErrors, stream(), TestRecordings (+2 more)
+Nodes (11): _Unsafe, built(), ClientError, ConverseRuntime, ScriptedRuntime, TestConverseThread, TestErrors, stream() (+3 more)
 
 ### Community 49 - "tests/scripts (group 49)"
 Cohesion: 0.12
 Nodes (19): audit(), classify(), installed(), main(), _one(), Package, Report, _wanted() (+11 more)
 
-### Community 50 - "strategies.py"
-Cohesion: 0.04
-Nodes (25): strategies(), TokenEstimator, estimate_tokens(), render_messages(), _result_text(), _tokens(), trim_text(), CompactionError (+17 more)
+### Community 50 - "conduit/compaction/__init__.py"
+Cohesion: 0.06
+Nodes (18): Compaction, Keeping the cached prefix stable, Summaries and the run's budget, The compactor, The summary call, The token estimate, When a compaction is applied, estimate_tokens() (+10 more)
 
 ### Community 51 - "src/conduit/providers/openai_compat (group 51)"
 Cohesion: 0.09
 Nodes (17): _arguments(), _assistant_message(), build_request(), _count(), _details(), _image_part(), _optional_count(), _optional_text() (+9 more)
 
-### Community 53 - "AgentTask"
-Cohesion: 0.09
-Nodes (22): VOR 0.2.0, RunFinishedEvent, TextDeltaEvent, AgentTask, test_an_unexpected_error_propagates_and_is_recorded(), _events(), _leaks(), test_content_reaches_both_when_the_product_opts_in() (+14 more)
+### Community 53 - "CapturePolicy"
+Cohesion: 0.10
+Nodes (32): Running an agent, RunFinishedEvent, RunStartedEvent, TextDeltaEvent, ToolCallStartedEvent, CapturePolicy, ToolCallEvent, McpCallEvent (+24 more)
 
 ### Community 54 - "started"
-Cohesion: 0.08
-Nodes (56): TaskBinding, ask(), assert_usage(), _cached_call(), check_caching(), check_chat(), check_output_limit(), check_structured_output() (+48 more)
+Cohesion: 0.07
+Nodes (57): TaskBinding, ask(), assert_usage(), cache_prefix(), _cached_call(), check_caching(), check_chat(), check_output_limit() (+49 more)
 
 ### Community 55 - "tests/unit/core (group 55)"
-Cohesion: 0.10
-Nodes (13): MemoryEventSink, ModelCallFinishedEvent, _aclose(), completed(), finished(), _finished(), _registry(), _request() (+5 more)
+Cohesion: 0.13
+Nodes (9): MemoryEventSink, _finished(), _registry(), _request(), TestAssignmentScope, TestBuilding, TestEndedEarly, TestMetering (+1 more)
 
-### Community 56 - "tests/unit/providers/bedrock (group 56)"
-Cohesion: 0.10
-Nodes (12): build_converse_request(), cache_points(), _reasoning_delta(), _reasoning_state(), request(), run(), _sent_back(), TestCachePoints (+4 more)
+### Community 56 - "bedrock/mapping.py"
+Cohesion: 0.05
+Nodes (32): base_model_id(), build_converse_request(), _CachePoints, caches_tools(), _content(), _count(), events_from_converse_response(), _image() (+24 more)
 
-### Community 57 - "bedrock_mantle/test_settings.py"
-Cohesion: 0.16
-Nodes (8): test_an_endpoint_override_must_be_https(), test_short_term_keys_signed_with_access_keys(), test_sigv4_modes_are_not_offered(), test_the_endpoint_for_a_region(), test_the_region_is_required(), test_the_region_must_look_like_an_aws_region(), test_unknown_fields_are_refused(), TestLongTermKeys
+### Community 57 - "pytest"
+Cohesion: 0.07
+Nodes (22): test_no_placeholder_reaches_the_failure_output(), test_no_nvidia_package_is_installed(), test_a_request_needs_at_least_one_text(), test_a_request_refuses_an_empty_text_without_quoting_the_others(), test_a_request_refuses_non_positive_dimensions(), test_zero_assigned_dimensions_are_refused_at_build(), test_an_unknown_name_is_an_attribute_error(), test_importing_the_package_does_not_load_the_sdk() (+14 more)
 
 ### Community 58 - "tests/unit/integrations/konfig (group 58)"
 Cohesion: 0.09
 Nodes (17): KonfigSecretResolver, KonfigSecretsSource, _encrypted_settings(), FailingSecrets, FakeSecrets, test_a_failing_store_names_the_reference_never_the_value(), test_a_slow_store_does_not_block_the_event_loop(), test_a_value_that_is_not_text_is_refused_without_echo() (+9 more)
 
 ### Community 59 - "SecretRef"
-Cohesion: 0.05
-Nodes (15): SecretRef, _is_reference(), GeminiSettings, FakeSettings, _no_leak(), _registry(), TestClosing, TestNoWarningEchoes (+7 more)
+Cohesion: 0.08
+Nodes (8): EnvironmentSecretResolver, SecretRef, TestPrefixedEnvironmentSecretResolver, TestEnvironmentResolver, TestLiteralResolver, TestSecretRef, ExampleSettings, TestBuilding
 
-### Community 60 - ".error"
-Cohesion: 0.12
-Nodes (6): Chat, describe_error(), close_servers(), connect_servers(), mcp_command(), token_store()
+### Community 60 - "Runtime"
+Cohesion: 0.14
+Nodes (5): Chat, strategies(), EventPrinter, usage_text(), Runtime
 
 ### Community 61 - "src/conduit/core (group 61)"
-Cohesion: 0.07
-Nodes (15): _carries_credential(), failed_fields(), is_credential_name(), _is_extra_credential_name(), _is_reference_annotation(), _name_segments(), _plaintext_credentials(), _quotes() (+7 more)
+Cohesion: 0.06
+Nodes (17): SettingsRefused, _carries_credential(), failed_fields(), is_credential_name(), _is_extra_credential_name(), _is_reference(), _is_reference_annotation(), _name_segments() (+9 more)
 
 ### Community 62 - "StubTurn"
-Cohesion: 0.08
-Nodes (35): RunBudget, answer_tool_results(), script(), StubToolCall, StubTurn, _script(), test_the_wrapper_hands_other_tools_to_the_products_executor(), _looping() (+27 more)
+Cohesion: 0.11
+Nodes (28): RunBudget, StubToolCall, _looping(), _run(), _task(), test_a_run_within_every_budget_completes(), test_a_slow_compaction_hook_is_cut_off_at_the_wall_time_deadline(), test_a_slow_model_call_is_cut_off_at_the_wall_time_deadline() (+20 more)
 
 ### Community 63 - "tests/unit/integrations/konfig (group 63)"
 Cohesion: 0.10
 Nodes (16): _describe(), KonfigSettingsSource, load_settings(), assert_carries_nothing(), exception_chain(), _settings(), test_a_missing_empty_or_scalar_section_is_refused(), test_a_plaintext_credential_is_refused_without_echoing_it() (+8 more)
 
 ### Community 64 - "tests/unit/embeddings/local (group 64)"
-Cohesion: 0.09
-Nodes (27): LocalEmbeddingFactory, build(), _clean(), FakeArray, FakeLibrary, FakeModel, library(), _registry() (+19 more)
+Cohesion: 0.16
+Nodes (24): EmbeddingRequest, inside(), _clean(), FakeLibrary, _registry(), test_a_model_is_loaded_once(), test_a_model_that_cannot_load_is_rejected_and_carries_nothing(), test_a_vector_of_the_wrong_length_is_caught_by_the_funnel() (+16 more)
 
 ### Community 65 - "BudgetMeter"
-Cohesion: 0.10
-Nodes (20): BudgetKind, BudgetMeter, Exhausted, _Charge, Clock, test_a_budget_is_buildable_from_a_mapping(), test_a_budget_out_of_range_is_refused(), test_a_model_call_after_the_deadline_is_refused_as_wall_time() (+12 more)
+Cohesion: 0.11
+Nodes (21): BudgetKind, BudgetMeter, charged(), Exhausted, TokenCount, Clock, test_a_budget_is_buildable_from_a_mapping(), test_a_budget_out_of_range_is_refused() (+13 more)
 
 ### Community 66 - "sanitise_untrusted"
-Cohesion: 0.12
-Nodes (4): sanitise_untrusted(), TestDefaultIgnorables, TestDelimiters, TestInvisibleCharacters
+Cohesion: 0.10
+Nodes (6): sanitise_untrusted(), TestBase64Runs, TestDefaultIgnorables, TestDelimiters, TestInvisibleCharacters, TestLineEndings
 
-### Community 67 - "assert_refused"
+### Community 67 - "test_oauth_binding.py"
+Cohesion: 0.06
+Nodes (21): MCP servers and OAuth sign-in, import_module(), app(), Grant, s256(), guarded(), evil_server(), make() (+13 more)
+
+### Community 68 - "Server"
 Cohesion: 0.14
-Nodes (6): assert_refused(), replace_param(), settings(), TestCallbackChecks, deny(), TestDiscoveryChecks
+Nodes (10): bearer(), decoded(), long_term(), Server, short_term(), sse(), test_closing_the_provider_closes_the_sdk_client(), TestEnvironment (+2 more)
 
-### Community 68 - "tests/unit/providers/bedrock_mantle (group 68)"
-Cohesion: 0.07
-Nodes (19): Configuring a server, BedrockMantleFactory, bearer(), decoded(), long_term(), Server, short_term(), sse() (+11 more)
-
-### Community 69 - "FakeClient"
-Cohesion: 0.16
-Nodes (13): GeminiFactory, FakeClient, _build(), _done(), _request(), _structured(), TestCatalogue, handle() (+5 more)
+### Community 69 - "embeddings/test_start.py"
+Cohesion: 0.15
+Nodes (26): CapabilityRefused, builtin_embedding_factories(), _settings(), _start(), _stub_settings(), test_a_chat_model_cannot_satisfy_an_embedding_task_class(), test_an_assignment_with_an_output_budget_is_refused(), test_an_embedding_model_cannot_satisfy_a_chat_task_class() (+18 more)
 
 ### Community 70 - "tests/unit/providers/openai_compat (group 70)"
-Cohesion: 0.13
-Nodes (16): _message(), body(), before_model_call(), test_a_runtime_provider_calls_only_its_resolved_models(), FakeClient, load(), test_a_result_that_is_not_a_stream_is_a_protocol_failure(), _build() (+8 more)
+Cohesion: 0.15
+Nodes (13): before_model_call(), run(), FakeClient, load(), _build(), _request(), TestErrors, TestFoundry (+5 more)
 
 ### Community 71 - "test_skip_reasons.py"
 Cohesion: 0.07
 Nodes (24): check(), Need, var(), collected(), everything_set(), _live(), _module(), _needs() (+16 more)
 
-### Community 72 - "Sink"
-Cohesion: 0.22
-Nodes (10): settings(), _answer(), _runtime(), _task(), test_an_explicit_policy_overrides_the_runtime_s(), test_an_explicit_sink_overrides_the_runtime_s(), test_bindings_without_a_runtime_s_sink_still_run(), test_the_runtime_s_policy_still_holds_events_it_delivers() (+2 more)
+### Community 72 - "AgentTask"
+Cohesion: 0.07
+Nodes (26): VOR 0.2.0, AgentTask, Sink, BarrierExecutor, _script(), test_concurrent_runs_interleave_and_keep_their_own_state(), test_one_runs_exhausted_budget_never_touches_another(), _clean() (+18 more)
 
 ### Community 73 - "test_secret_resolvers.py"
-Cohesion: 0.08
-Nodes (23): SecretUnavailable, _AnswersTheWrongCaller, _Base, _ChainsAHarmlessCause, _ChainsTheStoreError, _EchoesHeldValues, _KeepsTheStoreErrorAsContext, _LogsValues (+15 more)
+Cohesion: 0.07
+Nodes (24): The secret resolver, SecretUnavailable, _AnswersTheWrongCaller, _Base, _ChainsAHarmlessCause, _ChainsTheStoreError, _EchoesHeldValues, _KeepsTheStoreErrorAsContext (+16 more)
 
 ### Community 74 - "ApprovalRequest"
-Cohesion: 0.11
-Nodes (6): The approval handler, ApprovalDecision, ApprovalRequest, _Model, TestBackendModels, decide()
+Cohesion: 0.06
+Nodes (16): ApprovalDecision, ApprovalRequest, _Model, body(), _Raises, AllowListApprovals, _AnswersTheWrongCaller, _ApprovesEverything (+8 more)
 
-### Community 75 - "builtin_factories"
-Cohesion: 0.08
-Nodes (11): _ollama(), OllamaFactory, OllamaProvider, OllamaSettings, _direct(), TestClient, test_a_bad_base_url_is_refused_without_echoing_it(), test_a_base_url_is_accepted_without_a_trailing_slash() (+3 more)
+### Community 75 - "conversation"
+Cohesion: 0.16
+Nodes (18): conversation(), test_cancellation_propagates_unchanged(), _chat(), Sizes, Slow, test_a_cancelled_forced_compaction_is_kept_for_the_next_call(), test_a_failed_forced_compaction_does_not_replace_a_newer_force(), test_a_force_made_during_a_forced_compaction_survives_its_success() (+10 more)
 
 ### Community 76 - "runtime"
-Cohesion: 0.09
-Nodes (43): Compaction, Keeping the cached prefix stable, Summaries and the run's budget, The compactor, The summary call, The token estimate, When a compaction is applied, find_cut() (+35 more)
+Cohesion: 0.11
+Nodes (34): StrategyContext, Summarise, filler(), runtime(), summary_script(), test_a_summarised_compaction_end_to_end(), test_cache_markers_and_provider_state_stay_out_of_the_summary_request(), test_past_the_window_with_no_room_for_the_tail_it_fails_before_any_summary() (+26 more)
 
 ### Community 77 - "test_bridge_model_facing.py"
 Cohesion: 0.14
 Nodes (20): _schema(), _connection(), _find_tool(), _placed(), _server(), _strings(), test_a_default_ignorable_in_prose_is_marked_not_refused(), test_a_default_ignorable_in_raw_schema_text_leaves_the_tool_out() (+12 more)
 
 ### Community 78 - "tests/unit/providers/bedrock_mantle (group 78)"
-Cohesion: 0.20
+Cohesion: 0.22
 Nodes (11): _cache_controls(), _cached_request(), _drain(), _provider(), _simple(), test_kind_and_repr(), TestErrors, TestPromptCaching (+3 more)
 
-### Community 79 - "src/conduit/integrations/warden (group 79)"
+### Community 79 - "Integrating conduit into a product"
 Cohesion: 0.08
-Nodes (12): Logging, identifier(), metadata_fields(), _scalar(), _walk(), metadata_attributes(), action_for(), _audited() (+4 more)
+Nodes (12): Events and the capture policy, Integrating conduit into a product, Logging, Task classes and capability floors, The model catalogue and overlays, The shape of an integration, metadata_fields(), _scalar() (+4 more)
 
-### Community 80 - "SampleTool"
-Cohesion: 0.09
-Nodes (32): result_text(), SampleTool, task_tools(), BarrierExecutor, _script(), test_concurrent_runs_interleave_and_keep_their_own_state(), test_one_runs_exhausted_budget_never_touches_another(), FramingTool (+24 more)
+### Community 80 - "Executor"
+Cohesion: 0.07
+Nodes (50): Approvals, Executor, SampleTool, task_tools(), _run(), _script(), _task(), test_a_decision_that_is_not_strictly_approved_is_a_refusal() (+42 more)
 
 ### Community 81 - ".close"
-Cohesion: 0.07
-Nodes (15): Holding the objects the facade returns, Starting from sync code, The sync facade, FacadeError, _settle(), _shutdown(), _sweep(), call() (+7 more)
+Cohesion: 0.10
+Nodes (7): FacadeError, _settle(), _shutdown(), _sweep(), loop(), loop(), loop()
 
 ### Community 82 - "CatalogueOverlay"
-Cohesion: 0.07
-Nodes (13): CatalogueOverlay, load_catalogue(), ModelKey, BedrockProvider, entry(), TestCatalogue, TestLoading, TestOverlays (+5 more)
+Cohesion: 0.09
+Nodes (9): CatalogueOverlay, ModelKey, UndeclaredModel, entry(), TestCatalogue, TestLoading, TestOverlays, TestSchema (+1 more)
 
 ### Community 83 - "gemini/mapping.py"
 Cohesion: 0.12
-Nodes (15): _count(), _from_state(), _image(), _parts(), _protocol(), _sent_id(), _signature(), signature_state() (+7 more)
+Nodes (15): _count(), _image(), _parts(), _protocol(), _sent_id(), _signature(), signature_state(), _signatures() (+7 more)
+
+### Community 84 - "BedrockMantleFactory"
+Cohesion: 0.12
+Nodes (6): BedrockMantleFactory, test_the_registry_builds_a_working_provider(), TestClientOptions, TestDestinationGate, TestEnvironment, TestLongTermGate
 
 ### Community 85 - "cli"
-Cohesion: 0.10
-Nodes (9): cli(), lines(), TestCompaction, TestNothingIsKept, TestShownSafely, TestSkills, TestStreamingChat, TestToolsAndBudgets (+1 more)
+Cohesion: 0.09
+Nodes (8): lines(), TestCompaction, TestNothingIsKept, TestShownSafely, TestSkills, TestStreamingChat, TestToolsAndBudgets, TestUsageAndCache
 
 ### Community 86 - "src/conduit/stores/sql (group 86)"
-Cohesion: 0.10
+Cohesion: 0.12
 Nodes (11): _run(), downgrade(), _schema(), upgrade(), downgrade(), _schema(), upgrade(), Base (+3 more)
 
 ### Community 87 - "tests/unit/providers/anthropic (group 87)"
-Cohesion: 0.10
-Nodes (20): message_end(), message_start(), thinking_block(), usage(), all_recordings(), cached_conversation(), main(), _params() (+12 more)
+Cohesion: 0.14
+Nodes (16): message_end(), thinking_block(), all_recordings(), cached_conversation(), main(), _params(), path_for(), tool_round_trip() (+8 more)
 
 ### Community 88 - "tests/unit/providers/openai_compat (group 88)"
 Cohesion: 0.08
 Nodes (7): OpenAICompatClient, _Closing, _settings(), test_a_failing_credential_close_alone_is_logged_not_raised(), test_when_both_closes_fail_the_sdk_failure_is_what_surfaces(), TestWithTheSdk, refuse()
 
 ### Community 89 - "Service"
-Cohesion: 0.11
-Nodes (6): _Stranded, Service, TestClose, wait(), TestLoopThread, reenter()
+Cohesion: 0.09
+Nodes (9): _next(), _Stranded, _within(), Service, TestClose, wait(), TestIteratorTimeout, TestLoopThread (+1 more)
 
-### Community 90 - "tests/tripwires (group 90)"
-Cohesion: 0.13
-Nodes (13): _conduit_event_classes(), _content_fields(), _declares_tool_content(), _field_text(), _import_everything(), _leaks(), _model_problems(), _problems() (+5 more)
+### Community 90 - "TestEveryEventClass"
+Cohesion: 0.09
+Nodes (19): _conduit_event_classes(), _content_fields(), _declares_tool_content(), _event_classes(), excuse(), _field_text(), _import_everything(), _model_problems() (+11 more)
 
 ### Community 91 - "probes.py"
 Cohesion: 0.08
-Nodes (24): anthropic_limits(), step(), bedrock_control_client(), step(), bedrock_model_exists(), step(), bedrock_profile_regions(), _count() (+16 more)
+Nodes (23): anthropic_limits(), step(), bedrock_control_client(), step(), bedrock_model_exists(), step(), bedrock_profile_regions(), _count() (+15 more)
 
 ### Community 92 - "importscan.py"
-Cohesion: 0.11
-Nodes (20): cli_violations(), core_violations(), _dynamic_target(), ImportEdge, _literal(), module_name(), _resolve(), scan_source() (+12 more)
+Cohesion: 0.13
+Nodes (17): cli_violations(), core_violations(), _dynamic_target(), ImportEdge, _literal(), module_name(), _resolve(), scan_source() (+9 more)
 
 ### Community 93 - "live/test_catalogue.py"
-Cohesion: 0.07
-Nodes (40): LiveEnv, present(), value(), _access_keys(), anthropic_direct(), anthropic_foundry(), bedrock_auth(), _chain() (+32 more)
+Cohesion: 0.09
+Nodes (33): LiveEnv, present(), value(), _access_keys(), anthropic_direct(), anthropic_foundry(), bedrock_auth(), bedrock_settings() (+25 more)
 
-### Community 94 - "bedrock/mapping.py"
-Cohesion: 0.13
-Nodes (15): _CachePoints, _content(), _count(), events_from_converse_response(), _image(), _message(), _OpenCall, _OpenReasoning (+7 more)
+### Community 94 - "migration.py"
+Cohesion: 0.11
+Nodes (8): The SQL backends, __getattr__(), _config(), downgrade(), _loop_lock(), revisions(), _run(), _scripts()
 
 ### Community 95 - "anthropic/fakes.py"
-Cohesion: 0.06
-Nodes (20): failure_for(), APIConnectionError, APIError, APIStatusError, APITimeoutError, assert_clean(), AuthenticationError, BadRequestError (+12 more)
+Cohesion: 0.07
+Nodes (19): APIConnectionError, APIError, APIStatusError, APITimeoutError, assert_clean(), AuthenticationError, BadRequestError, _Dumpable (+11 more)
 
 ### Community 96 - "Usage"
-Cohesion: 0.06
-Nodes (12): Usage, usage_from_mapping(), TestUsage, _usage(), TestUsage, TestUsage, _chunk(), _final() (+4 more)
+Cohesion: 0.08
+Nodes (12): Usage, usage_from_mapping(), usage_from_bedrock(), TestUsage, _usage(), TestUsage, _chunk(), _final() (+4 more)
 
 ### Community 97 - "runner.py"
 Cohesion: 0.04
-Nodes (32): Running an agent, charged(), TokenCount, ContractCheck, ApprovalRequestedEvent, ConversationCompactedEvent, OutputInvalidEvent, RunStartedEvent (+24 more)
+Nodes (33): ContractCheck, default_retry_prompt(), _no_repeats(), OutputContract, parse_output(), CompactionHook, ModelCallCharge, OutputFilter (+25 more)
 
 ### Community 98 - "Verdict"
-Cohesion: 0.08
-Nodes (39): Capabilities, pytest_terminal_summary(), check_residency_refusal(), check_vision(), try_complete(), Line, Report, Verdict (+31 more)
+Cohesion: 0.07
+Nodes (40): Capabilities, ModelEntry, pytest_terminal_summary(), check_residency_refusal(), Line, Report, Verdict, Target (+32 more)
 
 ### Community 99 - "classify"
-Cohesion: 0.17
+Cohesion: 0.16
 Nodes (7): classify(), _code(), ClientError, EventStreamError, named(), test_a_timeout_subclass_wins_over_a_connection_base(), test_classification()
 
 ### Community 100 - "ToolOutcome"
-Cohesion: 0.08
-Nodes (15): A skill session, Caching and the stable prefix, Limits, markers and events, Skills, Sources, The SKILL.md format, TaskTools, ToolOutcome (+7 more)
+Cohesion: 0.04
+Nodes (26): A skill session, Caching and the stable prefix, Limits, markers and events, Skills, Sources, The SKILL.md format, input_schema(), TaskTools (+18 more)
 
-### Community 101 - "short_term_keys"
-Cohesion: 0.13
-Nodes (8): presign_short_term_key(), short_term_keys(), issue(), Clock, decode(), TestPresigning, resolve(), resolve()
+### Community 101 - "RecordedRuntime"
+Cohesion: 0.15
+Nodes (3): path(), RecordedRuntime, TestOtherVendors
 
 ### Community 102 - "tests/tripwires (group 102)"
-Cohesion: 0.21
-Nodes (23): check_owners(), optional_library_violations(), scan_tree(), test_a_library_sharing_a_name_prefix_is_not_confused(), test_a_library_with_several_owners_is_admitted_by_each_and_no_other(), test_an_owner_entry_that_is_not_a_tuple_of_distinct_names_is_refused(), test_azure_identity_is_owned_by_the_shared_entra_id_module_only(), test_boto3_stays_with_the_bedrock_adapter_alone() (+15 more)
+Cohesion: 0.20
+Nodes (25): check_owners(), optional_library_violations(), scan_tree(), _imported(), test_a_library_sharing_a_name_prefix_is_not_confused(), test_a_library_with_several_owners_is_admitted_by_each_and_no_other(), test_an_owner_entry_that_is_not_a_tuple_of_distinct_names_is_refused(), test_azure_identity_is_owned_by_the_shared_entra_id_module_only() (+17 more)
 
 ### Community 103 - "._attempt"
-Cohesion: 0.11
-Nodes (3): _allowance(), CompactionContext, CompactionStrategy
+Cohesion: 0.08
+Nodes (6): _allowance(), CompactionContext, TokenEstimator, CompactionEvent, CompactionStrategy, SummaryCharge
 
 ### Community 104 - "ModelRequest"
 Cohesion: 0.04
-Nodes (15): Calling a model, Prompt caching, ModelRequest, ModelResponse, _state_of(), BedrockMantleProvider, without_breakpoints(), _latest_tool_results() (+7 more)
+Nodes (19): Calling a model, Prompt caching, ModelRequest, ModelResponse, _state_of(), without_breakpoints(), _latest_tool_results(), _segments() (+11 more)
 
 ### Community 105 - "tests/tripwires (group 105)"
-Cohesion: 0.15
+Cohesion: 0.14
 Nodes (24): test_the_plugin_marks_suites_and_catches_a_broken_store(), scan_source(), _constructions(), _factory_calls(), _metered(), test_a_bedrock_mantle_client_inside_create_client_is_allowed(), test_a_bedrock_mantle_client_outside_a_factory_is_caught(), test_a_computed_name_on_sentence_transformers_is_a_construction() (+16 more)
 
 ### Community 106 - "LoopThread"
-Cohesion: 0.16
-Nodes (8): LoopThread, _failing_close(), fail(), loop(), _start(), TestLeavingTheBlock, TestStartSync, nested()
+Cohesion: 0.14
+Nodes (10): LoopThread, _async_surface(), _failing_close(), fail(), loop(), _settings(), _start(), TestLeavingTheBlock (+2 more)
 
-### Community 107 - "tests/unit/providers/bedrock_mantle (group 107)"
-Cohesion: 0.09
-Nodes (14): KeySource, bearer_client_class(), _prepare_request(), current_key(), set_bearer(), FailingKeys, FakeClient, FakeRequest (+6 more)
+### Community 107 - "test_registry_follow_up.py"
+Cohesion: 0.05
+Nodes (24): KeySource, bearer_client_class(), _prepare_request(), current_key(), set_bearer(), FakeClient, FakeProvider, FakeSettings (+16 more)
 
 ### Community 108 - "tests/unit/stores/sql (group 108)"
 Cohesion: 0.15
@@ -727,23 +720,23 @@ Nodes (11): container(), _Container, _enter(), _NoClient, test_a_client_that_can
 
 ### Community 109 - "test_charge.py"
 Cohesion: 0.10
-Nodes (25): _entry(), Request, ScriptLog, settings(), tool_turn(), Charge, charged(), _execute() (+17 more)
+Nodes (24): _entry(), Request, ScriptLog, settings(), Charge, charged(), _execute(), _first_summary_call() (+16 more)
 
 ### Community 110 - "tests/unit/providers/bedrock (group 110)"
 Cohesion: 0.13
 Nodes (5): settings(), TestAuthenticationModes, TestLongTermKeys, TestOtherSettings, TestRegion
 
-### Community 111 - "tests/unit/providers/bedrock (group 111)"
-Cohesion: 0.10
-Nodes (13): keep_keys_out_of_logs(), RenderedRecordFilter, SignatureRecordFilter, Mutable, _record(), SlowFilters, test_concurrent_installs_leave_exactly_one_of_each_filter(), install() (+5 more)
+### Community 111 - "bedrock/test_auth.py"
+Cohesion: 0.04
+Nodes (28): encode_short_term_key(), keep_keys_out_of_logs(), presign_short_term_key(), RenderedRecordFilter, short_term_keys(), issue(), SignatureRecordFilter, StaticKeySource (+20 more)
 
 ### Community 112 - "test_event_sinks.py"
 Cohesion: 0.05
-Nodes (28): passes(), _AlwaysFails, _DropsEveryThird, _DuplicatesEvents, _FanOutOverMemory, _Kept, _LosesConcurrentEmits, _memory_records() (+20 more)
+Nodes (36): fails(), passes(), _DropsEveryThird, _DuplicatesEvents, _Kept, _LosesConcurrentEmits, _NeverReturns, _RefusesUnknownTypes (+28 more)
 
 ### Community 113 - "test_malformed.py"
 Cohesion: 0.10
-Nodes (18): OpenAICompatProvider, _BadDump, _CancelledOnClose, _CancellingClient, _chain(), _choice(), _Client, _ClosingClient (+10 more)
+Nodes (19): OpenAICompatProvider, _BadDump, _CancelledOnClose, _CancellingClient, _chain(), _choice(), _Client, _ClosingClient (+11 more)
 
 ### Community 114 - "tests/scripts (group 114)"
 Cohesion: 0.17
@@ -751,11 +744,11 @@ Nodes (10): _current_branch(), main(), stamp(), StampRefused, test_a_malformed_v
 
 ### Community 116 - "ApprovalHandlerSuite"
 Cohesion: 0.09
-Nodes (12): ApprovalHandler, ApprovalHandlerSuite, scenario(), body(), body(), body(), body(), body() (+4 more)
+Nodes (14): Running a conformance suite, The approval handler, The event sink, Writing backends, ApprovalHandler, ApprovalHandlerSuite, scenario(), body() (+6 more)
 
 ### Community 117 - "tests/unit/providers/gemini (group 117)"
-Cohesion: 0.14
-Nodes (9): _chunk(), cut_short(), FakeAio, FakeModels, jsonable(), main(), handle(), _request() (+1 more)
+Cohesion: 0.15
+Nodes (8): _chunk(), cut_short(), FakeAio, FakeModels, jsonable(), handle(), _request(), tool_round_trip()
 
 ### Community 118 - "scan_tree"
 Cohesion: 0.20
@@ -765,33 +758,37 @@ Nodes (14): construction_violations(), factory_call_violations(), Finding, meter
 Cohesion: 0.20
 Nodes (18): HandOffEvent, _asks_for(), _budgeted(), _chat(), _hands_off_then_loops(), _specialist(), test_a_hand_off_continues_on_the_targets_assignment(), test_a_hand_off_keeps_the_runs_model_call_budget() (+10 more)
 
-### Community 120 - "TranscriptStore"
-Cohesion: 0.08
-Nodes (21): A checklist for any product, Adoption notes, SPARK 0.4.0, Termograph 0.8.0, TranscriptStore, _text(), TranscriptStoreSuite, scenario() (+13 more)
+### Community 120 - "MessageEntry"
+Cohesion: 0.05
+Nodes (31): The transcript store, Transcripts, _sequence_numbers(), CompactionPoint, _Entry, MessageEntry, _now(), SkillUse (+23 more)
 
-### Community 121 - "tests/unit/providers/openai_compat (group 121)"
-Cohesion: 0.14
-Nodes (11): classify(), _names(), handler(), handle(), handle(), _error(), test_a_code_that_is_not_a_string_is_ignored(), test_a_status_code_that_is_not_an_int_is_ignored() (+3 more)
+### Community 121 - "ModelCallFinishedEvent"
+Cohesion: 0.11
+Nodes (9): ModelCallFinishedEvent, ModelCallStartedEvent, _aclose(), _CallContext, MeteredProvider, completed(), finished(), TestEventModels (+1 more)
 
 ### Community 122 - "FreshRoot"
-Cohesion: 0.29
-Nodes (3): fresh_root(), FreshRoot, TestLogLevels
+Cohesion: 0.15
+Nodes (5): main(), main(), fresh_root(), FreshRoot, TestLogLevels
+
+### Community 123 - "test_remote.py"
+Cohesion: 0.16
+Nodes (17): _ollama(), _recording(), test_a_malformed_ollama_body_is_a_protocol_failure(), test_bedrock_cancellation_propagates(), test_bedrock_holds_to_its_concurrency(), test_bedrock_residency_is_held_on_an_unassigned_call(), test_ollama_classifies_by_class_name_only(), test_ollama_embeds_through_the_real_client() (+9 more)
 
 ### Community 124 - "Writing backends"
-Cohesion: 0.14
-Nodes (12): Running a conformance suite, The resolver, sink and approval handler suites, The secret resolver, Writing backends, SecretResolverSuite, scenario(), body(), body() (+4 more)
+Cohesion: 0.12
+Nodes (11): The resolver, sink and approval handler suites, SecretResolverSuite, scenario(), body(), body(), body(), body(), body() (+3 more)
 
 ### Community 125 - "tests/unit/providers/openai_compat (group 125)"
 Cohesion: 0.17
 Nodes (4): _settings(), TestCredentialsAreReferencesOnly, TestEndpoints, TestServices
 
 ### Community 126 - "evaluation.py"
-Cohesion: 0.10
-Nodes (11): check(), EvalTool, executed(), failed(), _judge(), never_executed(), no_text_in_events(), check() (+3 more)
+Cohesion: 0.07
+Nodes (14): check(), EvalTool, executed(), failed(), _judge(), never_executed(), no_text_in_events(), Observation (+6 more)
 
 ### Community 127 - "tests/unit/core (group 127)"
-Cohesion: 0.18
-Nodes (5): _caught(), TestFacade, wait(), TestLoading, _unchained()
+Cohesion: 0.16
+Nodes (6): _caught(), TestFacade, wait(), TestLoading, TestLookups, _unchained()
 
 ### Community 128 - "tests/unit/providers/openai_compat (group 128)"
 Cohesion: 0.16
@@ -802,52 +799,52 @@ Cohesion: 0.16
 Nodes (13): conduit Changelog, 0.1.0a0: repository scaffold, Integration procedure, conduit architecture, conduit.core layer, conduit stack and shared modules, GitHub Actions CI, scripts/licence_audit.py licence policy (+5 more)
 
 ### Community 130 - "SkillSource"
-Cohesion: 0.11
-Nodes (12): SkillSource, SkillSourceSuite, scenario(), body(), body(), body(), body(), body() (+4 more)
+Cohesion: 0.06
+Nodes (21): The skill source, Skill, SkillSource, SkillSourceSuite, scenario(), body(), body(), body() (+13 more)
 
 ### Community 131 - "tests/unit/providers (group 131)"
-Cohesion: 0.19
-Nodes (6): _request(), _stub(), TestNotForProduction, TestScripts, TestStreaming, TestUsage
+Cohesion: 0.27
+Nodes (4): _request(), _stub(), TestStreaming, TestUsage
 
 ### Community 132 - "tests/unit/providers/bedrock (group 132)"
-Cohesion: 0.18
-Nodes (5): client_for(), decode(), TestApiKeys, TestClients, _text()
+Cohesion: 0.10
+Nodes (7): Busy, client_for(), decode(), Sent, TestApiKeys, TestClients, _text()
 
-### Community 133 - "tests/unit/providers/openai_compat (group 133)"
-Cohesion: 0.05
-Nodes (50): Providers, Anthropic, Claude through Bedrock's mantle endpoint, Gemini, Installing, Local embeddings and CPU-only torch, Ollama, OpenAI, X.AI and Microsoft Foundry (+42 more)
+### Community 133 - "Interaction"
+Cohesion: 0.16
+Nodes (20): Providers, Settings, Anthropic, Claude through Bedrock's mantle endpoint, Gemini, Installing, Local embeddings and CPU-only torch, Ollama (+12 more)
 
 ### Community 134 - "ollama/mapping.py"
-Cohesion: 0.16
-Nodes (11): _call_events(), _count(), _image(), _loads(), _messages(), _protocol(), StreamMapper, _texts() (+3 more)
+Cohesion: 0.20
+Nodes (10): _call_events(), _count(), _image(), _loads(), _messages(), _protocol(), _texts(), _tool_message() (+2 more)
 
-### Community 135 - "fails"
-Cohesion: 0.10
-Nodes (17): fails(), test_a_records_filter_that_keeps_nothing_is_refused(), test_a_sink_that_keeps_no_record_fails_unless_it_opts_out(), test_the_suite_fails_a_sink_whose_record_holds_withheld_content(), _failing(), _passing(), _skipping(), test_fails_accepts_a_failure() (+9 more)
+### Community 135 - "test_run_hooks.py"
+Cohesion: 0.16
+Nodes (8): CompactionRequest, _script(), SystemHook, test_the_compaction_hook_sees_the_system_the_call_will_send(), test_the_system_hook_rebuilds_the_system_before_every_call(), test_the_wrapper_hands_other_tools_to_the_products_executor(), _tools(), _wrapper()
 
 ### Community 136 - "._guarded"
-Cohesion: 0.08
-Nodes (11): The token store, TokenSet, _check_key(), _check_session_id(), remove(), read(), write(), remove() (+3 more)
+Cohesion: 0.10
+Nodes (12): _check_session_id(), _SqlStore, remove(), read(), write(), SqlTranscriptStore, remove(), read() (+4 more)
 
-### Community 137 - "EventSinkSuite"
-Cohesion: 0.07
-Nodes (15): ConformanceSuite, pytest_collection_modifyitems(), pytest_configure(), EventSinkSuite, scenario(), body(), body(), body() (+7 more)
+### Community 137 - "EventSink"
+Cohesion: 0.04
+Nodes (26): _deliver(), EventSink, EventSinkSuite, scenario(), body(), body(), body(), emit_run() (+18 more)
 
 ### Community 138 - "tests/unit/providers/openai_compat (group 138)"
 Cohesion: 0.18
 Nodes (3): FakeChat, FakeCompletions, FakeStream
 
 ### Community 139 - "Case"
-Cohesion: 0.14
-Nodes (9): test_the_factory_refuses_with_a_fixed_error(), test_the_registry_refuses_with_a_fixed_error(), Case, failure_of(), ids(), record_issued_keys(), watch_loggers(), test_the_factory_refuses_with_a_fixed_error() (+1 more)
+Cohesion: 0.23
+Nodes (4): test_the_factory_refuses_with_a_fixed_error(), test_the_registry_refuses_with_a_fixed_error(), Case, ids()
 
 ### Community 140 - "TestStream"
 Cohesion: 0.21
 Nodes (6): _chunk(), _done(), _line(), _run(), test_http_status_failures(), TestStream
 
-### Community 141 - "json.py"
-Cohesion: 0.11
-Nodes (10): _check_name(), locked(), _is_record_name(), _lock_for(), _read(), _remove(), _retrying(), _thread_lock() (+2 more)
+### Community 141 - "conformance/test_sql_stores.py"
+Cohesion: 0.18
+Nodes (7): _SqlBackend, _SqlTokenSuite, _SqlTranscriptSuite, TestPostgresTokenStore, TestPostgresTranscriptStore, TestSqliteTokenStore, TestSqliteTranscriptStore
 
 ### Community 142 - "CHANGELOG.md (group 142)"
 Cohesion: 0.18
@@ -862,12 +859,16 @@ Cohesion: 0.19
 Nodes (6): conduit CLAUDE.md working agreement, Development conventions, Parallel worktree sessions, dev/worktree.json worktree recipe, Extras table, Design in brief
 
 ### Community 145 - "Sink"
-Cohesion: 0.15
-Nodes (25): Sink, _events(), _starts_with_notice(), strategy_allowance(), test_a_failed_summary_call_in_a_run_does_not_end_the_run(), test_a_product_strategy_is_validated(), test_a_run_whose_prefix_is_over_the_threshold_compacts_only_past_the_window(), test_in_a_run_each_compaction_lands_below_its_threshold_and_holds() (+17 more)
+Cohesion: 0.12
+Nodes (35): Sink, _chat(), _events(), Flaky, _starts_with_notice(), test_a_failed_forced_compaction_is_tried_again(), test_a_failed_summary_call_in_a_run_does_not_end_the_run(), test_a_failure_when_the_prompt_no_longer_fits_raises() (+27 more)
 
-### Community 146 - "Path"
-Cohesion: 0.09
-Nodes (9): console(), Outcome, _extra(), test_the_cli_extra_brings_rich_and_the_mcp_extra(), LeakyFactory, LeakySettings, no_aws(), TestProviders (+1 more)
+### Community 146 - "pathlib"
+Cohesion: 0.08
+Nodes (8): console(), Outcome, _extra(), test_the_cli_extra_brings_rich_and_the_mcp_extra(), TestArguments, TestEntryPoint, NoCallFactory, TestCheckCallsNoModel
+
+### Community 147 - "_registry"
+Cohesion: 0.16
+Nodes (5): _no_leak(), _registry(), TestRevalidation, TestUnvalidatedKind, TestValidationErrors
 
 ### Community 148 - "CHANGELOG.md (group 148)"
 Cohesion: 0.18
@@ -878,32 +879,32 @@ Cohesion: 0.16
 Nodes (6): browser(), oauth_config(), stdio_server(), TestOAuthSignIn, watching(), TestStdioServer
 
 ### Community 150 - "test_the_rule_refuses_each_local_library_outside_the_local_layer"
-Cohesion: 0.31
-Nodes (5): test_each_local_library_is_owned_by_the_local_layer_only(), test_the_local_layer_imports_sentence_transformers_by_name(), test_the_remote_embedding_adapters_import_no_sdk(), test_the_rule_refuses_each_local_library_outside_the_local_layer(), _tree()
+Cohesion: 0.27
+Nodes (6): within(), test_each_local_library_is_owned_by_the_local_layer_only(), test_the_local_layer_imports_sentence_transformers_by_name(), test_the_remote_embedding_adapters_import_no_sdk(), test_the_rule_refuses_each_local_library_outside_the_local_layer(), _tree()
 
 ### Community 151 - ".handle"
-Cohesion: 0.09
-Nodes (11): fake(), servers(), import_module(), app(), guarded(), TestOAuthEnvironment, oauth(), fake() (+3 more)
-
-### Community 152 - "test_fanout_cancellation.py"
-Cohesion: 0.16
-Nodes (7): CancellingSink, _event(), FailingSink, Gate, TestASinksOwnCancellation, TestCancellingTheFanOut, TestOtherFailuresKeepTodaysBehaviour
-
-### Community 153 - "core/untrusted.py"
 Cohesion: 0.13
-Nodes (10): _attributes(), _default_ignorable(), _escape_markers(), _fold(), _replace_invisible(), _truncate(), untrusted_text_block(), UntrustedBlock (+2 more)
+Nodes (4): fake(), servers(), TestOAuthEnvironment, oauth()
+
+### Community 152 - "synthetic_vector"
+Cohesion: 0.18
+Nodes (13): synthetic_vector(), FakeOpenAI, _namespace(), test_a_malformed_openai_response_is_a_protocol_failure(), test_gemini_splits_a_batch(), embed_content(), test_gemini_usage_comes_from_token_counts_when_every_embedding_has_one(), handler() (+5 more)
+
+### Community 153 - "_registry"
+Cohesion: 0.18
+Nodes (13): APIStatusError, _clean(), FakeGemini, GeminiClientError, _registry(), test_a_malformed_gemini_response_is_a_protocol_failure(), test_gemini_cancellation_propagates(), test_gemini_closes_its_client() (+5 more)
 
 ### Community 154 - "CHANGELOG.md (group 154)"
 Cohesion: 0.22
 Nodes (9): 0.1.0a12: SKILL.md skills (Wave 4), SkillSourceSuite, use_skill progressive disclosure tool, conduit.skills layer, Synthetic skills fixtures README, release-notes style reference, release-notes SKILL.md fixture, release-notes entry template (+1 more)
 
 ### Community 155 - "_start"
-Cohesion: 0.20
+Cohesion: 0.21
 Nodes (5): _settings(), _start(), TestEmbeddingTaskClasses, TestSinkAndCapture, _tool_event()
 
 ### Community 156 - "test_approval_handlers.py"
-Cohesion: 0.07
-Nodes (28): ApprovalCall, AllowListApprovals, _AnswersTheWrongCaller, _ApprovesEverything, _Base, _ForgivesARaise, _ForgivesAStall, _forgiving() (+20 more)
+Cohesion: 0.08
+Nodes (20): ApprovalCall, _ForgivesARaise, _ForgivesAStall, _forgiving(), build_runner(), _suite(), approved_call(), refused_call() (+12 more)
 
 ### Community 157 - "test_bridge.py"
 Cohesion: 0.13
@@ -914,8 +915,8 @@ Cohesion: 0.28
 Nodes (8): 0.1.0a18: audit and telemetry (Wave 5, M4), 0.1.0a8: konfig integration (Wave 2, M2), KonfigSecretResolver, load_settings (konfig), OtelEventSink, register_conduit_actions, WardenAuditSink, conduit.integrations layer (konfig, warden, otel)
 
 ### Community 161 - "check_embeddings"
-Cohesion: 0.11
-Nodes (13): EmbeddingBinding, check_embeddings(), started_embeddings(), _FakeBinding, _FakeEmbedder, _FakeProvider, test_a_non_finite_embedding_fails(), test_a_well_formed_fake_embedding_passes() (+5 more)
+Cohesion: 0.12
+Nodes (12): check_embeddings(), started_embeddings(), _FakeBinding, _FakeEmbedder, _FakeProvider, test_a_non_finite_embedding_fails(), test_a_well_formed_fake_embedding_passes(), test_embedding_usage_beyond_input_fails() (+4 more)
 
 ### Community 163 - "CHANGELOG.md (group 163)"
 Cohesion: 0.33
@@ -930,208 +931,196 @@ Cohesion: 0.33
 Nodes (5): 0.1.0a10: providers follow-up (Wave 4), 0.1.0a9: core follow-up (Wave 3), ProviderStateBlock, SettingsRefused, start_sync / SyncRuntime
 
 ### Community 167 - "MemoryTranscriptStore"
-Cohesion: 0.06
-Nodes (22): The transcript store, Transcripts, _sequence_numbers(), CompactionPoint, _Entry, MessageEntry, _now(), SkillUse (+14 more)
+Cohesion: 0.12
+Nodes (8): MemoryTranscriptStore, _Broken, FailingStore, test_past_the_window_a_result_that_still_does_not_fit_fails(), test_a_result_still_over_the_threshold_is_not_applied(), test_a_refused_append_leaves_the_stored_json_untouched(), test_entries_are_held_serialised(), test_the_transcript_store_meets_the_protocol_and_assigns_sequence()
 
-### Community 168 - "_request"
+### Community 168 - "openai_compat/recordings.py"
 Cohesion: 0.23
-Nodes (5): _body(), _request(), TestBasics, TestContent, TestStructuredOutput
+Nodes (10): _body(), _chunk(), foundry_structured_output(), openai_parallel_tool_calls(), openai_text_cached(), openai_tool_results(), path(), _usage() (+2 more)
 
-### Community 170 - "default_catalogue"
-Cohesion: 0.04
-Nodes (41): default_catalogue(), ResidencyScope, TestDefaultData, _need_library(), _registry(), test_the_tiny_model_embeds_on_the_cpu(), test_torch_is_the_cpu_only_build(), tiny() (+33 more)
+### Community 170 - "test_registry_guard.py"
+Cohesion: 0.06
+Nodes (24): resolver(), mantle_entries(), OfflineBedrockFactory, OfflineMantleFactory, start_with(), test_each_entry_matches_its_model_card(), test_exactly_the_expected_models_are_declared(), test_gated_and_runtime_only_models_are_not_declared() (+16 more)
 
 ### Community 171 - "test_public_api.py"
 Cohesion: 0.13
 Nodes (14): _bypass(), cli_sources(), _core(), _covering_module_package(), _covering_package(), _exported(), _is_module(), _private() (+6 more)
 
 ### Community 172 - "test_openai_compat.py"
-Cohesion: 0.24
-Nodes (11): xai_accepts_output(), _openai(), test_openai_cached_second_call(), test_openai_streaming_chat(), test_openai_tool_loop(), test_xai_cached_second_call(), test_xai_output_limit(), test_xai_reasoning_token_arithmetic() (+3 more)
+Cohesion: 0.17
+Nodes (16): xai_accepts_output(), _foundry(), _openai(), test_foundry_cached_second_call(), test_foundry_grok_streaming_chat_and_tools(), test_foundry_streaming_chat(), test_foundry_tool_loop(), test_openai_cached_second_call() (+8 more)
 
 ### Community 173 - "CHANGELOG.md (group 173)"
 Cohesion: 0.67
 Nodes (3): 0.1.0a14: embeddings (Wave 4), start_embeddings, conduit.embeddings layer
 
 ### Community 174 - "frame_untrusted"
-Cohesion: 0.20
-Nodes (3): frame_untrusted(), _parts(), TestFrame
+Cohesion: 0.09
+Nodes (12): Untrusted content, _attributes(), _default_ignorable(), frame_untrusted(), _replace_invisible(), _truncate(), untrusted_text_block(), UntrustedBlock (+4 more)
 
 ### Community 175 - "test_guides.py"
-Cohesion: 0.09
-Nodes (33): _blocks(), _core_path(), _exports(), fence_problems(), import_problems(), _module_problem(), _name(), _outcome() (+25 more)
+Cohesion: 0.10
+Nodes (24): _conduit_requires(), _core_path(), _exports(), extra_installed(), import_problems(), _module_problem(), _private_path(), _provided_extras() (+16 more)
 
 ### Community 176 - "TestRefresh"
-Cohesion: 0.12
-Nodes (6): IssuedKey, KeyRefreshRefused, ShortTermKeySource, Issuer, TestRefresh, slow_issue()
+Cohesion: 0.11
+Nodes (7): IssuedKey, KeyRefreshRefused, ShortTermKeySource, Clock, Issuer, TestRefresh, slow_issue()
 
-### Community 177 - "connection"
+### Community 177 - "test_package.py"
 Cohesion: 0.15
-Nodes (5): assert_clean(), connection(), settings(), TestFailures, TestLifecycle
+Nodes (6): _extra_requirements(), test_all_providers_installs_every_provider_extra_and_nothing_else(), test_every_layer_imports_with_a_one_line_docstring(), test_the_core_s_main_types_are_re_exported(), test_the_reference_stores_are_exported_from_their_layer(), test_the_stores_layer_exports_nothing_unlisted()
 
-### Community 178 - "OutputContract"
-Cohesion: 0.13
-Nodes (15): default_retry_prompt(), _no_repeats(), OutputContract, parse_output(), test_a_contract_name_must_be_an_identifier(), test_a_contract_needs_a_pydantic_model(), test_a_json_object_matching_the_model_is_accepted(), test_a_missing_and_an_extra_field_are_both_named() (+7 more)
+### Community 178 - "parametrize"
+Cohesion: 0.20
+Nodes (12): _blocks(), fence_problems(), _name(), test_a_clean_document_has_no_problems(), test_a_document_needing_a_missing_extra_is_skipped_before_it_runs(), test_a_skipped_document_still_has_its_static_import_checks(), test_blocks_reads_language_line_and_code(), test_every_document_is_checked_and_listed() (+4 more)
 
 ### Community 179 - "ProviderFactory"
-Cohesion: 0.10
+Cohesion: 0.09
 Nodes (7): EmbeddingProviderFactory, ProviderFactory, _takes_catalogue(), _ids(), test_create_provider_takes_the_catalogue_keyword(), test_no_factory_takes_a_catalogue_of_its_own(), test_registering_a_shipped_factory_draws_no_deprecation_warning()
 
-### Community 189 - "test_event_content_switch.py"
-Cohesion: 0.13
-Nodes (7): _event_classes(), excuse(), _missing(), TestExcuse, TestTheScan, fake(), TestTheTable
+### Community 189 - "Driver"
+Cohesion: 0.28
+Nodes (9): Driver, _load(), _prefix_text(), _refuse(), test_a_loaded_skill_is_cached_with_the_system_prompt_and_tools(), test_a_resource_is_sent_once_as_a_tool_result_and_leaves_the_prefix_cached(), test_a_second_skill_rewrites_the_prefix_once_and_unloading_returns_to_it(), test_the_body_is_never_sent_in_the_messages() (+1 more)
 
 ### Community 203 - "LocalEmbeddingSettings"
-Cohesion: 0.13
-Nodes (5): encode(), LocalEmbedder, LocalModels, LocalEmbeddingSettings, test_the_settings_have_no_region()
+Cohesion: 0.09
+Nodes (7): _local(), LocalEmbeddingFactory, encode(), LocalEmbedder, LocalModels, LocalEmbeddingSettings, test_the_embedder_needs_the_factory_s_own_models()
 
-### Community 209 - "GeminiProvider"
-Cohesion: 0.16
-Nodes (5): _as_json(), _close(), _feed(), GeminiProvider, _next_chunk()
+### Community 209 - "test_anthropic.py"
+Cohesion: 0.27
+Nodes (9): _direct(), _foundry(), test_direct_cache_breakpoint_writes_then_reads(), test_direct_streaming_chat(), test_direct_tool_loop(), test_direct_tool_loop_with_thinking(), test_foundry_cache_breakpoint_writes_then_reads(), test_foundry_streaming_chat() (+1 more)
 
-### Community 210 - "subprocess"
-Cohesion: 0.06
-Nodes (19): builtin_factories(), _extra_requirements(), test_all_providers_installs_every_provider_extra_and_nothing_else(), test_every_layer_imports_with_a_one_line_docstring(), test_importing_conduit_loads_the_core_alone(), test_the_core_s_main_types_are_re_exported(), test_the_reference_stores_are_exported_from_their_layer(), test_the_stores_layer_exports_nothing_unlisted() (+11 more)
+### Community 210 - "sys"
+Cohesion: 0.09
+Nodes (11): builtin_factories(), test_importing_conduit_loads_the_core_alone(), test_the_facade_tests_log_no_destroyed_task_under_dev_mode(), test_builtin_factories_include_bedrock_mantle(), test_importing_the_adapter_does_not_import_any_sdk(), test_builtin_factories_include_bedrock(), test_importing_the_adapter_does_not_import_the_sdk(), test_building_the_factories_does_not_import_the_sdk() (+3 more)
 
-### Community 211 - "harness.py"
+### Community 211 - "conduit_core_catalogue"
 Cohesion: 0.11
-Nodes (5): cache_prefix(), NoToolCall, _png_chunk(), resolver(), test_the_live_cases_pass_on_a_real_model()
+Nodes (11): test_limits_and_capabilities(), test_the_anthropic_entries_are_the_documented_models(), test_a_chat_entry(), test_deprecated_models_are_not_declared(), test_the_embedding_entry(), test_the_gemini_entries_are_exactly_these(), test_chat_entries(), test_only_these_openai_and_xai_entries() (+3 more)
+
+### Community 212 - "save_recording"
+Cohesion: 0.22
+Nodes (6): check_scrubbed(), save_recording(), main(), main(), main(), TestFiles
 
 ### Community 213 - "test_facade.py"
-Cohesion: 0.11
+Cohesion: 0.13
 Nodes (5): _stubborn(), TestCloseRaces, late_submit(), TestStrandedSteps, _wait_in_thread()
 
 ### Community 214 - "live/conftest.py"
-Cohesion: 0.15
-Nodes (7): gate(), live_gate(), needs_of(), _message(), pytest_collection_finish(), pytest_runtest_logreport(), pytest_sessionfinish()
+Cohesion: 0.13
+Nodes (9): pytest_configure(), gate(), live_gate(), needs_of(), pytest_configure(), _message(), pytest_collection_finish(), pytest_runtest_logreport() (+1 more)
 
 ### Community 215 - "README.md"
-Cohesion: 0.19
-Nodes (6): conduit guides, Chat, Commands, MCP servers and OAuth sign-in, The terminal interface, What it shows and keeps
+Cohesion: 0.10
+Nodes (15): A checklist for any product, Adoption notes, Termograph 0.8.0, Audit and telemetry, Metrics, OpenTelemetry, Spans, warden (+7 more)
 
-### Community 216 - "evaluation_cases.py"
-Cohesion: 0.15
-Nodes (4): ApproveReadsOnly, HostCheck, _stayed(), test_every_seed_case_passes_against_the_stub()
+### Community 216 - "_outcome"
+Cohesion: 0.26
+Nodes (8): _outcome(), test_a_missing_extra_fails_when_every_extra_is_required(), test_a_missing_extra_skips_the_document_naming_it(), test_a_missing_shared_library_names_each_extra(), test_an_installed_extra_runs_the_document(), test_any_other_switch_value_is_refused(), test_one_extra_of_a_shared_library_is_enough(), test_the_switch_is_the_cores()
 
-### Community 217 - "write_config"
-Cohesion: 0.21
-Nodes (6): stub_conduit(), write_config(), bedrock_config(), row(), TestCheck, TestModels
+### Community 217 - "cli"
+Cohesion: 0.09
+Nodes (14): cli(), stub_conduit(), write_config(), assert_clean(), TestHostileTextIsShownSafely, bedrock_config(), LeakyFactory, LeakySettings (+6 more)
 
 ### Community 218 - "agent/test_untrusted.py"
 Cohesion: 0.13
 Nodes (4): test_a_limit_below_one_is_refused(), test_a_nonce_found_in_the_body_is_drawn_again(), test_a_source_outside_the_safe_set_is_refused(), test_untrusted_text_becomes_a_framed_text_block()
 
-### Community 219 - "._shared_by_two_clients"
-Cohesion: 0.07
-Nodes (7): _loop_locks(), _shared_lock(), DataclassStore, SharedBacking, SlottedStore, TestSharedRefreshFallback, UnhashableStore
+### Community 219 - "TokenSet"
+Cohesion: 0.04
+Nodes (20): The token store, TokenSet, _loop_locks(), _shared_lock(), _check_key(), _CutsTokenType, _DeleteIgnored, _DropsRefresh (+12 more)
 
 ### Community 220 - "Screen"
 Cohesion: 0.11
 Nodes (4): Screen, BlockingStdin, TestInterruption, interrupted()
 
-### Community 221 - "ProviderError"
-Cohesion: 0.07
-Nodes (16): ProviderError, _broken(), one(), call(), settle(), titan_body(), _classify(), _decode() (+8 more)
+### Community 221 - "ProviderFailure"
+Cohesion: 0.02
+Nodes (51): Errors, is_class_name(), ProviderError, ProviderFailure, _broken(), classify(), embed_body(), OllamaEmbedder (+43 more)
 
-### Community 222 - "require_extras"
-Cohesion: 0.16
-Nodes (11): _conduit_requires(), extra_installed(), _provided_extras(), _readme_row(), require_extras(), test_a_run_requiring_every_extra_has_every_extra(), test_an_extra_is_installed_when_every_requirement_is(), test_every_extra_is_mapped_to_its_layer() (+3 more)
+### Community 222 - "providers/test_guarded_construction.py"
+Cohesion: 0.27
+Nodes (5): failure_of(), watch_loggers(), test_no_key_reaches_a_long_traceback_with_locals(), test_the_factory_refuses_with_a_fixed_error(), test_the_registry_refuses_with_a_fixed_error()
 
 ### Community 223 - "Evaluating agent tasks"
 Cohesion: 0.33
 Nodes (3): Evaluating agent tasks, EvalReport, test_an_empty_report_scores_zero()
 
-### Community 224 - "EnvironmentSecretResolver"
-Cohesion: 0.13
-Nodes (9): Settings, EnvironmentSecretResolver, SecretResolver, _HangingResolver, _ResolverSuite, TestEnvironmentSecretResolver, TestLiteralSecretResolver, TestPrefixedEnvironmentSecretResolver (+1 more)
+### Community 224 - "ReplayProvider"
+Cohesion: 0.25
+Nodes (4): _differences(), ReplayProvider, _request_key(), _strings()
 
 ### Community 226 - "sync"
-Cohesion: 0.14
-Nodes (5): default_loop(), _discard(), sync(), SyncFacade, TestFacade
+Cohesion: 0.13
+Nodes (6): default_loop(), _discard(), sync(), SyncFacade, test_the_sync_facade_refuses_its_own_loop_thread(), TestFacade
 
-### Community 227 - "Integrating conduit into a product"
-Cohesion: 0.40
-Nodes (5): Integrating conduit into a product, Task classes and capability floors, The model catalogue and overlays, The shape of an integration, Untrusted content
+### Community 229 - "FakeEmbedFactory"
+Cohesion: 0.22
+Nodes (5): FakeEmbedClient, FakeEmbedFactory, test_an_embedding_kind_must_be_a_valid_kind(), test_an_embedding_kind_registered_twice_is_refused(), test_the_fake_factory_meets_the_protocol()
 
-### Community 229 - "Executor"
-Cohesion: 0.18
-Nodes (13): Executor, _clean(), test_a_budget_failure_raised_for_the_result_keeps_no_chain(), test_a_slow_tool_timeout_becomes_a_clean_budget_failure(), test_cancelling_a_run_propagates_and_is_recorded_once(), _Failing, _script(), _task() (+5 more)
-
-### Community 230 - "test_gemini_ollama.py"
-Cohesion: 0.33
-Nodes (8): _gemini(), _ollama(), test_gemini_cached_second_call(), test_gemini_streaming_chat(), test_gemini_tool_loop_with_thought_signatures(), test_ollama_prompt_eval_cached_count(), test_ollama_streaming_chat(), test_ollama_tool_loop()
-
-### Community 231 - "status.py"
-Cohesion: 0.20
-Nodes (11): dispatch(), CliConfig, Context, task_classes(), auth_mode(), catalogue_for(), check(), installed() (+3 more)
+### Community 231 - "chat.py"
+Cohesion: 0.09
+Nodes (23): dispatch(), parser(), _positive_float(), _positive_int(), run(), ChatOptions, run_budget(), CliConfig (+15 more)
 
 ### Community 233 - "live_env"
-Cohesion: 0.21
-Nodes (12): in_region_policy(), live_env(), bedrock_settings(), default_bedrock_model(), first_bedrock_auth(), _region(), _target(), test_bare_id_in_region_invocation() (+4 more)
+Cohesion: 0.13
+Nodes (17): in_region_policy(), live_env(), default_bedrock_model(), default_mantle_model(), _caching_model(), _model(), _region(), _target() (+9 more)
 
-### Community 235 - "_observe"
-Cohesion: 0.11
-Nodes (12): McpCallEvent, telemetry(), _estimate(), _every_layer_is_present(), _observe(), Observed, _one(), _script() (+4 more)
+### Community 235 - "ollama/recordings.py"
+Cohesion: 0.38
+Nodes (5): _body(), cut_short(), _final(), _line(), tool_round_trip()
 
-### Community 237 - "test_approvals.py"
-Cohesion: 0.20
-Nodes (13): Approvals, _run(), _script(), _task(), test_a_decision_that_is_not_strictly_approved_is_a_refusal(), test_a_decision_with_a_truthy_non_boolean_approval_is_a_refusal(), test_a_failing_handler_is_a_refusal_not_an_exception(), test_a_product_predicate_can_mark_tools() (+5 more)
+### Community 237 - "test_stores.py"
+Cohesion: 0.32
+Nodes (3): opener(), postgres_url(), test_two_compactions_reload_to_the_compacted_view()
 
-### Community 239 - "test_memory_token_store.py"
-Cohesion: 0.11
-Nodes (7): _CutsTokenType, _DeleteIgnored, _DropsRefresh, _ForgetsOverwrites, _RaisesOnUnknown, _suite(), test_the_suite_fails_a_broken_store()
+### Community 239 - "test_a_missing_library_is_a_configuration_error"
+Cohesion: 0.33
+Nodes (3): build(), library(), test_a_missing_library_is_a_configuration_error()
 
-### Community 240 - "EmbeddingResponse"
-Cohesion: 0.03
-Nodes (29): BaseEmbeddingProvider, EmbeddingResponse, finished(), batches(), read_count(), read_vector(), embed_parameters(), GeminiEmbedder (+21 more)
+### Community 240 - "test_tiny_model.py"
+Cohesion: 0.06
+Nodes (26): read_titan(), batches(), read_count(), read_vector(), read_embed_response(), read_embed(), embeddings_body(), OpenAICompatEmbedder (+18 more)
 
-### Community 241 - "gemini/test_settings.py"
-Cohesion: 0.25
-Nodes (5): test_a_bad_base_url_is_refused_without_echoing_it(), test_a_literal_api_key_is_refused_without_echoing_it(), test_max_attempts_is_bounded(), test_the_api_key_is_required(), test_unknown_fields_are_refused()
+### Community 241 - "ollama/test_catalogue.py"
+Cohesion: 0.33
+Nodes (3): test_a_chat_entry(), test_every_ollama_entry_is_local(), test_the_embedding_entry()
 
 ### Community 242 - "json"
-Cohesion: 0.21
-Nodes (10): _segments(), _build(), _hostile_environment(), Recorder, _request(), _sse(), test_a_proxy_base_url_is_used(), test_a_streamed_call_goes_to_the_gemini_api_with_the_resolved_key() (+2 more)
+Cohesion: 0.24
+Nodes (9): _build(), _hostile_environment(), Recorder, _request(), _sse(), test_a_proxy_base_url_is_used(), test_a_streamed_call_goes_to_the_gemini_api_with_the_resolved_key(), test_sdk_chunk_objects_map_like_their_json_form() (+1 more)
 
 ### Community 243 - "extras_needed"
 Cohesion: 0.28
 Nodes (6): extras_needed(), _layer_extra(), _library_extras(), _longest_prefix(), test_every_layer_behind_an_optional_library_is_mapped(), test_the_extras_a_document_needs_are_read_from_its_imports()
 
-### Community 246 - "chat.py"
-Cohesion: 0.13
-Nodes (8): ChatOptions, read_line(), deliver(), read(), run_budget(), EventPrinter, usage_text(), LineSource
-
 ### Community 247 - "test_environment.py"
 Cohesion: 0.12
 Nodes (4): TestKonfigSecretResolverOverItsEncryptedFile, hostile_environment(), test_conduit_settings_ignore_the_environment(), test_the_secrets_store_ignores_the_environment()
 
-### Community 248 - ".create_client"
-Cohesion: 0.10
-Nodes (10): StaticKeySource, build(), secret(), session_for(), build(), signing_credentials(), secret(), _check_environment() (+2 more)
-
-### Community 249 - "app.py"
-Cohesion: 0.16
-Nodes (7): main(), parser(), command(), _positive_float(), _positive_int(), run(), main()
+### Community 250 - "SyncRuntime"
+Cohesion: 0.09
+Nodes (8): SPARK 0.4.0, Holding the objects the facade returns, Starting from sync code, The sync facade, start_sync(), call(), SyncRuntime, timeout()
 
 ### Community 251 - "config.py"
-Cohesion: 0.18
-Nodes (6): CompactionSection, load_config(), McpSection, parse_config(), _read(), _Section
+Cohesion: 0.10
+Nodes (8): CompactionSection, load_config(), McpSection, parse_config(), _read(), _Section, TestConfiguration, TestConfigurationErrors
 
 ### Community 252 - "._observe"
-Cohesion: 0.18
-Nodes (5): EvalHarness, EvalOutcome, check(), DeclaredTool, RecordingExecutor
+Cohesion: 0.12
+Nodes (7): Bindings, EvalHarness, EvalOutcome, check(), DeclaredTool, RecordingExecutor, start_stub_runtime()
 
 ### Community 255 - "test_servers.py"
 Cohesion: 0.19
 Nodes (6): free_port(), PortPlan, test_a_port_handed_out_twice_is_not_given_to_two_servers(), test_a_set_base_gives_the_slot_s_fixed_offsets(), test_an_unknown_server_name_is_refused(), test_without_a_base_every_server_takes_a_free_port()
 
 ### Community 256 - "setup.py"
-Cohesion: 0.17
-Nodes (7): demo_executor(), demo_script(), DemoTool, _last_user_text(), _latest_results(), _number(), interface_factories()
+Cohesion: 0.10
+Nodes (11): read_line(), deliver(), read(), demo_executor(), demo_script(), DemoTool, _last_user_text(), _latest_results() (+3 more)
 
 ### Community 257 - "check_hidden"
-Cohesion: 0.16
-Nodes (7): check_hidden(), check_refusal(), frame_locals(), key_marks(), leaks(), logged(), test_no_key_reaches_a_long_traceback_with_locals()
+Cohesion: 0.15
+Nodes (6): check_hidden(), check_refusal(), frame_locals(), key_marks(), leaks(), logged()
 
 ### Community 259 - "rendered"
 Cohesion: 0.19
@@ -1142,8 +1131,8 @@ Cohesion: 0.15
 Nodes (5): bridged_tools(), _description(), McpTool, _safe_schema(), RemoteTool
 
 ### Community 277 - "SignInRequest"
-Cohesion: 0.23
-Nodes (5): MCP servers, OAuth sign-in, SignInRequest, SignInResult, FakeSignIn
+Cohesion: 0.15
+Nodes (8): Configuring a server, MCP servers, OAuth sign-in, command(), SignInHook, SignInRequest, SignInResult, FakeSignIn
 
 ### Community 278 - "OAuthFailure"
 Cohesion: 0.27
@@ -1157,41 +1146,41 @@ Nodes (6): _destroyed(), TestNothingIsLeftPending, call(), helper(), _wait_in_th
 Cohesion: 0.36
 Nodes (5): check_fixed(), hidden(), RaisingEmbedFactory, RaisingFactory, TestRegistry
 
-### Community 281 - "TestIteratorTimeout"
-Cohesion: 0.20
-Nodes (4): _next(), _within(), _careful(), TestIteratorTimeout
-
 ### Community 282 - "is_hidden_character"
-Cohesion: 0.25
-Nodes (4): is_hidden_character(), _raw_safe(), TestHiddenCharacterPredicate, test_the_raw_check_refuses_exactly_the_core_s_hidden_characters()
+Cohesion: 0.17
+Nodes (6): _escape_markers(), _fold(), is_hidden_character(), _raw_safe(), TestHiddenCharacterPredicate, test_the_raw_check_refuses_exactly_the_core_s_hidden_characters()
 
-### Community 283 - "._converse_stream"
-Cohesion: 0.31
-Nodes (5): call(), settle(), hand(), read(), _close()
+### Community 283 - "BedrockProvider"
+Cohesion: 0.15
+Nodes (8): BedrockProvider, call(), settle(), hand(), read(), _close(), settings(), TestCacheGating
 
-### Community 288 - "Amazon Bedrock"
-Cohesion: 0.40
-Nodes (5): Amazon Bedrock, Authentication, Logging and credentials, Other settings, Residency
+### Community 288 - ".build"
+Cohesion: 0.11
+Nodes (12): Residency, Amazon Bedrock, Authentication, Logging and credentials, Other settings, Residency, ResidencyRefused, ResidencyPolicy (+4 more)
+
+### Community 292 - "EmbeddingResponse"
+Cohesion: 0.05
+Nodes (13): EmbeddingResponse, _finite_number(), MeteredEmbedder, _well_formed(), settle(), work(), EmbeddingBinding, EmbeddingRuntime (+5 more)
 
 ## Knowledge Gaps
 - **24 isolated node(s):** `cognisn-conduit`, `GitHub Actions CI`, `McpCallEvent`, `McpConnection`, `Output contracts` (+19 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 2425 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **83 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 2454 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **72 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `ConfigurationError` connect `ConfigurationError` to `typing`, `EmbeddingRequest`, `rendered`, `runtime`, `ConfigurationError`, `tests/unit/providers/openai_compat (group 133)`, `tests/unit/providers/bedrock (group 132)`, `MemorySkillSource`, `Filesystem Skill Source`, `Skill Disclosure Tests`, `MCP Connections and Transports`, `MCP Client and OAuth Module`, `Anthropic and OpenAI Factories`, `ProviderRegistry`, `FakeFactory`, `Sink`, `SQL Stores and Migrations`, `TextDelta`, `tests/unit/providers (group 131)`, `Skill Session and Cache Placement`, `ollama/test_error_chains.py`, `TestCredentialFields`, `Compactor`, `gemini/test_error_chains.py`, `Warden Sink Tests`, `Otel Event Sink`, `test_sql_store_errors.py`, `ToolSpec`, `tests/unit/embeddings (group 41)`, `disclosure.py`, `tests/unit/mcp (group 46)`, `filesystem.py`, `OutputContract`, `strategies.py`, `ProviderFactory`, `tests/unit/core (group 55)`, `SecretRef`, `src/conduit/core (group 61)`, `StubTurn`, `tests/unit/integrations/konfig (group 63)`, `tests/unit/embeddings/local (group 64)`, `tests/unit/providers/bedrock_mantle (group 68)`, `builtin_factories`, `runtime`, `src/conduit/integrations/warden (group 79)`, `CatalogueOverlay`, `src/conduit/stores/sql (group 86)`, `runner.py`, `short_term_keys`, `._attempt`, `LoopThread`, `EmbeddingResponse`, `.create_client`, `config.py`, `tests/unit/core (group 127)`?**
-  _High betweenness centrality (0.059) - this node is a cross-community bridge._
+- **Why does `ConfigurationError` connect `ConfigurationError` to `typing`, `FakeBedrock`, `Message Content Blocks`, `rendered`, `runtime`, `tests/unit/providers/bedrock (group 132)`, `._guarded`, `EventSink`, `Filesystem Skill Source`, `MCP Connections and Transports`, `MCP Client and OAuth Module`, `Anthropic and OpenAI Factories`, `Skill Disclosure Tests`, `ProviderRegistry`, `FakeFactory`, `Sink`, `SQL Stores and Migrations`, `TextDelta`, `_registry`, `SkillSession`, `Compactor`, `.build`, `TaskClass`, `Warden Sink Tests`, `EmbeddingResponse`, `Otel Event Sink`, `gemini/test_error_chains.py`, `ToolSpec`, `tests/unit/embeddings (group 41)`, `disclosure.py`, `tests/unit/mcp (group 46)`, `filesystem.py`, `conduit/compaction/__init__.py`, `ProviderFactory`, `tests/unit/core (group 55)`, `src/conduit/core (group 61)`, `tests/unit/integrations/konfig (group 63)`, `tests/unit/embeddings/local (group 64)`, `embeddings/test_start.py`, `LocalEmbeddingSettings`, `runtime`, `CatalogueOverlay`, `save_recording`, `BedrockMantleFactory`, `ProviderFailure`, `runner.py`, `FakeEmbedFactory`, `LoopThread`, `bedrock/test_auth.py`, `test_a_missing_library_is_a_configuration_error`, `.__init__`, `MessageEntry`, `config.py`, `tests/unit/core (group 127)`?**
+  _High betweenness centrality (0.082) - this node is a cross-community bridge._
 - **Are the 172 inferred relationships involving `Message` (e.g. with `estimate_tokens()` and `find_cut()`) actually correct?**
   _`Message` has 172 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `cognisn-conduit`, `GitHub Actions CI`, `McpCallEvent` to the rest of the system?**
   _24 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `typing` be split into smaller, more focused modules?**
-  _Cohesion score 0.03233732613751042 - nodes in this community are weakly interconnected._
-- **Why does `Message` connect `Message Content Blocks` to `typing`, `tests/unit/providers (group 131)`, `runtime`, `ollama/mapping.py`, `JSON Stores`, `FakeFactory`, `Sink`, `SQL Stores and Migrations`, `TextDelta`, `test_compaction_hook.py`, `Anthropic Provider Tests`, `Skill Session and Cache Placement`, `_build`, `TestIteratorTimeout`, `ollama/test_error_chains.py`, `Compactor`, `gemini/test_error_chains.py`, `ConfigurationError`, `Agent Runner`, `test_sql_store_errors.py`, `MemoryTranscriptStore`, `ToolSpec`, `_request`, `strategies.py`, `src/conduit/providers/openai_compat (group 51)`, `AgentTask`, `started`, `tests/unit/core (group 55)`, `tests/unit/providers/bedrock (group 56)`, `StubTurn`, `FakeClient`, `tests/unit/providers/openai_compat (group 70)`, `runtime`, `tests/unit/providers/bedrock_mantle (group 78)`, `SampleTool`, `gemini/mapping.py`, `bedrock/mapping.py`, `runner.py`, `Executor`, `._attempt`, `ModelRequest`, `LoopThread`, `_observe`, `test_approvals.py`, `test_charge.py`, `test_malformed.py`, `json`, `chat.py`, `tests/unit/agent (group 119)`, `TranscriptStore`?**
-  _High betweenness centrality (0.039) - this node is a cross-community bridge._
+  _Cohesion score 0.025582107843137254 - nodes in this community are weakly interconnected._
+- **Why does `Message` connect `Message Content Blocks` to `typing`, `tests/unit/providers (group 131)`, `runtime`, `ollama/mapping.py`, `test_run_hooks.py`, `JSON Stores`, `._guarded`, `FakeFactory`, `Sink`, `SQL Stores and Migrations`, `TextDelta`, `test_compaction_hook.py`, `Anthropic Provider Tests`, `_build`, `ollama/test_error_chains.py`, `Compactor`, `gemini/test_error_chains.py`, `TaskClass`, `Agent Runner`, `test_sql_store_errors.py`, `ToolSpec`, `MemoryTranscriptStore`, `conduit/compaction/__init__.py`, `src/conduit/providers/openai_compat (group 51)`, `CapturePolicy`, `started`, `tests/unit/core (group 55)`, `bedrock/mapping.py`, `Driver`, `StubTurn`, `tests/unit/providers/openai_compat (group 70)`, `AgentTask`, `conversation`, `runtime`, `tests/unit/providers/bedrock_mantle (group 78)`, `Executor`, `gemini/mapping.py`, `Service`, `runner.py`, `chat.py`, `ModelRequest`, `._attempt`, `LoopThread`, `test_stores.py`, `test_malformed.py`, `json`, `tests/unit/agent (group 119)`, `MessageEntry`?**
+  _High betweenness centrality (0.035) - this node is a cross-community bridge._
 - **Are the 98 inferred relationships involving `ConfigurationError` (e.g. with `Errors` and `Building clients`) actually correct?**
   _`ConfigurationError` has 98 INFERRED edges - model-reasoned connections that need verification._
-- **Should `EmbeddingRequest` be split into smaller, more focused modules?**
-  _Cohesion score 0.0509683995922528 - nodes in this community are weakly interconnected._
+- **Should `FakeBedrock` be split into smaller, more focused modules?**
+  _Cohesion score 0.12648221343873517 - nodes in this community are weakly interconnected._

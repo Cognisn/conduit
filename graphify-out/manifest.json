@@ -24,10 +24,10 @@
     "semantic_hash": ""
   },
   "scripts/licence_audit.py": {
-    "mtime": 1793937964.3014243,
-    "seen": 1793941372.8844497,
-    "ast_hash": "5d011e1ba0e4c65d763c552b3640b364",
-    "semantic_hash": "5d011e1ba0e4c65d763c552b3640b364"
+    "mtime": 1794372236.958755,
+    "seen": 1794377238.6439483,
+    "ast_hash": "00bf120c4e7004c16c3a305c7a0d50c2",
+    "semantic_hash": ""
   },
   "scripts/stamp_version.py": {
     "mtime": 1793831639.779213,
@@ -150,9 +150,9 @@
     "semantic_hash": "a6814c1eba189a21fd3948f62a8cc003"
   },
   "src/conduit/core/data/catalogue.json": {
-    "mtime": 1793954536.297923,
-    "seen": 1793981990.9723053,
-    "ast_hash": "b1c82c2d7696e120b4c8e6ec7d3f7667",
+    "mtime": 1794375827.5809872,
+    "seen": 1794377238.6439483,
+    "ast_hash": "df9b5558d8682fcd5ea96fc76278c10a",
     "semantic_hash": ""
   },
   "src/conduit/core/errors.py": {
@@ -492,16 +492,16 @@
     "semantic_hash": ""
   },
   "src/conduit/providers/bedrock/mapping.py": {
-    "mtime": 1793907960.4901154,
-    "seen": 1793941372.8853788,
-    "ast_hash": "b3d2bcf783ff61e7a6dc6cbb294d440d",
-    "semantic_hash": "b3d2bcf783ff61e7a6dc6cbb294d440d"
+    "mtime": 1794375231.691885,
+    "seen": 1794377238.6439483,
+    "ast_hash": "ead519bb19bf527e3a4ff10f129ad32c",
+    "semantic_hash": ""
   },
   "src/conduit/providers/bedrock/provider.py": {
-    "mtime": 1793907960.4939873,
-    "seen": 1793941372.8853788,
-    "ast_hash": "71c9abbe09073342f7acbc315cbb212f",
-    "semantic_hash": "71c9abbe09073342f7acbc315cbb212f"
+    "mtime": 1794375231.694697,
+    "seen": 1794377238.6439483,
+    "ast_hash": "dc4f1c768e57078f8fe419646bda5c58",
+    "semantic_hash": ""
   },
   "src/conduit/providers/bedrock/settings.py": {
     "mtime": 1793849990.3806968,
@@ -990,10 +990,10 @@
     "semantic_hash": "7de43b48ba8f54422bfe340976716ce0"
   },
   "tests/scripts/test_licence_exceptions.py": {
-    "mtime": 1793937964.3263977,
-    "seen": 1793941372.8868828,
-    "ast_hash": "514bed074ac016fbcb745324ce6ea59c",
-    "semantic_hash": "514bed074ac016fbcb745324ce6ea59c"
+    "mtime": 1794372216.4221864,
+    "seen": 1794377238.64537,
+    "ast_hash": "08d2c3c88e7c8534708617928fd79a94",
+    "semantic_hash": ""
   },
   "tests/scripts/test_stamp_version.py": {
     "mtime": 1793831555.411517,
@@ -1596,10 +1596,10 @@
     "semantic_hash": "45ca680fe0e0ebad149dffa43abc4b51"
   },
   "tests/unit/providers/anthropic/test_catalogue_entries.py": {
-    "mtime": 1793853409.3977659,
-    "seen": 1793941372.8868828,
-    "ast_hash": "49d97f04964dcb7a92dc3c44ccbcc831",
-    "semantic_hash": "49d97f04964dcb7a92dc3c44ccbcc831"
+    "mtime": 1794375231.7279904,
+    "seen": 1794377238.6461163,
+    "ast_hash": "6a01d629b89ce12e350b0621f8e804fe",
+    "semantic_hash": ""
   },
   "tests/unit/providers/anthropic/test_factory.py": {
     "mtime": 1793994236.1507146,
@@ -1632,10 +1632,10 @@
     "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
   },
   "tests/unit/providers/bedrock/recordings.py": {
-    "mtime": 1793849990.3998394,
-    "seen": 1793941372.8868828,
-    "ast_hash": "e0b9040cd709ea8b190239902002c11d",
-    "semantic_hash": "e0b9040cd709ea8b190239902002c11d"
+    "mtime": 1794375231.7323463,
+    "seen": 1794377238.6461163,
+    "ast_hash": "f5f4761f2ea42a0c0307a2eca1765ac4",
+    "semantic_hash": ""
   },
   "tests/unit/providers/bedrock/test_auth.py": {
     "mtime": 1793931318.2520003,
@@ -1644,10 +1644,10 @@
     "semantic_hash": "a87ceceb292359056bf782661470d3fc"
   },
   "tests/unit/providers/bedrock/test_catalogue.py": {
-    "mtime": 1793849990.406377,
-    "seen": 1793941372.8868828,
-    "ast_hash": "e72e9d5804e39f87eb7bad2aa1f466dc",
-    "semantic_hash": "e72e9d5804e39f87eb7bad2aa1f466dc"
+    "mtime": 1794375231.735162,
+    "seen": 1794377238.6461163,
+    "ast_hash": "d5b0a6f7e53d1e9ba78471718df8edbe",
+    "semantic_hash": ""
   },
   "tests/unit/providers/bedrock/test_clients.py": {
     "mtime": 1793931318.2551613,
@@ -1668,16 +1668,16 @@
     "semantic_hash": "94e10331b0e16068e0b0f13e2d19ac40"
   },
   "tests/unit/providers/bedrock/test_mapping.py": {
-    "mtime": 1793907960.5548444,
-    "seen": 1793941372.8868828,
-    "ast_hash": "c65f432029c1a3c132778da2793215b3",
-    "semantic_hash": "c65f432029c1a3c132778da2793215b3"
+    "mtime": 1794375231.7390716,
+    "seen": 1794377238.6461163,
+    "ast_hash": "9868ab27a2864ae21a8a5b79b508baa0",
+    "semantic_hash": ""
   },
   "tests/unit/providers/bedrock/test_provider.py": {
-    "mtime": 1793907960.5585535,
-    "seen": 1793941372.8868828,
-    "ast_hash": "f306977190f5dfe4633d6c77b3f72907",
-    "semantic_hash": "f306977190f5dfe4633d6c77b3f72907"
+    "mtime": 1794375231.7422254,
+    "seen": 1794377238.6461163,
+    "ast_hash": "6704767b87a41306a9760774bff74572",
+    "semantic_hash": ""
   },
   "tests/unit/providers/bedrock/test_settings.py": {
     "mtime": 1793849990.4243994,
@@ -1704,10 +1704,10 @@
     "semantic_hash": "60a97eb9dc338b48bbc311b8efb042e1"
   },
   "tests/unit/providers/bedrock_mantle/test_catalogue.py": {
-    "mtime": 1793920308.946117,
-    "seen": 1793941372.8868828,
-    "ast_hash": "fb395c5c010821fd95a474105d3effe2",
-    "semantic_hash": "fb395c5c010821fd95a474105d3effe2"
+    "mtime": 1794375231.7460356,
+    "seen": 1794377238.6461163,
+    "ast_hash": "63b3d5d224fc06dd0648d293d0f276af",
+    "semantic_hash": ""
   },
   "tests/unit/providers/bedrock_mantle/test_client.py": {
     "mtime": 1793931318.2625363,
@@ -1758,10 +1758,10 @@
     "semantic_hash": "79334a77a5e91f70af59cef15a526ba9"
   },
   "tests/unit/providers/gemini/test_catalogue.py": {
-    "mtime": 1793856023.422446,
-    "seen": 1793941372.8868828,
-    "ast_hash": "c1c2128f49e38c36cd5add6cb7b78fba",
-    "semantic_hash": "c1c2128f49e38c36cd5add6cb7b78fba"
+    "mtime": 1794375231.7502935,
+    "seen": 1794377238.6461163,
+    "ast_hash": "cc4fd2a1d9b4ab04d8baa4004c98de25",
+    "semantic_hash": ""
   },
   "tests/unit/providers/gemini/test_client.py": {
     "mtime": 1793907960.5609176,
@@ -1878,10 +1878,10 @@
     "semantic_hash": "0f63ca7e512660d336f9293cca8de106"
   },
   "tests/unit/providers/openai_compat/test_catalogue.py": {
-    "mtime": 1793854883.6916845,
-    "seen": 1793941372.8868828,
-    "ast_hash": "1ea66079f3f227ede376aa1e490a4551",
-    "semantic_hash": "1ea66079f3f227ede376aa1e490a4551"
+    "mtime": 1794375231.7524662,
+    "seen": 1794377238.6461163,
+    "ast_hash": "8526462f88e72d2eae7151d2d21215e4",
+    "semantic_hash": ""
   },
   "tests/unit/providers/openai_compat/test_clients.py": {
     "mtime": 1793994236.1559021,
@@ -2070,9 +2070,9 @@
     "semantic_hash": "06318e947184c50b432331311c216c0a"
   },
   "CHANGELOG.md": {
-    "mtime": 1794070140.0777805,
-    "seen": 1794074338.4053626,
-    "ast_hash": "5b8fece9d407027df08638f94809ff60",
+    "mtime": 1794375937.996151,
+    "seen": 1794377238.6461163,
+    "ast_hash": "3bb1aeecda5ca1d3054d359cc22d7c0c",
     "semantic_hash": ""
   },
   "CLAUDE.md": {
@@ -2082,15 +2082,15 @@
     "semantic_hash": "88b7d14cd1f5eb3576487e74213b1fcb"
   },
   "README.md": {
-    "mtime": 1794024190.3468237,
-    "seen": 1794065581.3434212,
-    "ast_hash": "69e74576ee6b1f93c912987ec16e34f9",
+    "mtime": 1794371621.783468,
+    "seen": 1794377238.6461163,
+    "ast_hash": "75f5821646fdcefe13fe2d7eb54519b1",
     "semantic_hash": ""
   },
   "docs/design/architecture.md": {
-    "mtime": 1794024190.3527644,
-    "seen": 1794065581.3434212,
-    "ast_hash": "4136bc0f00eafe54da06269bba373a5a",
+    "mtime": 1794371594.0830207,
+    "seen": 1794377238.6461163,
+    "ast_hash": "41f3b4686d333d4b8fd762c862174f30",
     "semantic_hash": ""
   },
   "docs/design/stack.md": {
@@ -2100,9 +2100,9 @@
     "semantic_hash": "ca70f3a0beaaf324e748af634615beb9"
   },
   "src/conduit/_version.txt": {
-    "mtime": 1794070633.3075986,
-    "seen": 1794074338.4053626,
-    "ast_hash": "a7bc1ac68db73aa173f268a02d28b757",
+    "mtime": 1794375945.735036,
+    "seen": 1794377238.6468878,
+    "ast_hash": "98edb9019792d99d6a29e318bb400271",
     "semantic_hash": ""
   },
   "tests/fixtures/skills/README.md": {
@@ -2424,9 +2424,9 @@
     "semantic_hash": ""
   },
   "docs/guides/providers.md": {
-    "mtime": 1794001965.1322417,
-    "seen": 1794004171.8904164,
-    "ast_hash": "ed803c26591fdce96324227b0062dd37",
+    "mtime": 1794375231.6824205,
+    "seen": 1794377238.6468878,
+    "ast_hash": "06556ec0c9d6d266d9484e9f1261fcf8",
     "semantic_hash": ""
   },
   "docs/guides/skills.md": {
@@ -2619,6 +2619,78 @@
     "mtime": 1794018452.589198,
     "seen": 1794065581.342805,
     "ast_hash": "bc78bba06b0821efef89f5fbb8b1aa9c",
+    "semantic_hash": ""
+  },
+  ".github/workflows/publish.yml": {
+    "mtime": 1794084961.6372323,
+    "seen": 1794377238.6439483,
+    "ast_hash": "610e0972ad47a45924554f40a4e9f797",
+    "semantic_hash": ""
+  },
+  "tests/recordings/bedrock/deepseek-v3-2-text-stream.json": {
+    "mtime": 1794375231.6984801,
+    "seen": 1794377238.64537,
+    "ast_hash": "8e299e2e256ee777cc1dffee0ce085a3",
+    "semantic_hash": ""
+  },
+  "tests/recordings/bedrock/glm-5-text-stream.json": {
+    "mtime": 1794375231.7009726,
+    "seen": 1794377238.64537,
+    "ast_hash": "cbddd9614815403591fb034d4f6fc10f",
+    "semantic_hash": ""
+  },
+  "tests/recordings/bedrock/gpt-5-6-terra-in-profile-stream.json": {
+    "mtime": 1794375231.703168,
+    "seen": 1794377238.64537,
+    "ast_hash": "3ba8d5b7fe92f204787416128f7e6c4f",
+    "semantic_hash": ""
+  },
+  "tests/recordings/bedrock/gpt-oss-120b-reasoning-stream.json": {
+    "mtime": 1794375231.7049859,
+    "seen": 1794377238.64537,
+    "ast_hash": "c456fbfab02dce339c0b96949063171c",
+    "semantic_hash": ""
+  },
+  "tests/recordings/bedrock/kimi-k2-5-text-stream.json": {
+    "mtime": 1794375231.7071414,
+    "seen": 1794377238.64537,
+    "ast_hash": "4311afce420787abba9b7118e5873aea",
+    "semantic_hash": ""
+  },
+  "tests/recordings/bedrock/minimax-m2-5-text-stream.json": {
+    "mtime": 1794375231.7099185,
+    "seen": 1794377238.64537,
+    "ast_hash": "0c79bfe0ccb3e0fbebbe3eb22a56e21e",
+    "semantic_hash": ""
+  },
+  "tests/recordings/bedrock/mistral-large-2402-tool-converse.json": {
+    "mtime": 1794375231.7114604,
+    "seen": 1794377238.64537,
+    "ast_hash": "7f8da3426195059f17cadff829971dfa",
+    "semantic_hash": ""
+  },
+  "tests/recordings/bedrock/nemotron-super-3-reasoning-converse.json": {
+    "mtime": 1794375231.7153041,
+    "seen": 1794377238.64537,
+    "ast_hash": "efe6b53259b12ec43b43fde17d861726",
+    "semantic_hash": ""
+  },
+  "tests/recordings/bedrock/nova-lite-in-region-tool-stream.json": {
+    "mtime": 1794375231.7175064,
+    "seen": 1794377238.64537,
+    "ast_hash": "852a913b339550ece5303e942875054e",
+    "semantic_hash": ""
+  },
+  "tests/recordings/bedrock/palmyra-vision-7b-text-stream.json": {
+    "mtime": 1794375231.7214966,
+    "seen": 1794377238.64537,
+    "ast_hash": "2313e9822433308126fdc6a05d7bdb73",
+    "semantic_hash": ""
+  },
+  "tests/recordings/bedrock/qwen3-235b-tool-stream.json": {
+    "mtime": 1794375231.7236633,
+    "seen": 1794377238.64537,
+    "ast_hash": "4b55ce1e5b803275a06fd005a21f8683",
     "semantic_hash": ""
   }
 }
