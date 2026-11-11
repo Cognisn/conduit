@@ -5,7 +5,14 @@ specifications become Converse parameters. A ``CacheBreakpoint`` becomes a
 ``cachePoint`` only when the catalogue says the model supports prompt caching, and at
 most four are sent (Bedrock's limit for Claude models): earlier breakpoints are
 dropped first, since a cache read still finds the longest prefix ending at a later
-one. Bedrock processes cache points in the order tools, system, messages.
+one. Bedrock processes cache points in the order tools, system, messages. Amazon Nova
+takes cache points in system and messages only, so a Nova request never gets one after
+its tools.
+
+Tool use and streaming: a few models (``NO_STREAMING_TOOL_USE``, from the Bedrock user
+guide's client-side tool use page) refuse tools on ConverseStream, so the provider sends
+a request with tools for them through Converse instead (``streams_tool_use``). A model
+is matched by its own id or by an inference profile id naming it.
 
 Responses: ConverseStream events, or a whole Converse response, become conduit stream
 events ending with one ``StreamStopped`` whose usage comes from the final metadata.
@@ -57,6 +64,28 @@ from conduit.core.types import (
 
 CACHE_POINT: dict[str, Any] = {"cachePoint": {"type": "default"}}
 MAX_CACHE_POINTS = 4
+#: Inference profile prefixes: a profile id is one of these, a dot, and the model id.
+PROFILE_PREFIXES = frozenset({"us", "eu", "apac", "au", "jp", "ca", "in", "us-gov", "global"})
+#: Models that take tools on Converse but refuse them on ConverseStream ("This model
+#: doesn't support tool use in streaming mode."), as the Bedrock user guide's
+#: client-side tool use page lists them; a request with tools goes through Converse.
+NO_STREAMING_TOOL_USE = frozenset(
+    {
+        "meta.llama3-1-8b-instruct-v1:0",
+        "meta.llama3-1-70b-instruct-v1:0",
+        "meta.llama3-3-70b-instruct-v1:0",
+        "meta.llama4-scout-17b-instruct-v1:0",
+        "meta.llama4-maverick-17b-instruct-v1:0",
+        "mistral.mistral-large-2402-v1:0",
+        "mistral.mistral-large-2407-v1:0",
+        "mistral.pixtral-large-2502-v1:0",
+        "writer.palmyra-x4-v1:0",
+        "writer.palmyra-x5-v1:0",
+    }
+)
+#: Model families whose cache points go in system and messages only (Amazon Nova's
+#: model cards: "Fields that accept prompt cache checkpoints: system and messages").
+NO_TOOL_CACHE_POINT = ("amazon.nova-",)
 #: The provider kind and state type of a reasoning block's state.
 KIND = "bedrock"
 REASONING_STATE = "reasoning_content"
@@ -138,13 +167,31 @@ def _protocol() -> ProviderError:
     return ProviderError(ProviderFailure.PROTOCOL)
 
 
+def base_model_id(model: str) -> str:
+    """The model id an inference profile id names, or ``model`` itself."""
+    prefix, dot, rest = model.partition(".")
+    return rest if dot and prefix in PROFILE_PREFIXES else model
+
+
+def streams_tool_use(model: str) -> bool:
+    """Whether ConverseStream accepts tools for ``model`` (Bedrock's tool use page)."""
+    return base_model_id(model) not in NO_STREAMING_TOOL_USE
+
+
+def caches_tools(model: str) -> bool:
+    """Whether ``model`` accepts a cache point after its tools."""
+    return not base_model_id(model).startswith(NO_TOOL_CACHE_POINT)
+
+
 class _CachePoints:
     """Hands out cache points in processing order, keeping only the last four."""
 
     def __init__(self, request: ModelRequest, *, enabled: bool) -> None:
+        #: Whether the tools take a cache point: asked for, and accepted by the model.
+        self.tools = request.cache_tools and bool(request.tools) and caches_tools(request.model)
         total = 0
         if enabled:
-            total += int(request.cache_tools and bool(request.tools))
+            total += int(self.tools)
             total += sum(isinstance(b, CacheBreakpoint) for b in request.system)
             total += sum(
                 isinstance(b, CacheBreakpoint) for m in request.messages for b in m.content
@@ -218,7 +265,7 @@ def build_converse_request(request: ModelRequest, *, prompt_caching: bool) -> di
         }
         for tool in request.tools
     ]
-    if tools and request.cache_tools:
+    if points.tools:
         tools.extend(points.take())
     system: list[dict[str, Any]] = []
     for block in request.system:

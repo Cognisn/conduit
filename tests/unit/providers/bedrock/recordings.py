@@ -9,6 +9,10 @@ the Converse and ConverseStream wire shapes. Regenerate them with
 
 A test checks that the committed files equal what this module builds.
 
+The non-Anthropic recordings (``VENDORS``) follow the Converse wire shapes the Bedrock
+user guide documents; they are not captured from live calls, so those models are
+recorded-response tested until the next live verification pass.
+
 Each recorded request is ``{"operation", "region", "params"}``: the region the client
 was built for and the exact Converse parameters, so a recording also proves the
 request shape (a bare model id called in-region, for example).
@@ -250,7 +254,233 @@ def uncached_profile() -> Recording:
     )
 
 
-ALL = (sonnet_4_6_in_region, sonnet_5_in_region, uncached_profile)
+#: A reasoning block as non-Anthropic models stream it: text, and no signature.
+REASONING = "The notes name one host and one time."
+
+
+def _vendor_params(
+    model: str, *, tools: bool, system_cache: bool, tools_cache: bool
+) -> dict[str, Any]:
+    system: list[dict[str, Any]] = [{"text": SYSTEM}]
+    if system_cache:
+        system.append(CACHE_POINT)
+    params: dict[str, Any] = {"modelId": model, "system": system, "messages": FIRST_TURN}
+    if tools:
+        params["toolConfig"] = {"tools": [TOOL_SPEC, *([CACHE_POINT] if tools_cache else [])]}
+    params["inferenceConfig"] = {"maxTokens": 1024}
+    return params
+
+
+def _usage(input_tokens: int, output_tokens: int) -> dict[str, Any]:
+    return {
+        "inputTokens": input_tokens,
+        "outputTokens": output_tokens,
+        "totalTokens": input_tokens + output_tokens,
+    }
+
+
+def _answer_stream(*, reasoning: bool, usage: dict[str, Any]) -> list[dict[str, Any]]:
+    """A ConverseStream answer: optionally a reasoning block, then text in two pieces."""
+    events: list[dict[str, Any]] = [{"messageStart": {"role": "assistant"}}]
+    index = 0
+    if reasoning:
+        events += [
+            {
+                "contentBlockDelta": {
+                    "delta": {"reasoningContent": {"text": REASONING[:18]}},
+                    "contentBlockIndex": 0,
+                }
+            },
+            {
+                "contentBlockDelta": {
+                    "delta": {"reasoningContent": {"text": REASONING[18:]}},
+                    "contentBlockIndex": 0,
+                }
+            },
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+        ]
+        index = 1
+    events += [
+        {
+            "contentBlockDelta": {
+                "delta": {"text": "host-a.example.com "},
+                "contentBlockIndex": index,
+            }
+        },
+        {
+            "contentBlockDelta": {
+                "delta": {"text": "stopped answering at 09:00."},
+                "contentBlockIndex": index,
+            }
+        },
+        {"contentBlockStop": {"contentBlockIndex": index}},
+        {"messageStop": {"stopReason": "end_turn"}},
+        {"metadata": {"usage": usage, "metrics": {"latencyMs": 420}}},
+    ]
+    return events
+
+
+def _vendor(
+    name: str,
+    model: str,
+    region: str,
+    response: Any,
+    *,
+    operation: str = "ConverseStream",
+    tools: bool = False,
+    system_cache: bool = False,
+) -> Recording:
+    params = _vendor_params(model, tools=tools, system_cache=system_cache, tools_cache=False)
+    return Recording(
+        name=name,
+        provider="bedrock",
+        interactions=(
+            Interaction(
+                request={"operation": operation, "region": region, "params": params},
+                response=response,
+            ),
+        ),
+    )
+
+
+def nova_lite_tools() -> Recording:
+    """Amazon Nova Lite in-region: a streamed tool call; its tools take no cache point."""
+    return _vendor(
+        "nova-lite-in-region-tool-stream",
+        "amazon.nova-lite-v1:0",
+        "us-east-1",
+        _tool_stream(cache_write=1200),
+        tools=True,
+        system_cache=True,
+    )
+
+
+def mistral_large_tools() -> Recording:
+    """Mistral Large (24.02): tools go through Converse, since ConverseStream refuses them."""
+    return _vendor(
+        "mistral-large-2402-tool-converse",
+        "mistral.mistral-large-2402-v1:0",
+        "eu-west-2",
+        {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "toolUse": {
+                                "toolUseId": "tooluse_example0002",
+                                "name": "lookup_host",
+                                "input": {"host": "host-a.example.com"},
+                            }
+                        }
+                    ],
+                }
+            },
+            "stopReason": "tool_use",
+            "usage": _usage(64, 22),
+            "metrics": {"latencyMs": 530},
+        },
+        operation="Converse",
+        tools=True,
+    )
+
+
+def qwen_tools() -> Recording:
+    """Qwen3 235B in-region: a streamed tool call, no cache points."""
+    return _vendor(
+        "qwen3-235b-tool-stream",
+        "qwen.qwen3-235b-a22b-2507-v1:0",
+        "eu-west-2",
+        _tool_stream(cache_write=0),
+        tools=True,
+    )
+
+
+def gpt_oss_reasoning() -> Recording:
+    """OpenAI gpt-oss-120b in-region: reasoning without a signature, then text."""
+    return _vendor(
+        "gpt-oss-120b-reasoning-stream",
+        "openai.gpt-oss-120b-1:0",
+        "us-west-2",
+        _answer_stream(reasoning=True, usage=_usage(40, 35)),
+    )
+
+
+def gpt_profile_text() -> Recording:
+    """OpenAI GPT-5.6 Terra through its India profile: text only."""
+    return _vendor(
+        "gpt-5-6-terra-in-profile-stream",
+        "in.openai.gpt-5.6-terra",
+        "ap-south-1",
+        _answer_stream(reasoning=False, usage=_usage(38, 12)),
+    )
+
+
+def nemotron_reasoning() -> Recording:
+    """NVIDIA Nemotron Super 3 through Converse: a whole reasoning block, then text."""
+    return _vendor(
+        "nemotron-super-3-reasoning-converse",
+        "nvidia.nemotron-super-3-120b",
+        "eu-west-2",
+        {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"reasoningContent": {"reasoningText": {"text": REASONING}}},
+                        {"text": "host-a.example.com stopped answering at 09:00."},
+                    ],
+                }
+            },
+            "stopReason": "end_turn",
+            "usage": _usage(41, 30),
+            "metrics": {"latencyMs": 610},
+        },
+        operation="Converse",
+    )
+
+
+def _text_only(name: str, model: str, region: str) -> Recording:
+    return _vendor(name, model, region, _answer_stream(reasoning=False, usage=_usage(37, 11)))
+
+
+def deepseek_text() -> Recording:
+    return _text_only("deepseek-v3-2-text-stream", "deepseek.v3.2", "ap-southeast-2")
+
+
+def minimax_text() -> Recording:
+    return _text_only("minimax-m2-5-text-stream", "minimax.minimax-m2.5", "eu-west-2")
+
+
+def kimi_text() -> Recording:
+    return _text_only("kimi-k2-5-text-stream", "moonshotai.kimi-k2.5", "ap-southeast-2")
+
+
+def palmyra_text() -> Recording:
+    return _text_only("palmyra-vision-7b-text-stream", "writer.palmyra-vision-7b", "us-east-1")
+
+
+def glm_text() -> Recording:
+    return _text_only("glm-5-text-stream", "zai.glm-5", "us-west-2")
+
+
+#: One recording at least per non-Anthropic vendor the catalogue declares: Amazon,
+#: Mistral AI, Qwen, OpenAI, NVIDIA, DeepSeek, MiniMax, Moonshot AI, Writer and Z.AI.
+VENDORS = (
+    nova_lite_tools,
+    mistral_large_tools,
+    qwen_tools,
+    gpt_oss_reasoning,
+    gpt_profile_text,
+    nemotron_reasoning,
+    deepseek_text,
+    minimax_text,
+    kimi_text,
+    palmyra_text,
+    glm_text,
+)
+
+ALL = (sonnet_4_6_in_region, sonnet_5_in_region, uncached_profile, *VENDORS)
 
 
 def path(recording: Recording) -> Path:

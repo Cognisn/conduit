@@ -150,10 +150,10 @@ A deployment that does not use Bedrock API keys can deny them outright in IAM: d
 
 ### Residency
 
-The catalogue declares each Bedrock model id with its scope:
+The default catalogue declares every current Claude model on bedrock-runtime and every other vendor's current chat model that Bedrock serves through Converse on demand (Amazon Nova, DeepSeek, Mistral AI, OpenAI, Qwen, MiniMax, Moonshot AI, NVIDIA, Writer and Z.AI), with each in-Region id and inference profile the model cards document, plus Titan Text Embeddings V2. Models in their legacy period with an end-of-life date are left out. Capabilities follow each model card's bedrock-runtime features: a model whose card lists tool calling only for bedrock-mantle is declared without tools, and prompt caching is declared only where Converse takes cache points (Claude and Amazon Nova). The non-Claude entries are tested against recorded responses until the next live verification pass. Each model id is declared with its scope:
 
 - **In-region** model ids (`anthropic.claude-sonnet-5`) are processed in the Region the provider is called in, and are declared only for the Regions that serve them.
-- **Geographic inference profiles** (`eu.`, `us.`, `au.`, `jp.`, `in.` and `ca.` prefixes) are `cross_region`: Bedrock may process a request in any Region of the profile, and the catalogue lists them.
+- **Geographic inference profiles** (`eu.`, `us.`, `au.`, `jp.`, `in.`, `ca.`, `apac.` and `us-gov.` prefixes) are `cross_region`: Bedrock may process a request in any Region of the profile, and the catalogue lists them.
 - **Global inference profiles** (`global.` prefix) are `global`.
 
 A deployment that must keep processing in one Region allows only `local` and `in_region` and names its Regions; an assignment to a profile is then refused at start-up (`ResidencyRefused`), before any client exists. A deployment that may use a geography allows `cross_region` and lists every Region of the profile; a profile reaching outside the list is refused.
@@ -188,7 +188,7 @@ conduit cannot filter everything botocore logs. When botocore refreshes temporar
 
 ## Claude through Bedrock's mantle endpoint
 
-Kind `bedrock_mantle`, extra `bedrock-mantle` (the anthropic SDK and boto3). Calls Claude through the Anthropic Messages API at `https://bedrock-mantle.<region>.api.aws/anthropic`, which runs each request in the Region it is sent to. That makes it the route to single-Region Claude where bedrock-runtime offers only inference profiles: its catalogue entries are `in_region`.
+Kind `bedrock_mantle`, extra `bedrock-mantle` (the anthropic SDK and boto3). Calls Claude through the Anthropic Messages API at `https://bedrock-mantle.<region>.api.aws/anthropic`, which runs each request in the Region it is sent to. That makes it the route to single-Region Claude where bedrock-runtime offers only inference profiles: its catalogue entries are `in_region`, one for each Claude model the Bedrock model cards document on bedrock-mantle (gated Mythos models aside), declared for the Regions each card lists.
 
 Authentication is by Bedrock API key only: `short_term_api_key` (the default, generated from the credential chain or access keys and refreshed) or `long_term_api_key` behind `allow_long_term_api_keys`. The SDK never signs requests or reads a key or Region from the environment, and the key is set at send time, so it never appears in the request options the SDK logs. `ANTHROPIC_LOG=debug` is refused while set, since it makes the SDK log whole request bodies.
 
@@ -236,7 +236,7 @@ The client takes its key, endpoint and headers only from the settings. Three env
 - `ANTHROPIC_FOUNDRY_RESOURCE`, for a Foundry endpoint;
 - `ANTHROPIC_LOG=debug` (`info` logs only retries and is allowed).
 
-The SDK's own OpenTelemetry spans are switched off, since they can carry request content outside conduit's capture policy. The catalogue's `anthropic` entries describe the direct API (`global`). Claude in Foundry is a regional deployment: declare the models you deploy in a catalogue overlay with the resource's residency.
+The SDK's own OpenTelemetry spans are switched off, since they can carry request content outside conduit's capture policy. The catalogue's `anthropic` entries describe the direct API (`global`): every current Claude model and every legacy model still available, as Anthropic's models overview lists them (Claude Mythos models, offered only to verified organisations, are left out). Claude in Foundry is a regional deployment: declare the models you deploy in a catalogue overlay with the resource's residency.
 
 ## OpenAI, X.AI and Microsoft Foundry
 
@@ -272,7 +272,7 @@ for mapping in (openai, xai, foundry):
     registry.validate("gpt", mapping)
 ```
 
-A Foundry model id is the **deployment name**, which the product declares in a catalogue overlay under the catalogue provider, with its own residency: Foundry deployments are regional, while the default catalogue's `openai` and `xai` entries describe the public APIs. Name deployments so they do not collide with a public model id, or the overlay would change that entry too.
+A Foundry model id is the **deployment name**, which the product declares in a catalogue overlay under the catalogue provider, with its own residency: Foundry deployments are regional, while the default catalogue's `openai` and `xai` entries describe the public APIs: each provider's current chat models with function calling through Chat Completions, and OpenAI's `text-embedding-3-small` and `text-embedding-3-large`. X.AI states no per-model output limit, so its entries carry the API's default of 128,000 tokens. OpenAI's `gpt-6-astra` and `gpt-6.1-sol` take tool calls only through the Responses API, so their entries declare no tools. Name deployments so they do not collide with a public model id, or the overlay would change that entry too.
 
 ```python
 from conduit import CatalogueOverlay
@@ -313,7 +313,7 @@ Kind `gemini`, extra `gemini`. The Gemini API with a Google AI Studio key. Verte
 registry.validate("gemini", {"kind": "gemini", "api_key": "secret://gemini/api_key"})
 ```
 
-The key, the backend and the endpoint are pinned, so `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_GENAI_USE_ENTERPRISE` and `GOOGLE_GEMINI_BASE_URL` are never read. The rest of the SDK's transport follows the environment as any HTTPS client would: proxy variables and `.netrc`, `SSL_CERT_FILE` and `SSL_CERT_DIR`, and `GOOGLE_GENAI_HTTP_CLIENT`. `base_url` may name an https proxy in front of the API (no credentials, query or fragment); `max_attempts` bounds the SDK's retries. The catalogue's Gemini entries are `global`.
+The key, the backend and the endpoint are pinned, so `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_GENAI_USE_ENTERPRISE` and `GOOGLE_GEMINI_BASE_URL` are never read. The rest of the SDK's transport follows the environment as any HTTPS client would: proxy variables and `.netrc`, `SSL_CERT_FILE` and `SSL_CERT_DIR`, and `GOOGLE_GENAI_HTTP_CLIENT`. `base_url` may name an https proxy in front of the API (no credentials, query or fragment); `max_attempts` bounds the SDK's retries. The catalogue's Gemini entries are `global`: the current stable chat models (Pro tier `gemini-4-carbon` and `gemini-4-argon`, and the Flash and Flash-Lite models) and `gemini-embedding-001`.
 
 ## Ollama
 

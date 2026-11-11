@@ -16,6 +16,10 @@ closing it, the thread waits for space at most ``request.timeout_s`` for any one
 then gives up and closes the stream; a consumer that comes back reads what was already
 queued and then fails with ``TIMEOUT``.
 
+A request with tools for a model that refuses tool use on ConverseStream
+(``mapping.streams_tool_use``) is sent through Converse even when
+``use_converse_stream`` is set; its events are the same.
+
 Every error becomes ``ProviderError(failure)``, raised after its handler so that it has
 no cause and no context: provider text reaches no log, exception or event.
 """
@@ -40,6 +44,7 @@ from conduit.providers.bedrock.mapping import (
     StreamMapper,
     build_converse_request,
     events_from_converse_response,
+    streams_tool_use,
 )
 from conduit.providers.bedrock.settings import BedrockSettings
 
@@ -79,7 +84,9 @@ class BedrockProvider(BaseProvider):
 
     async def stream(self, request: ModelRequest) -> AsyncIterator[StreamEvent]:
         params = self.converse_parameters(request)
-        if self.settings.use_converse_stream:
+        # A model that refuses tools on ConverseStream gets a request with tools whole.
+        streams = not request.tools or streams_tool_use(request.model)
+        if self.settings.use_converse_stream and streams:
             async for event in self._converse_stream(params, request.timeout_s):
                 yield event
             return
