@@ -184,7 +184,7 @@ Each adapter passes its SDK every setting the SDK could otherwise take from the 
 | `mcp` | `conduit.mcp` | the official MCP Python SDK |
 | `sql` | `conduit.stores.sql` | SQLAlchemy, Alembic, asyncpg and aiosqlite |
 | `konfig` | `conduit.integrations.konfig` | cognisn-konfig |
-| `warden` | `conduit.integrations.warden` | cognisn-warden (a pre-release), whose audit recorder needs psycopg (LGPL-3.0, a named licence exception) |
+| `warden` | `conduit.integrations.warden` | cognisn-warden (a pre-release), whose audit recorder needs psycopg (LGPL-3.0, a named licence exception), and which needs fido2 (BSD-2-Clause with Apache-2.0 and MPL-2.0 files, a named licence exception) |
 | `otel` | `conduit.integrations.otel` | the OpenTelemetry API (the product supplies the SDK and exporters) |
 | `testing` | `conduit.testing` | pytest, for the conformance suites' pytest plugin |
 | `cli` | `conduit.cli` | rich, and the `mcp` extra; the `conduit` console script |

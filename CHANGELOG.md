@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- The licence audit names fido2 as an agreed exception: cognisn-warden requires it from 0.1.0b18, so the warden extra installs it. It is BSD-2-Clause with some files under Apache-2.0 and MPL-2.0, and is matched by exact package name only. The README's warden package count is now 33 beyond the core (38 in all).
+
 ## [0.1.0rc1] - 2026-11-07
 
 First release candidate, from 0.1.0b9 with no change to the code, and the first version published to PyPI.

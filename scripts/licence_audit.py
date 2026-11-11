@@ -58,6 +58,11 @@ EXCEPTIONS: dict[str, str] = {
     # unmodified and installed as its own package.
     "psycopg": "LGPL-3.0 PostgreSQL driver required by cognisn-warden (the warden extra); "
     "used unmodified, installed separately (Q0036)",
+    # Agreed 2026-11-11 (Skuld Q0056): the FIDO2 library required by cognisn-warden from
+    # 0.1.0b18 (the warden extra). BSD-2-Clause, with some files under Apache-2.0 and
+    # MPL-2.0. conduit never imports it; used unmodified and installed as its own package.
+    "fido2": "BSD-2-Clause with Apache-2.0 and MPL-2.0 files, required by cognisn-warden "
+    "(the warden extra); used unmodified, installed separately (Q0056)",
 }
 
 _STRONG = re.compile(
