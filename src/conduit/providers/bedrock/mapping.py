@@ -77,6 +77,7 @@ NO_STREAMING_TOOL_USE = frozenset(
         "meta.llama4-scout-17b-instruct-v1:0",
         "meta.llama4-maverick-17b-instruct-v1:0",
         "mistral.mistral-large-2402-v1:0",
+        "mistral.mistral-large-2407-v1:0",
         "mistral.pixtral-large-2502-v1:0",
         "writer.palmyra-x4-v1:0",
         "writer.palmyra-x5-v1:0",

@@ -281,6 +281,7 @@ class TestStreamingToolUse:
         "model",
         [
             "mistral.mistral-large-2402-v1:0",
+            "mistral.mistral-large-2407-v1:0",
             "us.mistral.pixtral-large-2502-v1:0",
             "eu.mistral.pixtral-large-2502-v1:0",
             "meta.llama3-3-70b-instruct-v1:0",

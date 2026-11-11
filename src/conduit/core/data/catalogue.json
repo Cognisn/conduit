@@ -3279,7 +3279,7 @@
       "residency_scope": "global",
       "regions": [],
       "capabilities": {
-        "tools": true,
+        "tools": false,
         "vision": true,
         "prompt_caching": true,
         "structured_output": true
@@ -3294,7 +3294,7 @@
       "residency_scope": "global",
       "regions": [],
       "capabilities": {
-        "tools": true,
+        "tools": false,
         "vision": true,
         "prompt_caching": true,
         "structured_output": true
@@ -3311,36 +3311,6 @@
       "capabilities": {},
       "context_window": 8192,
       "embedding_dimensions": 1536
-    },
-    {
-      "model_id": "gpt-6.1-terra",
-      "provider": "openai",
-      "kind": "chat",
-      "residency_scope": "global",
-      "regions": [],
-      "capabilities": {
-        "tools": true,
-        "vision": true,
-        "prompt_caching": true,
-        "structured_output": true
-      },
-      "context_window": 1050000,
-      "output_limit": 128000
-    },
-    {
-      "model_id": "gpt-6-luna",
-      "provider": "openai",
-      "kind": "chat",
-      "residency_scope": "global",
-      "regions": [],
-      "capabilities": {
-        "tools": true,
-        "vision": true,
-        "prompt_caching": true,
-        "structured_output": true
-      },
-      "context_window": 1050000,
-      "output_limit": 128000
     },
     {
       "model_id": "gpt-5.6-sol",

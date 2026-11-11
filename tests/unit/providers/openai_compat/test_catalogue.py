@@ -5,9 +5,10 @@ docs.x.ai/developers/models (see the workstream's session summary for every sour
 
 Rechecked on 2026-11-10 (fix/0.1.0-catalogue-coverage): every current OpenAI chat model
 the model pages mark as supported on Chat Completions with function calling, and
-text-embedding-3-large (developers.openai.com/api/docs/guides/embeddings); gpt-6-sol is
-left out, since Chat Completions takes its function calls only at reasoning effort
-none, which conduit does not send. Every current X.AI chat model (docs.x.ai/docs/models
+text-embedding-3-large (developers.openai.com/api/docs/guides/embeddings); gpt-6-sol and
+gpt-6-luna are left out, since Chat Completions takes their function calls only at
+reasoning effort none, which conduit does not send, and gpt-6.1-terra, whose tool calling
+requires the Responses API. Every current X.AI chat model (docs.x.ai/docs/models
 and each model's page); X.AI states no per-model output limit, so its entries carry the
 documented max_completion_tokens default, 128,000 (Skuld Q0054).
 """
@@ -20,14 +21,17 @@ from conduit.core.catalogue import Capabilities, default_catalogue
 from conduit.core.residency import ResidencyScope
 
 ALL = Capabilities(tools=True, vision=True, prompt_caching=True, structured_output=True)
+NO_TOOLS = ALL.model_copy(update={"tools": False})
+#: The function-calling guide (developers.openai.com/api/docs/guides/function-calling):
+#: "GPT-6 Astra and GPT-6.1 Sol require the Responses API for tool calling". conduit's
+#: adapter calls Chat Completions, so these serve chat without tools (Skuld decision).
+RESPONSES_ONLY_TOOLS = frozenset({"gpt-6-astra", "gpt-6.1-sol"})
 
 CHAT = [
     ("openai", "gpt-5", 400_000, 128_000),
     ("openai", "gpt-5-mini", 400_000, 128_000),
     ("openai", "gpt-6-astra", 1_050_000, 128_000),
     ("openai", "gpt-6.1-sol", 1_050_000, 128_000),
-    ("openai", "gpt-6.1-terra", 1_050_000, 128_000),
-    ("openai", "gpt-6-luna", 1_050_000, 128_000),
     ("openai", "gpt-5.6-sol", 1_050_000, 128_000),
     ("openai", "gpt-5.6-terra", 1_050_000, 128_000),
     ("openai", "gpt-5.6-luna", 1_050_000, 128_000),
@@ -51,7 +55,7 @@ def test_chat_entries(provider: str, model_id: str, context_window: int, output_
     entry = default_catalogue().require(provider, model_id)
     assert entry.kind == "chat"
     assert entry.residency_scope is ResidencyScope.GLOBAL
-    assert entry.capabilities == ALL
+    assert entry.capabilities == (NO_TOOLS if model_id in RESPONSES_ONLY_TOOLS else ALL)
     assert entry.context_window == context_window
     assert entry.output_limit == output_limit
 
@@ -67,6 +71,8 @@ def test_the_retired_grok_4_is_not_declared() -> None:
     "model_id",
     [
         "gpt-6-sol",  # function calling on Chat Completions only at reasoning effort none
+        "gpt-6-luna",  # the same: "only with `reasoning_effort` set to `none`"
+        "gpt-6.1-terra",  # "Tool calling requires the Responses API."
         "gpt-5.5-pro",  # Responses API only
         "chat-latest",  # an alias that moves, with no prompt caching listed
     ],

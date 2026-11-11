@@ -272,7 +272,7 @@ for mapping in (openai, xai, foundry):
     registry.validate("gpt", mapping)
 ```
 
-A Foundry model id is the **deployment name**, which the product declares in a catalogue overlay under the catalogue provider, with its own residency: Foundry deployments are regional, while the default catalogue's `openai` and `xai` entries describe the public APIs: each provider's current chat models with function calling through Chat Completions, and OpenAI's `text-embedding-3-small` and `text-embedding-3-large`. X.AI states no per-model output limit, so its entries carry the API's default of 128,000 tokens. Name deployments so they do not collide with a public model id, or the overlay would change that entry too.
+A Foundry model id is the **deployment name**, which the product declares in a catalogue overlay under the catalogue provider, with its own residency: Foundry deployments are regional, while the default catalogue's `openai` and `xai` entries describe the public APIs: each provider's current chat models with function calling through Chat Completions, and OpenAI's `text-embedding-3-small` and `text-embedding-3-large`. X.AI states no per-model output limit, so its entries carry the API's default of 128,000 tokens. OpenAI's `gpt-6-astra` and `gpt-6.1-sol` take tool calls only through the Responses API, so their entries declare no tools. Name deployments so they do not collide with a public model id, or the overlay would change that entry too.
 
 ```python
 from conduit import CatalogueOverlay
