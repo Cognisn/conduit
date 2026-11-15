@@ -342,7 +342,7 @@ Kind `stub`, no extra. A deterministic, scriptable provider for tests: it never 
 - **Anthropic**: the Models API (`GET /v1/models`, every page) for `endpoint: direct`. Unsupported for Claude in Foundry, whose endpoint documents no models listing and whose ids are deployment names.
 - **OpenAI and X.AI**: the Models API (`GET /v1/models`). Unsupported for Microsoft Foundry, whose OpenAI v1 endpoint lists the resource's models rather than its deployments.
 - **Gemini**: `models.list` (every page), keeping only the models that support `generateContent`; the `models/` prefix is removed.
-- **Ollama**: the server's local models (`GET /api/tags`). Every pulled model that the catalogue lacks is reported as undeclared.
+- **Ollama**: the server's local models (`GET /api/tags`). A model pulled without a tag is listed as `name:latest`, and Ollama resolves an untagged name to its `latest` tag, so it is reported under its bare name (`nomic-embed-text`), the name the catalogue declares and the provider calls; any other tag is kept. Every pulled model that the catalogue lacks is reported as undeclared; declare an untagged pull in an overlay by its bare name.
 - **The stub**: the ids given as `StubFactory(models=[...])`, by default the stub models conduit's catalogue declares (`stub-echo`, `stub-embed`), so a product can test its handling of each outcome.
 
 ## Building clients

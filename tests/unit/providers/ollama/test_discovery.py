@@ -13,6 +13,7 @@ from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.registry import DiscoveringFactory, ProviderRegistry
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.providers.ollama import OllamaFactory
+from conduit.providers.ollama.discovery import parse_tags
 from conduit.testing.replay import Replay, load_recording
 from tests.unit.providers import discovery_recordings as recordings
 
@@ -49,7 +50,8 @@ async def test_the_local_models_are_listed_and_joined() -> None:
     assert {m.model_id: m.outcome for m in result.models} == {
         "llama3.1:8b": DiscoveryOutcome.ALLOWED,
         "example-local:3b": DiscoveryOutcome.UNDECLARED,
-        "nomic-embed-text:latest": DiscoveryOutcome.UNDECLARED,
+        # Listed as nomic-embed-text:latest; Ollama resolves the bare name to it.
+        "nomic-embed-text": DiscoveryOutcome.ALLOWED,
     }
     assert all(m.label is None for m in result.models)
 
@@ -105,3 +107,26 @@ async def test_a_body_that_is_not_the_documented_shape_is_a_protocol_failure(
     with pytest.raises(ProviderError) as raised:
         await _discover(handle)
     assert raised.value.failure is ProviderFailure.PROTOCOL
+
+
+@pytest.mark.parametrize(
+    ("listed", "reported"),
+    [
+        ("nomic-embed-text:latest", "nomic-embed-text"),
+        ("example/model:latest", "example/model"),
+        ("llama3.1:8b", "llama3.1:8b"),
+        ("example-local:latest-q4", "example-local:latest-q4"),
+        ("example-local", "example-local"),
+        (
+            "registry.example.com:5000/example/model:latest",
+            "registry.example.com:5000/example/model",
+        ),
+        (
+            "registry.example.com:5000/example/model:3b",
+            "registry.example.com:5000/example/model:3b",
+        ),
+    ],
+)
+def test_the_latest_tag_is_reported_under_the_bare_name(listed: str, reported: str) -> None:
+    [model] = parse_tags({"models": [{"name": listed, "model": listed}]})
+    assert model.model_id == reported
