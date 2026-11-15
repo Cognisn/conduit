@@ -1,0 +1,85 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/models",
+        "query": {
+          "pageSize": "1000"
+        }
+      },
+      "response": {
+        "body": {
+          "models": [
+            {
+              "baseModelId": "gemini-4-argon",
+              "displayName": "gemini-4-argon",
+              "inputTokenLimit": 1048576,
+              "name": "models/gemini-4-argon",
+              "outputTokenLimit": 65536,
+              "supportedGenerationMethods": [
+                "generateContent",
+                "countTokens"
+              ],
+              "version": "001"
+            },
+            {
+              "baseModelId": "gemini-embedding-001",
+              "displayName": "gemini-embedding-001",
+              "inputTokenLimit": 1048576,
+              "name": "models/gemini-embedding-001",
+              "outputTokenLimit": 65536,
+              "supportedGenerationMethods": [
+                "embedContent"
+              ],
+              "version": "001"
+            }
+          ],
+          "nextPageToken": "page-2-token"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/models",
+        "query": {
+          "pageSize": "1000",
+          "pageToken": "page-2-token"
+        }
+      },
+      "response": {
+        "body": {
+          "models": [
+            {
+              "baseModelId": "example-gemini-preview",
+              "displayName": "example-gemini-preview",
+              "inputTokenLimit": 1048576,
+              "name": "models/example-gemini-preview",
+              "outputTokenLimit": 65536,
+              "supportedGenerationMethods": [
+                "generateContent"
+              ],
+              "version": "001"
+            },
+            {
+              "baseModelId": "example-image-model",
+              "displayName": "example-image-model",
+              "inputTokenLimit": 1048576,
+              "name": "models/example-image-model",
+              "outputTokenLimit": 65536,
+              "supportedGenerationMethods": [
+                "predict"
+              ],
+              "version": "001"
+            }
+          ]
+        },
+        "status": 200
+      }
+    }
+  ],
+  "name": "gemini-discovery-models",
+  "provider": "gemini"
+}

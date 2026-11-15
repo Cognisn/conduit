@@ -56,6 +56,18 @@ every response (one finite vector per text, each of the expected length, and usa
 input tokens only), raising ``ProviderError(PROTOCOL)`` for anything else, and emits an
 ``EmbeddingCallStartedEvent`` and an ``EmbeddingCallFinishedEvent`` for every call. The
 texts are prompt content, captured only when the policy captures prompts.
+
+Model discovery (``conduit.core.discovery``) is an optional capability of a provider
+factory: a ``DiscoveringFactory`` also has ``discovery_unsupported`` and
+``discover_models``. ``discover`` validates the settings, resolves the secrets and makes
+the client exactly as ``build`` does (``create_client`` stays the only place a client is
+made), lists the models, closes the client through the provider ``create_provider`` wraps
+it in, and joins each listed id to the catalogue, the residency policy and the provider's
+Region. A factory without discovery, or settings it cannot list for, is reported
+unsupported, never raised. A ``DiscoveryFinishedEvent`` records every discovery whose
+settings validate, however it ends: a secret that cannot be resolved, or a client that
+cannot be made or wrapped, is a failed discovery. Nothing discovery reports changes what
+``MeteredProvider`` admits.
 """
 
 from __future__ import annotations
@@ -71,13 +83,20 @@ import re
 import sys
 import time
 import warnings
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, NonNegativeFloat, NonNegativeInt, SecretStr, ValidationError
 
 from conduit.core.catalogue import Catalogue, ModelEntry, default_catalogue
+from conduit.core.discovery import (
+    DiscoveredModel,
+    DiscoveryOutcome,
+    DiscoveryResult,
+    ModelAvailability,
+    join_discovered,
+)
 from conduit.core.errors import (
     CapabilityRefused,
     ConduitError,
@@ -92,6 +111,7 @@ from conduit.core.events import (
     CapturedContent,
     CapturePolicy,
     ContentKind,
+    DiscoveryFinishedEvent,
     Event,
     EventSink,
     FanOutSink,
@@ -213,6 +233,31 @@ class ProviderFactory(Protocol):
         ``*, catalogue: Catalogue | None = None`` for this release. The Wave 2 form
         without it is deprecated and is called without the catalogue.
         """
+        ...
+
+
+@runtime_checkable
+class DiscoveringFactory(ProviderFactory, Protocol):
+    """A provider factory that can also list the models a configured provider reaches.
+
+    Discovery is optional: a factory without these two methods is reported unsupported
+    by ``ProviderRegistry.discover``, never refused.
+    """
+
+    def discovery_unsupported(self, settings: ProviderSettings) -> str | None:
+        """Why these settings cannot be listed (a fixed sentence), or ``None`` if they can.
+
+        Asked before any secret is resolved or client made."""
+        ...
+
+    async def discover_models(
+        self, settings: ProviderSettings, client: Any
+    ) -> Sequence[DiscoveredModel]:
+        """The models the provider lists, through ``client`` (made by ``create_client``).
+
+        Each is the model id as the provider names it and the provider's own label for
+        it, if the listing gives one. A failure is raised as ``ProviderError``, with
+        nothing chained and no provider text."""
         ...
 
 
@@ -720,6 +765,62 @@ async def _close_quietly(inner: EmbeddingProvider, name: str) -> None:
         )
 
 
+def _well_listed(listed: object) -> bool:
+    """Whether an adapter's listing is a sequence of ``DiscoveredModel``."""
+    if isinstance(listed, str | bytes) or not isinstance(listed, Sequence):
+        return False
+    return all(isinstance(model, DiscoveredModel) for model in listed)
+
+
+def _counts(models: Sequence[ModelAvailability]) -> dict[str, int]:
+    return {
+        outcome.value: sum(1 for model in models if model.outcome is outcome)
+        for outcome in DiscoveryOutcome
+    }
+
+
+def _capture_listing(models: Sequence[ModelAvailability], policy: CapturePolicy) -> CapturedContent:
+    """The joined listing as an event carries it: prompt content, under ``policy``."""
+    listing = [{"model_id": model.model_id, "outcome": model.outcome.value} for model in models]
+    return policy.capture(ContentKind.PROMPT, json.dumps(listing, separators=(",", ":")))
+
+
+async def _close_inner(inner: Provider, name: str) -> None:
+    """Close a provider that only holds a discovery client. A close that raises is
+    logged (the classes only) and never raised. Cancellation propagates unchanged."""
+    failed: str | None = None
+    try:
+        await inner.aclose()
+    except Exception as error:
+        failed = type(error).__name__
+    if failed is not None:
+        logger.warning(
+            "closing the discovery client of %s (%s) failed: %s",
+            name,
+            type(inner).__name__,
+            failed,
+        )
+
+
+async def _close_client(client: Any, name: str) -> None:
+    """Close a client no provider took (its factory's ``create_provider`` raised): its
+    ``aclose``, else its ``close``, awaited when that returns an awaitable. A close that
+    raises is logged (the classes only) and never raised."""
+    failed: str | None = None
+    try:
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if close is not None:
+            closing = close()
+            if inspect.isawaitable(closing):
+                await closing
+    except Exception as error:
+        failed = type(error).__name__
+    if failed is not None:
+        logger.warning(
+            "closing the client of %s (%s) failed: %s", name, type(client).__name__, failed
+        )
+
+
 class ProviderRegistry:
     """Provider adapters by kind, and every provider built from them."""
 
@@ -875,15 +976,11 @@ class ProviderRegistry:
             client = guarded_client(
                 validated.kind, lambda: factory.create_client(validated, secrets), name=name
             )
-        if self._with_catalogue.get(factory.kind, False):
-            inner = factory.create_provider(
-                name,
-                validated,
-                client,
-                catalogue=self.catalogue,  # type: ignore[call-arg]
-            )
-        else:
-            inner = factory.create_provider(name, validated, client)
+        try:
+            inner = self._wrap(factory, name, validated, client)
+        except Exception:
+            await _close_client(client, name)
+            raise
         provider = MeteredProvider(
             inner,
             name=name,
@@ -990,6 +1087,137 @@ class ProviderRegistry:
         self._embedders.append(embedder)
         logger.debug("built embedding provider %s (%s)", name, validated.kind)
         return embedder
+
+    def _wrap(
+        self, factory: ProviderFactory, name: str, settings: ProviderSettings, client: Any
+    ) -> Provider:
+        """The factory's provider around ``client``, with the catalogue where it takes one."""
+        if self._with_catalogue.get(factory.kind, False):
+            return factory.create_provider(
+                name,
+                settings,
+                client,
+                catalogue=self.catalogue,  # type: ignore[call-arg]
+            )
+        return factory.create_provider(name, settings, client)
+
+    async def discover(
+        self,
+        name: str,
+        settings: ProviderSettings | Mapping[str, Any],
+        *,
+        client: Any = _UNSET,
+    ) -> DiscoveryResult:
+        """The models the configured provider ``name`` lists, joined to the catalogue.
+
+        The settings are validated, the secrets resolved and the client made exactly as
+        ``build`` does; the client is closed again before this returns or raises.
+        ``client`` replaces the SDK client in tests. Each listed id is allowed, refused
+        (with the reason start-up would give) or undeclared; nothing here makes a model
+        usable. A kind whose factory has no discovery, or settings it cannot list for,
+        give an unsupported result. A failed listing raises ``ProviderError`` (any other
+        exception from the adapter becomes ``ProviderError(PROTOCOL)``), with nothing
+        chained; a conduit error goes on as it is.
+        """
+        validated = self.validate(name, settings)
+        factory = self._factory(validated.kind)
+        began = time.perf_counter()
+        discovery_id = new_id("disc")
+
+        async def finished(**fields: Any) -> None:
+            await self._events.emit(
+                DiscoveryFinishedEvent(
+                    discovery_id=discovery_id,
+                    provider=name,
+                    kind=validated.kind,
+                    duration_ms=(time.perf_counter() - began) * 1000,
+                    **fields,
+                )
+            )
+
+        def result(**fields: Any) -> DiscoveryResult:
+            return DiscoveryResult(
+                provider=name,
+                kind=validated.kind,
+                catalogue_provider=validated.catalogue_provider,
+                region=validated.region,
+                **fields,
+            )
+
+        discovering = factory if isinstance(factory, DiscoveringFactory) else None
+        reason = (
+            discovering.discovery_unsupported(validated)
+            if discovering is not None
+            else f"the {validated.kind} adapter offers no model discovery"
+        )
+        if discovering is None or reason is not None:
+            await finished(outcome="unsupported")
+            return result(supported=False, reason=reason)
+        # The adapter's provider owns the client's close, as for a built provider. A
+        # failure before it exists is a failed discovery, and a client already made is
+        # closed here; the failure goes on as it is.
+        holder: Provider
+        setup_failed: Exception | None = None
+        try:
+            if client is _UNSET:
+                secrets = await resolve_secret_fields(validated, self._secrets)
+                client = guarded_client(
+                    validated.kind, lambda: factory.create_client(validated, secrets), name=name
+                )
+            holder = self._wrap(factory, name, validated, client)
+        except asyncio.CancelledError:
+            if client is not _UNSET:
+                await _close_client(client, name)
+            await finished(outcome="failed", error_type=CANCELLED)
+            raise
+        except Exception as error:
+            setup_failed = error
+        if setup_failed is not None:
+            if client is not _UNSET:
+                await _close_client(client, name)
+            await finished(outcome="failed", error_type=type(setup_failed).__name__)
+            raise setup_failed  # the failure as it was raised, outside every handler
+        listed: Sequence[DiscoveredModel] = ()
+        failure: ProviderFailure | None = None
+        error_type: str | None = None
+        refused: ConduitError | None = None
+        try:
+            try:
+                listed = await discovering.discover_models(validated, client)
+            finally:
+                await _close_inner(holder, name)
+        except ProviderError as error:
+            failure = error.failure
+        except ConduitError as error:
+            refused = error
+        except Exception as error:
+            failure, error_type = ProviderFailure.PROTOCOL, type(error).__name__
+        except asyncio.CancelledError:
+            await finished(outcome="failed", error_type=CANCELLED)
+            raise
+        if refused is not None:
+            await finished(outcome="failed", error_type=type(refused).__name__)
+            raise refused
+        if failure is None and not _well_listed(listed):
+            failure = ProviderFailure.PROTOCOL
+        if failure is not None:
+            await finished(outcome="failed", failure=failure, error_type=error_type)
+            raise ProviderError(failure)  # outside every handler: nothing chained
+        models = join_discovered(
+            listed,
+            self.catalogue,
+            catalogue_provider=validated.catalogue_provider,
+            region=validated.region,
+            residency=self.residency,
+            provider=name,
+        )
+        await finished(
+            outcome="ok",
+            models=_capture_listing(models, self._events.policy),
+            **_counts(models),
+        )
+        logger.debug("discovered %d models on %s (%s)", len(models), name, validated.kind)
+        return result(supported=True, models=models)
 
     async def aclose(self) -> None:
         embedders, self._embedders = self._embedders, []

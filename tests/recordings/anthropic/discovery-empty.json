@@ -1,0 +1,24 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/v1/models",
+        "query": {
+          "limit": "1000"
+        }
+      },
+      "response": {
+        "body": {
+          "data": [],
+          "first_id": null,
+          "has_more": false,
+          "last_id": null
+        },
+        "status": 200
+      }
+    }
+  ],
+  "name": "anthropic-discovery-empty",
+  "provider": "anthropic"
+}

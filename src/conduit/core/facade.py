@@ -26,6 +26,10 @@ each running on the loop that built the provider::
         for event in binding.stream(binding.request(messages=[...])):
             ...
 
+``discover`` lists the models a configured provider reaches, joined to the catalogue
+(``ProviderRegistry.discover``), on the runtime's loop: for a built provider by its name
+alone, for any other configured provider with its settings too.
+
 ``close`` (or leaving the ``with`` block) closes every provider. ``with_timeout`` gives
 the same runtime with another per-call timeout. ``start_sync`` is refused on the
 loop's own thread, like every facade call.
@@ -47,16 +51,26 @@ import concurrent.futures
 import inspect
 import logging
 import threading
-from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Iterator
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Generator,
+    Iterable,
+    Iterator,
+    Mapping,
+)
 from types import MappingProxyType, TracebackType
 from typing import Any
 
 from conduit.core.catalogue import Catalogue
-from conduit.core.errors import FacadeError
+from conduit.core.discovery import DiscoveryResult
+from conduit.core.errors import ConfigurationError, FacadeError
 from conduit.core.events import EventSink
 from conduit.core.registry import MeteredProvider, ProviderFactory
 from conduit.core.runtime import ConduitSettings, Runtime, start, task_request
 from conduit.core.secrets import SecretResolver
+from conduit.core.settings import ProviderSettings
 from conduit.core.streaming import StreamEvent
 from conduit.core.tasks import Assignments, ResolvedAssignment, TaskClass
 from conduit.core.types import Message, ModelRequest, ModelResponse, SystemBlock, ToolSpec
@@ -462,6 +476,24 @@ class SyncRuntime:
         return SyncTaskBinding(
             SyncProvider(binding.provider, self._loop, self.timeout), binding.assignment
         )
+
+    def discover(
+        self, name: str, settings: ProviderSettings | Mapping[str, Any] | None = None
+    ) -> DiscoveryResult:
+        """The models provider ``name`` lists, joined to the runtime's catalogue.
+
+        Without ``settings``, ``name`` must be a provider the runtime built, and its own
+        settings are used. Blocks; runs on the runtime's loop, through its registry, and
+        is refused on the loop's own thread. Nothing it reports makes a model usable.
+        """
+        if settings is None:
+            built = self._runtime.providers.get(name)
+            if built is None:
+                raise ConfigurationError(
+                    f"provider {name!r} was not built by this runtime; give its settings"
+                )
+            settings = built.settings
+        return self._loop.run(self._runtime.registry.discover(name, settings), timeout=self.timeout)
 
     def with_timeout(self, timeout: float | None) -> SyncRuntime:
         """The same runtime, with another per-call timeout."""

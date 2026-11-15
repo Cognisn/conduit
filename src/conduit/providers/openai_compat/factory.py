@@ -27,6 +27,9 @@ adapter's Foundry endpoint shares. If building the SDK client fails after an Ent
 credential was made, the credential is closed: on the running loop when there is one,
 otherwise straight away.
 
+The factory discovers (``conduit.providers.openai_compat.discovery``): OpenAI and X.AI
+list their models through the Models API; Foundry is reported unsupported.
+
 The key (or Entra ID credential) is resolved and the client built in one guarded step
 (see ``conduit.providers``): a constructor that raises becomes a fixed
 ``ConfigurationError`` naming the adapter and the exception's class.
@@ -35,17 +38,19 @@ The key (or Entra ID credential) is resolved and the client built in one guarded
 from __future__ import annotations
 
 import importlib
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from pydantic import SecretStr
 
 from conduit.core.catalogue import Catalogue, default_catalogue
+from conduit.core.discovery import DiscoveredModel
 from conduit.core.errors import ConfigurationError
 from conduit.core.provider import Provider
 from conduit.core.registry import guarded_client
 from conduit.core.settings import ProviderSettings
+from conduit.providers.openai_compat.discovery import FOUNDRY_UNSUPPORTED, list_models
 from conduit.providers.openai_compat.entra import (
     close_quietly,
     close_soon,
@@ -143,6 +148,21 @@ class OpenAICompatFactory:
             return OpenAICompatClient(sdk=sdk, credential=credential, token_provider=token_provider)
 
         return guarded_client(self.kind, build)
+
+    def discovery_unsupported(self, settings: ProviderSettings) -> str | None:
+        if not isinstance(settings, OpenAICompatSettings):
+            raise ConfigurationError("openai_compat settings expected")
+        if isinstance(settings.service, FoundryService):
+            return FOUNDRY_UNSUPPORTED
+        return None
+
+    async def discover_models(
+        self, settings: ProviderSettings, client: Any
+    ) -> Sequence[DiscoveredModel]:
+        """OpenAI's or X.AI's models, from the Models API."""
+        if not isinstance(settings, OpenAICompatSettings):
+            raise ConfigurationError("openai_compat settings expected")
+        return await list_models(client.sdk)
 
     def create_provider(
         self,

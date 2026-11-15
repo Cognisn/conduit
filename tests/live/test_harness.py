@@ -33,6 +33,7 @@ from tests.live.harness import (
     assert_usage,
     check_caching,
     check_chat,
+    check_discovery,
     check_embeddings,
     check_output_limit,
     check_structured_output,
@@ -42,6 +43,7 @@ from tests.live.harness import (
     started_embeddings,
     stream_shape,
 )
+from tests.live.needs import LiveEnv
 from tests.live.report import REPORT, Verdict
 from tests.live.targets import Target
 
@@ -373,3 +375,48 @@ async def test_a_well_formed_fake_embedding_passes() -> None:
     usage = Usage(input_tokens=3, output_tokens=0, cache_read_tokens=0, cache_write_tokens=0)
     response = EmbeddingResponse(model="fake", vectors=_vectors(0.25), usage=usage)
     await check_embeddings(cast(EmbeddingBinding, _FakeEmbedder(response)), "fake", 2)
+
+
+STUB_SETTINGS = {"kind": "stub", "not_for_production": True}
+
+
+async def test_discovery_passes_when_a_catalogue_model_is_listed() -> None:
+    result = await check_discovery(
+        "stub", STUB_SETTINGS, environ=LiveEnv({}), factories=[StubFactory()]
+    )
+    assert result.allowed
+    [line] = [line for line in REPORT.lines if line.area == "discovery"]
+    assert line.verdict is Verdict.MATCH
+    assert "stub-echo" not in line.detail  # counts only, never the list
+
+
+async def test_discovery_fails_on_an_empty_listing() -> None:
+    with pytest.raises(AssertionError, match="listed no models"):
+        await check_discovery(
+            "stub", STUB_SETTINGS, environ=LiveEnv({}), factories=[StubFactory(models=[])]
+        )
+
+
+async def test_discovery_fails_when_no_listed_model_is_declared() -> None:
+    with pytest.raises(AssertionError, match="no listed model is declared"):
+        await check_discovery(
+            "stub",
+            STUB_SETTINGS,
+            environ=LiveEnv({}),
+            factories=[StubFactory(models=["example-undeclared"])],
+        )
+
+
+async def test_discovery_fails_when_unsupported() -> None:
+    with pytest.raises(AssertionError, match="unsupported"):
+        await check_discovery(
+            "fake",
+            {"kind": "stub", "not_for_production": True},
+            environ=LiveEnv({}),
+            factories=[_NoDiscovery()],
+        )
+
+
+class _NoDiscovery(StubFactory):
+    def discovery_unsupported(self, settings: Any) -> str | None:
+        return "no listing for these settings"

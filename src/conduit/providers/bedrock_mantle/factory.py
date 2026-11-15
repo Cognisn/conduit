@@ -30,6 +30,10 @@ Credentials are resolved, any short-term key presigned and the client built in o
 guarded step (see ``conduit.providers``): a constructor that raises becomes a fixed
 ``ConfigurationError`` naming the adapter and the exception's class.
 
+The factory discovers (``conduit.providers.bedrock_mantle.discovery``): the endpoint's
+documented OpenAI-compatible model listing, on the Region's mantle host, through the
+client ``create_client`` made. With an ``endpoint_url`` it is reported unsupported.
+
 Providers read capabilities from the catalogue the registry passes to
 ``create_provider``; called without one, outside a registry, the factory uses conduit's
 default catalogue.
@@ -42,12 +46,13 @@ import importlib
 import os
 import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from pydantic import SecretStr
 
 from conduit.core.catalogue import Catalogue, default_catalogue
+from conduit.core.discovery import DiscoveredModel
 from conduit.core.errors import ConfigurationError
 from conduit.core.provider import Provider
 from conduit.core.registry import guarded_client
@@ -65,6 +70,7 @@ from conduit.providers.bedrock.settings import (
     ShortTermApiKeyAuth,
 )
 from conduit.providers.bedrock_mantle.auth import bearer_client_class
+from conduit.providers.bedrock_mantle.discovery import REPLACED_ENDPOINT, list_models
 from conduit.providers.bedrock_mantle.provider import KIND, BedrockMantleProvider
 from conduit.providers.bedrock_mantle.settings import BedrockMantleSettings, mantle_base_url
 
@@ -194,6 +200,22 @@ class BedrockMantleFactory:
             )
 
         return guarded_client(self.kind, build)
+
+    def discovery_unsupported(self, settings: ProviderSettings) -> str | None:
+        if _mantle(settings).endpoint_url is not None:
+            return REPLACED_ENDPOINT
+        return None
+
+    async def discover_models(
+        self, settings: ProviderSettings, client: Any
+    ) -> Sequence[DiscoveredModel]:
+        """The Claude models the Region's mantle endpoint lists."""
+        mantle = _mantle(settings)
+        # The key goes only to the documented host of a valid Region (as create_client).
+        _check_destination(mantle)
+        if mantle.endpoint_url is not None:
+            raise ConfigurationError(REPLACED_ENDPOINT)
+        return await list_models(client, mantle.region)
 
     def create_provider(
         self,

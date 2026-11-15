@@ -333,6 +333,18 @@ The HTTP client ignores the environment (no proxy variables, no `.netrc`) and ne
 
 Kind `stub`, no extra. A deterministic, scriptable provider for tests: it never reaches a network, streams like a real provider, and reports all four usage counts (including cache reads and writes for requests with cache breakpoints). It needs `not_for_production: true` in its settings and logs a warning when built. Scripts are registered by name with `StubFactory(scripts={...})`: `echo` (the default), `scripted` turns in order, and `answer_tool_results` (call a tool, then answer from its result).
 
+## Model discovery
+
+`ProviderRegistry.discover` lists the models a configured provider reaches and joins them to the catalogue (see [Discovering the models a provider reaches](integration.md#discovering-the-models-a-provider-reaches)). What each adapter lists:
+
+- **Amazon Bedrock**: `ListFoundationModels` (on-demand models whose output is text or embeddings) and `ListInferenceProfiles` (every page; each profile's type is its label), on a `bedrock` control-plane client `create_client` builds beside the runtime client, for the same Region and authentication. The credentials need `bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles`. Unsupported when `endpoint_url` replaces the runtime endpoint.
+- **Claude through Bedrock's mantle endpoint**: the endpoint's documented OpenAI-compatible listing, `GET /v1/models` on the Region's `bedrock-mantle` host, with the same Bedrock API key; only Claude models (`anthropic.` ids) are kept. Unsupported when `endpoint_url` is set.
+- **Anthropic**: the Models API (`GET /v1/models`, every page) for `endpoint: direct`. Unsupported for Claude in Foundry, whose endpoint documents no models listing and whose ids are deployment names.
+- **OpenAI and X.AI**: the Models API (`GET /v1/models`). Unsupported for Microsoft Foundry, whose OpenAI v1 endpoint lists the resource's models rather than its deployments.
+- **Gemini**: `models.list` (every page), keeping only the models that support `generateContent`; the `models/` prefix is removed.
+- **Ollama**: the server's local models (`GET /api/tags`). A model pulled without a tag is listed as `name:latest`, and Ollama resolves an untagged name to its `latest` tag, so it is reported under its bare name (`nomic-embed-text`), the name the catalogue declares and the provider calls; any other tag is kept. Every pulled model that the catalogue lacks is reported as undeclared; declare an untagged pull in an overlay by its bare name.
+- **The stub**: the ids given as `StubFactory(models=[...])`, by default the stub models conduit's catalogue declares (`stub-echo`, `stub-embed`), so a product can test its handling of each outcome.
+
 ## Building clients
 
 Each adapter resolves its credential and builds its SDK client in one guarded step. The registry builds every client under the same guard (`guarded_client`, exported from `conduit`), a product's own factories included.

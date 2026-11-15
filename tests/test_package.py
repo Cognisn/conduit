@@ -138,12 +138,21 @@ REEXPORTS: dict[str, tuple[str, ...]] = {
         "ReplayMismatch",
     ),
     "conduit.core.registry": (
+        "DiscoveringFactory",
         "MeteredProvider",
         "ProviderFactory",
         "ProviderRegistry",
         "guarded_client",
     ),
     "conduit.core.runtime": ("ConduitSettings", "Runtime", "TaskBinding", "start"),
+    # Model discovery: what a configured provider lists, joined to the catalogue.
+    "conduit.core.discovery": (
+        "DiscoveredModel",
+        "DiscoveryOutcome",
+        "DiscoveryResult",
+        "ModelAvailability",
+        "join_discovered",
+    ),
     "conduit.core.settings": ("AssignmentSettings", "ProviderSettings", "refusals"),
     "conduit.core.secrets": (
         "EnvironmentSecretResolver",
@@ -169,6 +178,7 @@ REEXPORTS: dict[str, tuple[str, ...]] = {
     "conduit.core.residency": ("ResidencyPolicy", "ResidencyScope"),
     "conduit.core.events": (
         "CaptureAs",
+        "DiscoveryFinishedEvent",
         "CapturePolicy",
         "Event",
         "EventSink",

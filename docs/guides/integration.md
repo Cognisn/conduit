@@ -291,6 +291,45 @@ The refusal comes before the Bedrock client would be built, so no credentials ar
 
 Residency in conduit covers where the model provider processes a request. Where the product stores transcripts and events is the product's decision, through its own backends.
 
+## Discovering the models a provider reaches
+
+A product that shows its connections (which declared models a configured provider can reach, and which reachable models the catalogue lacks) asks the provider registry. `ProviderRegistry.discover(name, settings)` validates the settings, resolves the secrets and builds the client exactly as `build` does, asks the adapter for the models it lists, closes the client again, and joins each listed id to the catalogue, the residency policy and the provider's region. It returns a `DiscoveryResult`; each model in it is a `ModelAvailability` with one of three outcomes:
+
+| Outcome | Meaning |
+|---|---|
+| `allowed` | Declared, offered in the provider's region and within the residency policy. |
+| `refused` | Declared, but start-up would refuse an assignment to it; `reason` is the refusal start-up gives (not offered in the region, or the residency policy's reason). |
+| `undeclared` | The catalogue does not declare it for this provider. |
+
+Each model carries the id as the provider names it, the provider's own label for the entry where the listing gives one (a Bedrock inference profile's type, for example), and the catalogue entry when declared. Nothing else from the provider's answer is kept. An adapter that cannot list for the settings (no listing documented for that endpoint) gives a result with `supported` false and a `reason`; that is reported, never raised, and nothing is built. A failed listing raises `ProviderError`, as a failed call does.
+
+```python
+from conduit import DiscoveryOutcome, ProviderRegistry, ResidencyPolicy
+
+
+async def connection_screen() -> dict[str, str]:
+    registry = ProviderRegistry(
+        secrets=LiteralSecretResolver({}),
+        residency=ResidencyPolicy(scopes=["local"]),
+        factories=[StubFactory(models=["stub-echo", "example-new-model"])],
+    )
+    result = await registry.discover("local", {"kind": "stub", "not_for_production": True})
+    assert result.supported
+    return {model.model_id: model.outcome.value for model in result.models}
+
+
+assert asyncio.run(connection_screen()) == {
+    "stub-echo": DiscoveryOutcome.ALLOWED,
+    "example-new-model": DiscoveryOutcome.UNDECLARED,
+}
+```
+
+Discovery never permits a model. The catalogue is unchanged by it, and a built provider still refuses an undeclared model with `UndeclaredModel` before any client call; conduit never writes an overlay of its own. To use a model discovery reports as undeclared, the product writes a catalogue overlay entry for it (its residency scope and regions, capabilities, context window and output limit, from the provider's documentation), has a person review it, and starts conduit again with the overlay in its settings, as [The model catalogue and overlays](#the-model-catalogue-and-overlays) shows. A model reported as refused needs a change of residency policy or region, not an overlay.
+
+Each discovery whose settings validate emits one `DiscoveryFinishedEvent`, however it ends (a secret that cannot be resolved or a client that cannot be built is a `failed` discovery), with the provider's name and kind, the count per outcome, the duration and the outcome (`ok`, `failed` or `unsupported`). The listing itself (each id with its outcome) is content of the prompt kind: the event always carries its hash and size, and its text only when the capture policy captures prompts. From sync code, `SyncRuntime.discover(name)` lists a provider the runtime built (with `settings` as well for any other configured provider), on the runtime's loop and under the facade's loop guard; `sync(registry).discover(...)` serves a registry the product holds. Results are not cached: each call asks the provider again.
+
+What each adapter lists is in [Providers](providers.md).
+
 ## Calling a model
 
 A built provider has two calls. `complete` returns the collected `ModelResponse`; `stream` yields typed stream events as they arrive. Every provider streams; `complete` collects the same stream.

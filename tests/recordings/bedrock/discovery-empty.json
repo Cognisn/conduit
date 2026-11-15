@@ -1,0 +1,34 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "operation": "ListFoundationModels",
+        "params": {
+          "byInferenceType": "ON_DEMAND"
+        }
+      },
+      "response": {
+        "body": {
+          "modelSummaries": []
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "operation": "ListInferenceProfiles",
+        "params": {
+          "maxResults": 1000
+        }
+      },
+      "response": {
+        "body": {
+          "inferenceProfileSummaries": []
+        },
+        "status": 200
+      }
+    }
+  ],
+  "name": "bedrock-discovery-empty",
+  "provider": "bedrock"
+}

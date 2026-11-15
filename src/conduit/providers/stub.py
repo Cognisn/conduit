@@ -20,6 +20,10 @@ A stub keeps every request it is sent (``requests``), the state it was sent back
 whole life: both grow without bound, which suits a test but not a long-running process.
 
 Constructing a stub needs ``not_for_production=True``, in code and in settings.
+
+The stub's factory discovers: it lists ``models`` (by default the stub models conduit's
+catalogue declares), so a product can test its handling of discovered, declared and
+undeclared models without a network.
 """
 
 from __future__ import annotations
@@ -27,13 +31,14 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Self
 
 from pydantic import PositiveInt, SecretStr, model_validator
 
 from conduit.core.catalogue import Catalogue
+from conduit.core.discovery import DiscoveredModel
 from conduit.core.errors import ConfigurationError, ProviderError
 from conduit.core.provider import BaseProvider, Provider
 from conduit.core.settings import ProviderSettings
@@ -230,14 +235,39 @@ class StubSettings(ProviderSettings):
         return self
 
 
+#: What the stub lists by default: the stub models in conduit's default catalogue.
+DEFAULT_STUB_MODELS: tuple[str, ...] = ("stub-echo", "stub-embed")
+
+
 class StubFactory:
-    """The stub's adapter for the provider registry. Scripts are looked up by name."""
+    """The stub's adapter for the provider registry. Scripts are looked up by name.
+
+    ``models`` is what discovery lists: ids or ``DiscoveredModel`` values, in order.
+    """
 
     kind = "stub"
     settings_model = StubSettings
 
-    def __init__(self, scripts: Mapping[str, StubScript] | None = None) -> None:
+    def __init__(
+        self,
+        scripts: Mapping[str, StubScript] | None = None,
+        *,
+        models: Iterable[str | DiscoveredModel] = DEFAULT_STUB_MODELS,
+    ) -> None:
         self._scripts: dict[str, StubScript] = {"echo": echo, **(scripts or {})}
+        self._models = tuple(
+            model if isinstance(model, DiscoveredModel) else DiscoveredModel(model)
+            for model in models
+        )
+
+    def discovery_unsupported(self, settings: ProviderSettings) -> str | None:
+        return None
+
+    async def discover_models(
+        self, settings: ProviderSettings, client: Any
+    ) -> Sequence[DiscoveredModel]:
+        """The configured listing. The stub has no client and reaches no network."""
+        return self._models
 
     def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
         return None  # the stub has no client

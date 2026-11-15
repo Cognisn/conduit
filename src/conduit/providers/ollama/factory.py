@@ -12,21 +12,26 @@ Providers read the context window and structured-output support from the catalog
 the registry passes to ``create_provider``: the one it applied the product's overlays
 to. Called without one, outside a registry, the factory uses conduit's default
 catalogue. ``transport`` replaces httpx's network transport, for tests.
+
+The factory discovers: ``discover_models`` lists the server's local models
+(``conduit.providers.ollama.discovery``) through the client ``create_client`` made.
 """
 
 from __future__ import annotations
 
 import importlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pydantic import SecretStr
 
 from conduit.core.catalogue import Catalogue, default_catalogue
+from conduit.core.discovery import DiscoveredModel
 from conduit.core.errors import ConfigurationError
 from conduit.core.provider import Provider
 from conduit.core.registry import guarded_client
 from conduit.core.settings import ProviderSettings
+from conduit.providers.ollama.discovery import list_local_models
 from conduit.providers.ollama.provider import OllamaProvider
 from conduit.providers.ollama.settings import OllamaSettings
 
@@ -65,6 +70,16 @@ class OllamaFactory:
             )
 
         return guarded_client(self.kind, build)
+
+    def discovery_unsupported(self, settings: ProviderSettings) -> str | None:
+        return None
+
+    async def discover_models(
+        self, settings: ProviderSettings, client: Any
+    ) -> Sequence[DiscoveredModel]:
+        """The server's local models (``GET /api/tags``)."""
+        _ollama(settings)
+        return await list_local_models(client)
 
     def create_provider(
         self,

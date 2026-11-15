@@ -1,0 +1,33 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/v1/models",
+        "query": {}
+      },
+      "response": {
+        "body": {
+          "data": [
+            {
+              "created": 1790000000,
+              "id": "grok-4.7",
+              "object": "model",
+              "owned_by": "xai"
+            },
+            {
+              "created": 1790000000,
+              "id": "example-grok-preview",
+              "object": "model",
+              "owned_by": "xai"
+            }
+          ],
+          "object": "list"
+        },
+        "status": 200
+      }
+    }
+  ],
+  "name": "xai-discovery-models",
+  "provider": "openai_compat"
+}
