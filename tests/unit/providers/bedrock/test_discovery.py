@@ -8,6 +8,7 @@ the real ones.
 
 from __future__ import annotations
 
+import copy
 import importlib
 import json
 from collections.abc import Iterator, Mapping
@@ -21,6 +22,7 @@ from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.registry import DiscoveringFactory, ProviderRegistry
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.core.settings import ProviderSettings
+from conduit.embeddings.bedrock import BedrockEmbeddingFactory
 from conduit.providers.bedrock import BedrockFactory, BedrockSettings
 from conduit.providers.bedrock.factory import BedrockClients
 from conduit.testing.replay import Replay, load_recording
@@ -165,6 +167,104 @@ class TestUnsupported:
         assert result.reason is not None and "endpoint_url" in result.reason
 
 
+class Closing:
+    """A client that records its close, and fails it with ``error`` when given one."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.closed = False
+        self.close_error = error
+
+    def close(self) -> None:
+        self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
+
+
+class ClosingControl(FakeControl):
+    """A control-plane client that also records its close."""
+
+    def __init__(self, replay: Replay | None = None, error: Exception | None = None) -> None:
+        super().__init__(replay, error)
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class TestClosing:
+    def test_closing_the_bundle_closes_both_clients(self) -> None:
+        runtime, control = Closing(), Closing()
+        BedrockClients(runtime=runtime, control=control).close()
+        assert runtime.closed and control.closed
+
+    def test_without_a_control_client_the_runtime_client_is_closed(self) -> None:
+        runtime = Closing()
+        BedrockClients(runtime=runtime, control=None).close()
+        assert runtime.closed
+
+    def test_a_failed_runtime_close_still_closes_the_control_client(self) -> None:
+        runtime, control = Closing(RuntimeError("runtime close")), Closing()
+        with pytest.raises(RuntimeError, match="runtime close") as raised:
+            BedrockClients(runtime=runtime, control=control).close()
+        assert control.closed
+        assert raised.value.__cause__ is None and raised.value.__context__ is None
+
+    def test_a_failed_control_close_is_raised_once_both_are_closed(self) -> None:
+        runtime, control = Closing(), Closing(RuntimeError("control close"))
+        with pytest.raises(RuntimeError, match="control close") as raised:
+            BedrockClients(runtime=runtime, control=control).close()
+        assert runtime.closed
+        assert raised.value.__cause__ is None and raised.value.__context__ is None
+
+    def test_when_both_closes_fail_the_first_is_raised_with_nothing_chained(self) -> None:
+        runtime = Closing(RuntimeError("runtime close"))
+        control = Closing(OSError("control close"))
+        with pytest.raises(RuntimeError, match="runtime close") as raised:
+            BedrockClients(runtime=runtime, control=control).close()
+        assert runtime.closed and control.closed
+        assert raised.value.__cause__ is None and raised.value.__context__ is None
+
+    async def test_discovery_closes_both_clients(self) -> None:
+        runtime = Closing()
+        control = ClosingControl(_replay("bedrock/discovery-empty.json"))
+        clients = BedrockClients(runtime=runtime, control=control)
+        await _registry().discover("bedrock_sydney", SETTINGS, client=clients)
+        assert runtime.closed and control.closed
+
+    async def test_a_failed_discovery_closes_both_clients(self) -> None:
+        runtime = Closing()
+        control = ClosingControl(error=ClientError("AccessDeniedException", 403, message="no"))
+        clients = BedrockClients(runtime=runtime, control=control)
+        with pytest.raises(ProviderError):
+            await _registry().discover("bedrock_sydney", SETTINGS, client=clients)
+        assert runtime.closed and control.closed
+
+    async def test_a_built_provider_closes_both_clients(self) -> None:
+        runtime, control = Closing(), Closing()
+        clients = BedrockClients(runtime=runtime, control=control)
+        provider = await _registry().build("bedrock_sydney", SETTINGS, client=clients)
+        await provider.aclose()
+        assert runtime.closed and control.closed
+
+
+class TestCopying:
+    def test_a_copy_does_not_recurse_and_keeps_both_clients(self) -> None:
+        runtime, control = object(), object()
+        copied = copy.copy(BedrockClients(runtime=runtime, control=control))
+        assert copied.runtime is runtime and copied.control is control
+
+    def test_a_deep_copy_does_not_recurse(self) -> None:
+        copied = copy.deepcopy(BedrockClients(runtime=Closing(), control=None))
+        assert isinstance(copied.runtime, Closing) and copied.control is None
+
+    def test_a_half_built_bundle_forwards_nothing(self) -> None:
+        bare = object.__new__(BedrockClients)
+        with pytest.raises(AttributeError):
+            _ = bare.runtime
+        with pytest.raises(AttributeError):
+            _ = bare.converse
+
+
 boto3 = pytest.importorskip("boto3", reason="needs the bedrock extra")
 
 
@@ -280,3 +380,68 @@ class TestControlClient:
             header = request.headers["Authorization"]
             text = header.decode() if isinstance(header, bytes) else header
             assert text == "Bearer long-term-example-key"
+
+
+def _spy_on_close(clients: BedrockClients, closed: list[str]) -> None:
+    """Record each real botocore client's close, then close it."""
+    for role, client in (("runtime", clients.runtime), ("control", clients.control)):
+        if client is None:
+            continue
+        real = client.close
+
+        def close(role: str = role, real: Any = real) -> None:
+            closed.append(role)
+            real()
+
+        client.close = close
+
+
+class SpyingFactory(AnsweringFactory):
+    """Real clients from ``create_client``, answered locally, with their closes recorded."""
+
+    def __init__(self, answer: Answer) -> None:
+        super().__init__(answer)
+        self.closed: list[str] = []
+
+    def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
+        clients = super().create_client(settings, secrets)
+        _spy_on_close(clients, self.closed)
+        return clients
+
+
+class SpyingEmbeddingFactory(BedrockEmbeddingFactory):
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed: list[str] = []
+
+    def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
+        clients = super().create_client(settings, secrets)
+        _spy_on_close(clients, self.closed)
+        return clients
+
+
+_LONDON = {"kind": "bedrock", "region": "eu-west-2", "auth": ACCESS_KEYS}
+
+
+class TestRealClientsAreClosed:
+    async def test_discovery_closes_the_runtime_and_control_clients(self) -> None:
+        factory = SpyingFactory(Answer())
+        registry = ProviderRegistry(secrets=LiteralSecretResolver(SECRETS), factories=[factory])
+        await registry.discover("bedrock_london", _LONDON)
+        assert sorted(factory.closed) == ["control", "runtime"]
+
+    async def test_a_built_provider_closes_the_runtime_and_control_clients(self) -> None:
+        factory = SpyingFactory(Answer())
+        registry = ProviderRegistry(secrets=LiteralSecretResolver(SECRETS), factories=[factory])
+        provider = await registry.build("bedrock_london", _LONDON)
+        await provider.aclose()
+        assert sorted(factory.closed) == ["control", "runtime"]
+
+    async def test_a_built_embedder_closes_the_runtime_and_control_clients(self) -> None:
+        factory = SpyingEmbeddingFactory()
+        registry = ProviderRegistry(
+            secrets=LiteralSecretResolver(SECRETS), embedding_factories=[factory]
+        )
+        embedder = await registry.build_embedder("bedrock_london", _LONDON)
+        await embedder.aclose()
+        assert sorted(factory.closed) == ["control", "runtime"]

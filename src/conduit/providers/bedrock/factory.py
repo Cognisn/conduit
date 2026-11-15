@@ -81,13 +81,39 @@ class BedrockClients:
     client's), so code written against ``create_client``'s runtime client, an embedding
     adapter's included, works unchanged. ``control`` is ``None`` when ``endpoint_url``
     replaces the runtime endpoint.
+
+    ``close`` is its own, so every close path (a provider's, an embedder's, discovery's)
+    closes both clients.
     """
 
     runtime: Any
     control: Any
 
     def __getattr__(self, name: str) -> Any:
+        # Only reached for attributes the bundle lacks. Its own fields and dunder names
+        # are never forwarded: on a half-built bundle (copy, pickle) ``runtime`` is not
+        # set yet, and forwarding it would recurse.
+        if name in ("runtime", "control") or name.startswith("__"):
+            raise AttributeError(name)
         return getattr(self.runtime, name)
+
+    def close(self) -> None:
+        """Close the runtime client and the control-plane client, each that exists.
+
+        A failed close does not stop the other: both are attempted, then the first
+        failure is raised, outside every handler, so nothing is chained.
+        """
+        failed: BaseException | None = None
+        for client in (self.runtime, self.control):
+            close = getattr(client, "close", None) if client is not None else None
+            if close is None:
+                continue
+            try:
+                close()
+            except Exception as error:
+                failed = failed if failed is not None else error
+        if failed is not None:
+            raise failed
 
 
 def _bedrock(settings: ProviderSettings) -> BedrockSettings:
