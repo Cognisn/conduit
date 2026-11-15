@@ -64,8 +64,10 @@ the client exactly as ``build`` does (``create_client`` stays the only place a c
 made), lists the models, closes the client through the provider ``create_provider`` wraps
 it in, and joins each listed id to the catalogue, the residency policy and the provider's
 Region. A factory without discovery, or settings it cannot list for, is reported
-unsupported, never raised. A ``DiscoveryFinishedEvent`` records every discovery. Nothing
-discovery reports changes what ``MeteredProvider`` admits.
+unsupported, never raised. A ``DiscoveryFinishedEvent`` records every discovery whose
+settings validate, however it ends: a secret that cannot be resolved, or a client that
+cannot be made or wrapped, is a failed discovery. Nothing discovery reports changes what
+``MeteredProvider`` admits.
 """
 
 from __future__ import annotations
@@ -800,6 +802,25 @@ async def _close_inner(inner: Provider, name: str) -> None:
         )
 
 
+async def _close_client(client: Any, name: str) -> None:
+    """Close a client no provider took (its factory's ``create_provider`` raised): its
+    ``aclose``, else its ``close``, awaited when that returns an awaitable. A close that
+    raises is logged (the classes only) and never raised."""
+    failed: str | None = None
+    try:
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if close is not None:
+            closing = close()
+            if inspect.isawaitable(closing):
+                await closing
+    except Exception as error:
+        failed = type(error).__name__
+    if failed is not None:
+        logger.warning(
+            "closing the client of %s (%s) failed: %s", name, type(client).__name__, failed
+        )
+
+
 class ProviderRegistry:
     """Provider adapters by kind, and every provider built from them."""
 
@@ -955,15 +976,11 @@ class ProviderRegistry:
             client = guarded_client(
                 validated.kind, lambda: factory.create_client(validated, secrets), name=name
             )
-        if self._with_catalogue.get(factory.kind, False):
-            inner = factory.create_provider(
-                name,
-                validated,
-                client,
-                catalogue=self.catalogue,  # type: ignore[call-arg]
-            )
-        else:
-            inner = factory.create_provider(name, validated, client)
+        try:
+            inner = self._wrap(factory, name, validated, client)
+        except Exception:
+            await _close_client(client, name)
+            raise
         provider = MeteredProvider(
             inner,
             name=name,
@@ -1071,6 +1088,19 @@ class ProviderRegistry:
         logger.debug("built embedding provider %s (%s)", name, validated.kind)
         return embedder
 
+    def _wrap(
+        self, factory: ProviderFactory, name: str, settings: ProviderSettings, client: Any
+    ) -> Provider:
+        """The factory's provider around ``client``, with the catalogue where it takes one."""
+        if self._with_catalogue.get(factory.kind, False):
+            return factory.create_provider(
+                name,
+                settings,
+                client,
+                catalogue=self.catalogue,  # type: ignore[call-arg]
+            )
+        return factory.create_provider(name, settings, client)
+
     async def discover(
         self,
         name: str,
@@ -1123,21 +1153,30 @@ class ProviderRegistry:
         if discovering is None or reason is not None:
             await finished(outcome="unsupported")
             return result(supported=False, reason=reason)
-        if client is _UNSET:
-            secrets = await resolve_secret_fields(validated, self._secrets)
-            client = guarded_client(
-                validated.kind, lambda: factory.create_client(validated, secrets), name=name
-            )
-        # The adapter's provider owns the client's close, as for a built provider.
-        if self._with_catalogue.get(factory.kind, False):
-            holder = factory.create_provider(
-                name,
-                validated,
-                client,
-                catalogue=self.catalogue,  # type: ignore[call-arg]
-            )
-        else:
-            holder = factory.create_provider(name, validated, client)
+        # The adapter's provider owns the client's close, as for a built provider. A
+        # failure before it exists is a failed discovery, and a client already made is
+        # closed here; the failure goes on as it is.
+        holder: Provider
+        setup_failed: Exception | None = None
+        try:
+            if client is _UNSET:
+                secrets = await resolve_secret_fields(validated, self._secrets)
+                client = guarded_client(
+                    validated.kind, lambda: factory.create_client(validated, secrets), name=name
+                )
+            holder = self._wrap(factory, name, validated, client)
+        except asyncio.CancelledError:
+            if client is not _UNSET:
+                await _close_client(client, name)
+            await finished(outcome="failed", error_type=CANCELLED)
+            raise
+        except Exception as error:
+            setup_failed = error
+        if setup_failed is not None:
+            if client is not _UNSET:
+                await _close_client(client, name)
+            await finished(outcome="failed", error_type=type(setup_failed).__name__)
+            raise setup_failed  # the failure as it was raised, outside every handler
         listed: Sequence[DiscoveredModel] = ()
         failure: ProviderFailure | None = None
         error_type: str | None = None

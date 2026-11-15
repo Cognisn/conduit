@@ -551,3 +551,101 @@ class TestListingCapture:
     def test_the_text_with_prompts_captured(self) -> None:
         captured = _capture_listing(self.MODELS, CapturePolicy(prompts=True))
         assert captured.text is not None and "fake-unknown" in captured.text
+
+
+class ClosableClient:
+    """A client with a close of its own, sync or async."""
+
+    def __init__(self, *, asynchronous: bool = False) -> None:
+        self.closed = False
+        self.asynchronous = asynchronous
+
+    def close(self) -> Any:
+        if self.asynchronous:
+
+            async def closing() -> None:
+                self.closed = True
+
+            return closing()
+        self.closed = True
+        return None
+
+
+class _NoProvider(ListingFactory):
+    """Makes its client, then fails to wrap it in a provider."""
+
+    def __init__(self, *, asynchronous: bool = False) -> None:
+        super().__init__()
+        self.asynchronous = asynchronous
+        self.made: list[ClosableClient] = []
+
+    def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
+        client = ClosableClient(asynchronous=self.asynchronous)
+        self.made.append(client)
+        return client
+
+    def create_provider(
+        self,
+        name: str,
+        settings: ProviderSettings,
+        client: Any,
+        *,
+        catalogue: Catalogue | None = None,
+    ) -> Any:
+        raise ConfigurationError("no provider for this client")
+
+
+class TestClientWithoutAProvider:
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    async def test_discovery_closes_a_client_no_provider_took(self, asynchronous: bool) -> None:
+        factory = _NoProvider(asynchronous=asynchronous)
+        with pytest.raises(ConfigurationError, match="no provider for this client"):
+            await _registry(factory).discover("main", SETTINGS)
+        [client] = factory.made
+        assert client.closed
+        assert factory.discovered_with == []
+
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    async def test_build_closes_a_client_no_provider_took(self, asynchronous: bool) -> None:
+        factory = _NoProvider(asynchronous=asynchronous)
+        with pytest.raises(ConfigurationError, match="no provider for this client"):
+            await _registry(factory).build("main", SETTINGS)
+        [client] = factory.made
+        assert client.closed
+
+
+class TestEveryDiscoveryIsRecorded:
+    async def test_a_client_that_cannot_be_built_is_a_failed_discovery(self) -> None:
+        sink = MemoryEventSink()
+        with pytest.raises(ConfigurationError):
+            await _registry(_Both(), sink=sink).discover("main", SETTINGS)
+        [event] = _finished(sink)
+        assert event.outcome == "failed"
+        assert event.error_type == "ConfigurationError"
+
+    async def test_a_secret_that_cannot_be_resolved_is_a_failed_discovery(self) -> None:
+        sink = MemoryEventSink()
+        registry = ProviderRegistry(
+            secrets=LiteralSecretResolver({}),
+            catalogue=CATALOGUE,
+            events=sink,
+            factories=[ListingFactory()],
+        )
+        with pytest.raises(ConduitError) as raised:
+            await registry.discover("main", SETTINGS)
+        [event] = _finished(sink)
+        assert event.outcome == "failed"
+        assert event.error_type == type(raised.value).__name__
+
+    async def test_a_client_no_provider_took_is_a_failed_discovery(self) -> None:
+        sink = MemoryEventSink()
+        with pytest.raises(ConfigurationError):
+            await _registry(_NoProvider(), sink=sink).discover("main", SETTINGS)
+        [event] = _finished(sink)
+        assert (event.outcome, event.error_type) == ("failed", "ConfigurationError")
+
+    async def test_settings_that_do_not_validate_emit_no_event(self) -> None:
+        sink = MemoryEventSink()
+        with pytest.raises(SettingsRefused):
+            await _registry(ListingFactory(), sink=sink).discover("main", {"kind": "fake"})
+        assert _finished(sink) == []
