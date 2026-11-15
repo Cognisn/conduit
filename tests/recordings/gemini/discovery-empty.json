@@ -1,0 +1,19 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/models",
+        "query": {
+          "pageSize": "1000"
+        }
+      },
+      "response": {
+        "body": {},
+        "status": 200
+      }
+    }
+  ],
+  "name": "gemini-discovery-empty",
+  "provider": "gemini"
+}

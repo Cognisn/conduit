@@ -31,6 +31,9 @@ provider closes the credential after the SDK client. With Entra ID the SDK would
 ``ANTHROPIC_FOUNDRY_API_KEY`` from the environment, though never send it while it has
 a token, so the key is cleared from the client.
 
+The factory discovers (``conduit.providers.anthropic.discovery``): the direct endpoint
+lists its models through the Models API; Claude in Foundry is reported unsupported.
+
 Capability checks (structured output) read the catalogue the registry passes to
 ``create_provider``: the one it applied the product's overlays to. A factory called
 without one, outside a registry, uses conduit's default catalogue.
@@ -43,19 +46,21 @@ import importlib
 import inspect
 import logging
 import os
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from pydantic import SecretStr
 
 from conduit.core.catalogue import Catalogue, default_catalogue
+from conduit.core.discovery import DiscoveredModel
 from conduit.core.errors import ConfigurationError, ProviderError, ProviderFailure
 from conduit.core.provider import BaseProvider, Provider
 from conduit.core.registry import guarded_client
 from conduit.core.settings import ProviderSettings
 from conduit.core.streaming import StreamEvent
 from conduit.core.types import ModelRequest
+from conduit.providers.anthropic.discovery import FOUNDRY_UNSUPPORTED, list_models
 from conduit.providers.anthropic.errors import failure_for
 from conduit.providers.anthropic.request import build_params
 from conduit.providers.anthropic.settings import DEFAULT_BASE_URL, AnthropicSettings
@@ -249,6 +254,18 @@ class AnthropicFactory:
             return FoundryEntraClient(sdk=client, credential=credential)
 
         return guarded_client(self.kind, build)
+
+    def discovery_unsupported(self, settings: ProviderSettings) -> str | None:
+        if _settings(settings).endpoint == "foundry":
+            return FOUNDRY_UNSUPPORTED
+        return None
+
+    async def discover_models(
+        self, settings: ProviderSettings, client: Any
+    ) -> Sequence[DiscoveredModel]:
+        """The direct endpoint's models, from the Models API."""
+        _settings(settings)
+        return await list_models(client)
 
     def create_provider(
         self,

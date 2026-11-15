@@ -1,0 +1,189 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "operation": "ListFoundationModels",
+        "params": {
+          "byInferenceType": "ON_DEMAND"
+        }
+      },
+      "response": {
+        "body": {
+          "modelSummaries": [
+            {
+              "customizationsSupported": [],
+              "inferenceTypesSupported": [
+                "ON_DEMAND"
+              ],
+              "inputModalities": [
+                "TEXT"
+              ],
+              "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/amazon.nova-lite-v1:0",
+              "modelId": "amazon.nova-lite-v1:0",
+              "modelLifecycle": {
+                "status": "ACTIVE"
+              },
+              "modelName": "amazon.nova-lite-v1:0",
+              "outputModalities": [
+                "TEXT"
+              ],
+              "providerName": "Amazon",
+              "responseStreamingSupported": true
+            },
+            {
+              "customizationsSupported": [],
+              "inferenceTypesSupported": [
+                "ON_DEMAND"
+              ],
+              "inputModalities": [
+                "TEXT"
+              ],
+              "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/amazon.titan-embed-text-v2:0",
+              "modelId": "amazon.titan-embed-text-v2:0",
+              "modelLifecycle": {
+                "status": "ACTIVE"
+              },
+              "modelName": "amazon.titan-embed-text-v2:0",
+              "outputModalities": [
+                "EMBEDDING"
+              ],
+              "providerName": "Amazon",
+              "responseStreamingSupported": false
+            },
+            {
+              "customizationsSupported": [],
+              "inferenceTypesSupported": [
+                "ON_DEMAND"
+              ],
+              "inputModalities": [
+                "TEXT"
+              ],
+              "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/example.image-model-v1:0",
+              "modelId": "example.image-model-v1:0",
+              "modelLifecycle": {
+                "status": "ACTIVE"
+              },
+              "modelName": "example.image-model-v1:0",
+              "outputModalities": [
+                "IMAGE"
+              ],
+              "providerName": "Example",
+              "responseStreamingSupported": false
+            },
+            {
+              "customizationsSupported": [],
+              "inferenceTypesSupported": [
+                "ON_DEMAND"
+              ],
+              "inputModalities": [
+                "TEXT"
+              ],
+              "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/example.text-model-v1:0",
+              "modelId": "example.text-model-v1:0",
+              "modelLifecycle": {
+                "status": "ACTIVE"
+              },
+              "modelName": "example.text-model-v1:0",
+              "outputModalities": [
+                "TEXT"
+              ],
+              "providerName": "Example",
+              "responseStreamingSupported": true
+            },
+            {
+              "customizationsSupported": [],
+              "inferenceTypesSupported": [
+                "ON_DEMAND"
+              ],
+              "inputModalities": [
+                "TEXT"
+              ],
+              "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/anthropic.claude-opus-5-5",
+              "modelId": "anthropic.claude-opus-5-5",
+              "modelLifecycle": {
+                "status": "ACTIVE"
+              },
+              "modelName": "anthropic.claude-opus-5-5",
+              "outputModalities": [
+                "TEXT"
+              ],
+              "providerName": "Anthropic",
+              "responseStreamingSupported": true
+            }
+          ]
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "operation": "ListInferenceProfiles",
+        "params": {
+          "maxResults": 1000
+        }
+      },
+      "response": {
+        "body": {
+          "inferenceProfileSummaries": [
+            {
+              "inferenceProfileArn": "arn:aws:bedrock:ap-southeast-2:123456789012:inference-profile/au.anthropic.claude-opus-5-5",
+              "inferenceProfileId": "au.anthropic.claude-opus-5-5",
+              "inferenceProfileName": "au.anthropic.claude-opus-5-5",
+              "models": [
+                {
+                  "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/example"
+                }
+              ],
+              "status": "ACTIVE",
+              "type": "SYSTEM_DEFINED"
+            },
+            {
+              "inferenceProfileArn": "arn:aws:bedrock:ap-southeast-2:123456789012:inference-profile/global.anthropic.claude-opus-5-5",
+              "inferenceProfileId": "global.anthropic.claude-opus-5-5",
+              "inferenceProfileName": "global.anthropic.claude-opus-5-5",
+              "models": [
+                {
+                  "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/example"
+                }
+              ],
+              "status": "ACTIVE",
+              "type": "SYSTEM_DEFINED"
+            }
+          ],
+          "nextToken": "page-2-token"
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "operation": "ListInferenceProfiles",
+        "params": {
+          "maxResults": 1000,
+          "nextToken": "page-2-token"
+        }
+      },
+      "response": {
+        "body": {
+          "inferenceProfileSummaries": [
+            {
+              "inferenceProfileArn": "arn:aws:bedrock:ap-southeast-2:123456789012:inference-profile/example-application-1",
+              "inferenceProfileId": "example-application-1",
+              "inferenceProfileName": "example-application-1",
+              "models": [
+                {
+                  "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/example"
+                }
+              ],
+              "status": "ACTIVE",
+              "type": "APPLICATION"
+            }
+          ]
+        },
+        "status": 200
+      }
+    }
+  ],
+  "name": "bedrock-discovery-listing",
+  "provider": "bedrock"
+}

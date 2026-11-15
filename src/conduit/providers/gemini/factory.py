@@ -23,6 +23,9 @@ The key is resolved and the client built in one guarded step (see
 ``async_client_args`` are passed to the SDK's async HTTP client (a test gives a mock
 transport).
 
+The factory discovers: ``discover_models`` lists the chat-capable models
+(``conduit.providers.gemini.discovery``) through the client ``create_client`` made.
+
 Providers take capability checks from the catalogue the registry passes to
 ``create_provider``: the one it applied the product's overlays to. Called without one,
 outside a registry, the factory uses conduit's default catalogue.
@@ -31,16 +34,18 @@ outside a registry, the factory uses conduit's default catalogue.
 from __future__ import annotations
 
 import importlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pydantic import SecretStr
 
 from conduit.core.catalogue import Catalogue, default_catalogue
+from conduit.core.discovery import DiscoveredModel
 from conduit.core.errors import ConfigurationError
 from conduit.core.provider import Provider
 from conduit.core.registry import guarded_client
 from conduit.core.settings import ProviderSettings
+from conduit.providers.gemini.discovery import list_models
 from conduit.providers.gemini.provider import GeminiProvider
 from conduit.providers.gemini.settings import GeminiSettings
 
@@ -84,6 +89,16 @@ class GeminiFactory:
             )
 
         return guarded_client(self.kind, build)
+
+    def discovery_unsupported(self, settings: ProviderSettings) -> str | None:
+        return None
+
+    async def discover_models(
+        self, settings: ProviderSettings, client: Any
+    ) -> Sequence[DiscoveredModel]:
+        """The chat-capable models, from ``models.list``."""
+        _gemini(settings)
+        return await list_models(client)
 
     def create_provider(
         self,
