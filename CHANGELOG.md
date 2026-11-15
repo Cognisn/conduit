@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0rc3] - 2026-11-16
+
+Third release candidate. Wave 11 adds model discovery (`feat/0.1.0-model-discovery`): a product can list the models each configured provider reaches and see which the catalogue declares and allows.
+
+### Added
+
+- Model discovery: `ProviderRegistry.discover` lists the models a configured provider reaches, through the registry-built client, and joins each to the catalogue, the residency policy and the Region (allowed, refused with the start-up reason, or undeclared). It never makes a model usable. `DiscoveringFactory`, `DiscoveredModel`, `DiscoveryResult`, `ModelAvailability`, `DiscoveryOutcome`, `join_discovered` and `DiscoveryFinishedEvent` are exported from `conduit`; `SyncRuntime.discover` serves sync code. Every discovery whose settings validate emits a `DiscoveryFinishedEvent`, a secret or client failure included.
+- Discovery for Bedrock (foundation models and inference profiles on a control-plane client), bedrock-mantle (the endpoint's OpenAI-compatible listing, Claude models), Anthropic, OpenAI, X.AI, Gemini (chat-capable models), Ollama (a model tagged `latest` reported under its bare name) and the stub (`StubFactory(models=...)`). Claude in Foundry and Foundry's OpenAI v1 endpoint are reported unsupported.
+- Live discovery checks per provider in tests/live.
+
+### Changed
+
+- `BedrockFactory.create_client` returns `BedrockClients`, the runtime client with a control-plane client beside it; it behaves as the runtime client, and closing it closes both.
+
+### Fixed
+
+- `ProviderRegistry.build` closes the client it made when the factory's `create_provider` raises.
+
 ## [0.1.0rc2] - 2026-11-11
 
 Second release candidate. Wave 10 brings the default model catalogue up to each provider's documented models (`fix/0.1.0-catalogue-coverage`), and the licence audit admits a new dependency of the warden extra.
