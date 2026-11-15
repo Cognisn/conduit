@@ -36,6 +36,7 @@ LIVE_MODULES = frozenset(
         "test_bedrock.py",
         "test_bedrock_mantle.py",
         "test_catalogue.py",
+        "test_discovery.py",
         "test_embeddings.py",
         "test_gemini_ollama.py",
         "test_openai_compat.py",

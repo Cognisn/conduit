@@ -24,8 +24,9 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from conduit.core.catalogue import CatalogueOverlay
+from conduit.core.discovery import DiscoveryResult
 from conduit.core.errors import ProviderError, ProviderFailure, ResidencyRefused
-from conduit.core.registry import ProviderFactory
+from conduit.core.registry import ProviderFactory, ProviderRegistry
 from conduit.core.residency import ResidencyPolicy, ResidencyScope
 from conduit.core.runtime import ConduitSettings, TaskBinding, start
 from conduit.core.settings import AssignmentSettings
@@ -489,3 +490,31 @@ async def check_embeddings(binding: EmbeddingBinding, subject: str, expected: in
         assert others == 0, "embedding usage carried more than input tokens"
         detail = f"{expected} dimensions; input tokens {usage.input_tokens}"
     REPORT.record("embeddings", subject, f"embed at {expected}", Verdict.MATCH, detail)
+
+
+async def check_discovery(
+    subject: str,
+    settings: dict[str, Any],
+    *,
+    environ: LiveEnv | None = None,
+    factories: Iterable[ProviderFactory] | None = None,
+) -> DiscoveryResult:
+    """Model discovery through the registry, as a product calls it: supported, at least
+    one model listed, and at least one listed model the catalogue declares. Reports the
+    counts per outcome only, never a model list."""
+    registry = ProviderRegistry(
+        secrets=resolver(environ if environ is not None else live_env()),
+        factories=builtin_factories() if factories is None else factories,
+    )
+    result = await registry.discover("live", settings)
+    assert result.supported, "discovery is reported unsupported"
+    assert result.models, "the provider listed no models"
+    declared = len(result.allowed) + len(result.refused)
+    detail = (
+        f"allowed {len(result.allowed)}, refused {len(result.refused)}, "
+        f"undeclared {len(result.undeclared)}"
+    )
+    verdict = Verdict.MATCH if declared else Verdict.MISMATCH
+    REPORT.record("discovery", subject, "catalogue models listed", verdict, detail)
+    assert declared, "no listed model is declared in the catalogue"
+    return result
