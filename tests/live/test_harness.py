@@ -410,7 +410,9 @@ async def test_discovery_fails_when_no_listed_model_is_declared() -> None:
 async def test_discovery_fails_when_unsupported() -> None:
     with pytest.raises(AssertionError, match="unsupported"):
         await check_discovery(
-            "fake", {"kind": "stub", "not_for_production": True}, environ=LiveEnv({}),
+            "fake",
+            {"kind": "stub", "not_for_production": True},
+            environ=LiveEnv({}),
             factories=[_NoDiscovery()],
         )
 
