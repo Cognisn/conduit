@@ -158,6 +158,33 @@ class ModelCallFinishedEvent(Event):
     tool_call_count: NonNegativeInt = 0
 
 
+DiscoveryEventOutcome = Literal["ok", "failed", "unsupported"]
+
+
+class DiscoveryFinishedEvent(Event):
+    """One model discovery through the provider registry, however it ended.
+
+    ``allowed``, ``refused`` and ``undeclared`` count the listed models by outcome.
+    ``models`` is the joined listing (each model id with its outcome) as content of the
+    prompt kind: its hash and size always, its text only when the capture policy
+    captures prompts. ``error_type`` is the exception's class name for a failure that
+    was not a provider failure.
+    """
+
+    type: Literal["discovery_finished"] = "discovery_finished"
+    discovery_id: Identifier
+    provider: Identifier  # the configured provider's name
+    kind: Identifier
+    outcome: DiscoveryEventOutcome
+    allowed: NonNegativeInt = 0
+    refused: NonNegativeInt = 0
+    undeclared: NonNegativeInt = 0
+    failure: ProviderFailure | None = None
+    error_type: Identifier | None = None
+    duration_ms: NonNegativeFloat
+    models: CapturedContent | None = None
+
+
 class ToolCallEvent(Event):
     type: Literal["tool_call"] = "tool_call"
     call_id: Identifier

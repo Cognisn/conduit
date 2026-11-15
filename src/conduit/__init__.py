@@ -20,6 +20,13 @@ from conduit.core.catalogue import (
     ModelKey,
     default_catalogue,
 )
+from conduit.core.discovery import (
+    DiscoveredModel,
+    DiscoveryOutcome,
+    DiscoveryResult,
+    ModelAvailability,
+    join_discovered,
+)
 from conduit.core.errors import (
     AssignmentRefused,
     CapabilityRefused,
@@ -43,6 +50,7 @@ from conduit.core.events import (
     CapturedContent,
     CapturePolicy,
     ContentKind,
+    DiscoveryFinishedEvent,
     Event,
     EventSink,
     FanOutSink,
@@ -64,6 +72,7 @@ from conduit.core.facade import (
 )
 from conduit.core.provider import BaseProvider, Provider
 from conduit.core.registry import (
+    DiscoveringFactory,
     MeteredProvider,
     ProviderFactory,
     ProviderRegistry,
@@ -158,6 +167,11 @@ __all__ = [
     "ConduitSettings",
     "ConfigurationError",
     "ContentKind",
+    "DiscoveredModel",
+    "DiscoveringFactory",
+    "DiscoveryFinishedEvent",
+    "DiscoveryOutcome",
+    "DiscoveryResult",
     "EnvironmentSecretResolver",
     "Event",
     "EventSink",
@@ -170,6 +184,7 @@ __all__ = [
     "Message",
     "MessageEntry",
     "MeteredProvider",
+    "ModelAvailability",
     "ModelCallFinishedEvent",
     "ModelCallStartedEvent",
     "ModelEntry",
@@ -243,6 +258,7 @@ __all__ = [
     "frame_untrusted",
     "guarded_client",
     "is_hidden_character",
+    "join_discovered",
     "refusals",
     "resolve_assignments",
     "sanitise_untrusted",
