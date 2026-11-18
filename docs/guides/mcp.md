@@ -182,6 +182,8 @@ From sync code, connect on the facade's loop (`loop.run(connection.connect())`) 
 
 A tool the server reports as failed is a result with `is_error` set, not an exception. A server written with the SDK (2.1 or later) shows the client the message of a `ToolError` only; any other exception in a tool reaches the client as "Error executing tool <name>".
 
+A request the server answers with a JSON-RPC error is `McpFailure.REJECTED`, and the connection stays open. That includes code -32000, which the SDK also uses for a request its closed connection abandoned. conduit reports `McpFailure.CLOSED` only when the connection has really ended: it was lost, or a ping sent on it is refused by the SDK as closed or goes unanswered within `close_timeout`. A server that answers the ping is live, and the call is `McpFailure.REJECTED`. On streamable HTTP, a credential the server stops accepting part-way through a session (a 401 or 403 on a request after connecting) fails that call at once as `McpFailure.REJECTED`, since SDK 2.0 turns the refusal into a JSON-RPC error; under SDK 1.x the call waited for its timeout. Reconnect to sign in again or to use a fresh credential.
+
 ### Logging and tracing
 
 conduit's own logger (`conduit.mcp`) never records content, credentials or URLs with their query. The SDK's transport loggers (`mcp.client.*`) record messages, tool arguments and results included, at `DEBUG`: where content must not be logged, keep the `mcp` logger above `DEBUG`. The SDK's session logs under `client`, naming tools, at `WARNING`.
