@@ -18,6 +18,7 @@ Third release candidate. Wave 11 adds model discovery (`feat/0.1.0-model-discove
 
 ### Changed
 
+- The README's status and installation notes name 0.1.0rc3 as the release candidate on PyPI.
 - `BedrockFactory.create_client` returns `BedrockClients`, the runtime client with a control-plane client beside it; it behaves as the runtime client, and closing it closes both.
 
 ### Fixed
