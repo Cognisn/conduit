@@ -51,11 +51,15 @@ OPTIONAL_LIBRARIES: Mapping[str, tuple[str, ...]] = {
     "ollama": ("conduit.providers.ollama",),
     # The HTTP client behind the ollama and mcp extras.
     "httpx": ("conduit.providers.ollama", "conduit.mcp"),
+    # MCP SDK 2.x's HTTP client, which conduit.mcp builds for its transports (Q0058).
+    "httpx2": ("conduit.mcp",),
     # Layer dependencies behind their extras.
     "sentence_transformers": ("conduit.embeddings.local",),
     "torch": ("conduit.embeddings.local",),
     "transformers": ("conduit.embeddings.local",),
     "mcp": ("conduit.mcp",),
+    # MCP SDK 2.x's wire types, a package of their own (Q0058).
+    "mcp_types": ("conduit.mcp",),
     "sqlalchemy": ("conduit.stores.sql",),
     "alembic": ("conduit.stores.sql",),
     # The sql extra's database drivers.

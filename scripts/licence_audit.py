@@ -43,7 +43,7 @@ NOT_AUDITED = frozenset({"dev"})
 
 EXCEPTIONS: dict[str, str] = {
     # Agreed 2026-11-04 (Skuld Q0016): Mozilla's CA bundle, required by httpx and
-    # requests (the ollama, gemini, openai and mcp extras); used unmodified and
+    # requests (the ollama, gemini and openai extras); used unmodified and
     # installed as its own package.
     "certifi": "MPL-2.0 CA bundle required by httpx and requests; used unmodified, "
     "installed separately (Q0016)",
