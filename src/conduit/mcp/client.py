@@ -474,6 +474,23 @@ class McpConnection:
 
     # -- Requests --------------------------------------------------------------------
 
+    async def _gone(self, session: ClientSession) -> bool:
+        """Whether the connection really ended, once the SDK has answered CONNECTION_CLOSED.
+
+        That code (-32000) is also the first of JSON-RPC's server-error range, so a live
+        server may answer with it. A ping, bounded by the close timeout, tells them
+        apart: a session the SDK has shut (closing, or its server gone) refuses it at once
+        with the same code, a live server answers it, and one that cannot answer in time
+        is treated as gone.
+        """
+        try:
+            await asyncio.wait_for(session.send_ping(), timeout=self.settings.close_timeout)
+        except SdkMcpError as error:
+            return error.code == CONNECTION_CLOSED
+        except Exception:  # no answer in time, or a broken transport
+            return True
+        return False
+
     async def _request(self, make: Callable[[ClientSession], Any], timeout: float) -> Any:
         session = self._session
         lost = self._lost
@@ -502,12 +519,17 @@ class McpConnection:
             try:
                 return work.result()
             except SdkMcpError as error:
-                # The SDK answers a request the closing connection abandoned with a
-                # CONNECTION_CLOSED error (from SDK 2.0), not a rejection by the server.
-                closed = lost.is_set() or error.code == CONNECTION_CLOSED
-                failure = McpFailure.CLOSED if closed else McpFailure.REJECTED
+                # The SDK answers a request its closing connection abandoned with
+                # CONNECTION_CLOSED (from SDK 2.0); a live server may send the same code.
+                if lost.is_set():
+                    failure = McpFailure.CLOSED
+                elif error.code != CONNECTION_CLOSED:
+                    failure = McpFailure.REJECTED
             except Exception:
                 failure = McpFailure.CLOSED if lost.is_set() else McpFailure.PROTOCOL
+        if failure is None:  # decided outside the handler, so nothing is chained
+            gone = await self._gone(session)
+            failure = McpFailure.CLOSED if gone else McpFailure.REJECTED
         raise McpError(self.name, failure)
 
     async def list_tools(self) -> tuple[RemoteTool, ...]:

@@ -33,8 +33,10 @@ from mcp.types import (
     CallToolRequestParams,
     CallToolResult,
     EmbeddedResource,
+    EmptyResult,
     ListToolsResult,
     PaginatedRequestParams,
+    RequestParams,
     ResourceLink,
     TextResourceContents,
     Tool,
@@ -175,6 +177,29 @@ def rejecting_server() -> Server[Any]:
         raise SdkMcpError(-32603, "zz-stdio-env-secret-0000zz server-side detail")
 
     return Server("rejecting", on_list_tools=refuse)
+
+
+def erroring_server(code: int, *, ping: str = "answer") -> Server[Any]:
+    """A low-level server that lists one tool and answers every call to it with a
+    JSON-RPC error of ``code``, over a connection that stays healthy. ``ping`` is how it
+    meets a ping: ``answer``, ``hang`` (never answers) or ``refuse`` (method not found)."""
+
+    async def pinged(ctx: ServerRequestContext[Any], params: RequestParams | None) -> EmptyResult:
+        if ping == "hang":
+            await anyio.sleep_forever()
+        if ping == "refuse":
+            raise SdkMcpError(-32601, "no ping here")
+        return EmptyResult()
+
+    async def listing(
+        ctx: ServerRequestContext[Any], params: PaginatedRequestParams | None
+    ) -> ListToolsResult:
+        return ListToolsResult(tools=[_tool("refused")])
+
+    async def call(ctx: ServerRequestContext[Any], params: CallToolRequestParams) -> CallToolResult:
+        raise SdkMcpError(code, "zz-stdio-env-secret-0000zz application says no")
+
+    return Server("erroring", on_list_tools=listing, on_call_tool=call, on_ping=pinged)
 
 
 def _tool(name: str) -> Tool:

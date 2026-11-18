@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -137,6 +138,41 @@ class TestStreamableHttp:
             with pytest.raises(McpError) as caught:
                 await McpConnection(settings, secrets=SECRETS).connect()
         assert caught.value.failure is failure
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+
+    @pytest.mark.parametrize("status", [401, 403])
+    async def test_a_credential_refused_mid_session_rejects_the_call_at_once(
+        self, status: int
+    ) -> None:
+        # From SDK 2.0 a refused request on an open streamable HTTP session comes back as
+        # a JSON-RPC error, so the call is rejected at once; under SDK 1.x it ran to the
+        # call timeout.
+        refused = {"now": False}
+        inner = build_server("revoking", host="127.0.0.1").streamable_http_app()
+
+        async def revoking(scope: dict[str, Any], receive: Any, send: Any) -> None:
+            if scope["type"] == "http" and refused["now"]:
+                await PlainTextResponse("revoked", status_code=status)(scope, receive, send)
+                return
+            await inner(scope, receive, send)
+
+        with serving(revoking, "status"):
+            settings = http_settings(
+                transport={
+                    "type": "streamable_http",
+                    "url": f"http://127.0.0.1:{port('status')}/mcp",
+                },
+                call_timeout=30,
+            )
+            async with McpConnection(settings, secrets=SECRETS) as conn:
+                assert (await conn.call_tool("echo", {"text": "before"})).text == "before"
+                refused["now"] = True
+                started = time.monotonic()
+                with pytest.raises(McpError) as caught:
+                    await conn.call_tool("echo", {"text": "after"})
+                assert time.monotonic() - started < 10  # not the 30 second call timeout
+        assert caught.value.failure is McpFailure.REJECTED
         assert caught.value.__cause__ is None
         assert caught.value.__context__ is None
 

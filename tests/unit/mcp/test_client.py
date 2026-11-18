@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx2
 import pytest
+from mcp.shared.exceptions import MCPError as SdkMcpError
 
 from conduit.core.errors import SecretUnavailable
 from conduit.core.secrets import LiteralSecretResolver
@@ -18,6 +19,7 @@ from conduit.mcp.errors import McpError, McpFailure
 from conduit.mcp.settings import McpServerSettings
 from tests.unit.mcp.servers import (
     build_server,
+    erroring_server,
     failing_transport,
     hanging_transport,
     memory_transport,
@@ -29,6 +31,7 @@ from tests.unit.mcp.servers import (
 )
 
 STDIO_SERVER = Path(__file__).with_name("stdio_server.py")
+DYING_SERVER = Path(__file__).with_name("dying_stdio_server.py")
 SYNTHETIC_SECRET = "zz-stdio-env-secret-0000zz"
 
 
@@ -268,6 +271,84 @@ class TestFailures:
         assert_clean(caught.value)
         for text in (str(caught.value), repr(caught.value), repr(caught.value.args)):
             assert SYNTHETIC_SECRET not in text
+
+    @pytest.mark.parametrize("code", [-32000, -32001, -32603])
+    async def test_a_server_error_on_a_live_connection_is_a_rejection(self, code: int) -> None:
+        # -32000 is both the SDK's CONNECTION_CLOSED code and the first code of JSON-RPC's
+        # server-error range: a live server may answer with it. The connection is the
+        # judge of whether it closed, not the code.
+        async with connection(memory_transport(erroring_server(code)), close_timeout=2) as conn:
+            started = time.monotonic()
+            with pytest.raises(McpError) as caught:
+                await conn.call_tool("refused", {})
+            assert time.monotonic() - started < 1.5
+            assert caught.value.failure is McpFailure.REJECTED
+            assert_clean(caught.value)
+            assert SYNTHETIC_SECRET not in repr(caught.value.args)
+            assert conn.connected
+            assert [tool.name for tool in await conn.list_tools()] == ["refused"]
+
+    @pytest.mark.parametrize(
+        ("ping", "failure"), [("hang", McpFailure.CLOSED), ("refuse", McpFailure.REJECTED)]
+    )
+    async def test_the_ping_after_a_connection_closed_code_decides(
+        self, ping: str, failure: McpFailure
+    ) -> None:
+        # A server that answers -32000 and then cannot answer a ping in time is treated
+        # as gone; one that answers the ping, even with an error, is live.
+        transport = memory_transport(erroring_server(-32000, ping=ping))
+        async with connection(transport, close_timeout=0.5) as conn:
+            started = time.monotonic()
+            with pytest.raises(McpError) as caught:
+                await conn.call_tool("refused", {})
+            assert time.monotonic() - started < 3
+        assert caught.value.failure is failure
+        assert_clean(caught.value)
+
+    async def test_a_server_that_ends_during_a_call_fails_the_call_as_closed(self) -> None:
+        conn = McpConnection(
+            settings(
+                transport={"type": "stdio", "command": sys.executable, "args": [str(DYING_SERVER)]},
+                call_timeout=30,
+            ),
+            secrets=LiteralSecretResolver({}),
+        )
+        async with conn:
+            started = time.monotonic()
+            with pytest.raises(McpError) as caught:
+                await conn.call_tool("die", {})
+            assert time.monotonic() - started < 10  # not left waiting for the call timeout
+        assert caught.value.failure is McpFailure.CLOSED
+        assert_clean(caught.value)
+
+    @pytest.mark.parametrize(
+        ("error", "lose", "failure"),
+        [
+            (RuntimeError(f"transport broke {SYNTHETIC_SECRET}"), True, McpFailure.CLOSED),
+            (RuntimeError(f"transport broke {SYNTHETIC_SECRET}"), False, McpFailure.PROTOCOL),
+            (SdkMcpError(-32603, SYNTHETIC_SECRET), True, McpFailure.CLOSED),
+            (SdkMcpError(-32603, SYNTHETIC_SECRET), False, McpFailure.REJECTED),
+        ],
+    )
+    async def test_a_failure_names_the_connection_state(
+        self, error: Exception, lose: bool, failure: McpFailure
+    ) -> None:
+        # A connection lost under a request decides the outcome, whatever the request
+        # raised; on a live connection the error itself does.
+        async with connection() as conn:
+            lost = conn._lost
+            assert lost is not None
+
+            async def breaking(session: Any) -> None:
+                if lose:
+                    lost.set()
+                raise error
+
+            with pytest.raises(McpError) as caught:
+                await conn._request(breaking, 5)
+            lost.clear()
+        assert caught.value.failure is failure
+        assert_clean(caught.value)
 
     async def test_a_body_failure_is_not_replaced_by_close(self) -> None:
         conn = connection(stubborn_transport(build_server(), hold=1), close_timeout=0.2)
