@@ -5,7 +5,7 @@ server that refuses what it should: registered redirect URIs match exactly, the 
 verifier must hash to the challenge, codes are single use and bound to the client,
 redirect URI and resource, and refresh tokens rotate (a used one is revoked).
 
-It answers httpx requests in-process (``transport()``, an ``httpx.MockTransport``),
+It answers httpx2 requests in-process (``transport()``, an ``httpx2.MockTransport``),
 or over loopback as an ASGI app (``asgi()``). Every value it issues is synthetic.
 """
 
@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-import httpx
+import httpx2
 
 from conduit.mcp.signin import SignInRequest, SignInResult
 
@@ -56,7 +56,7 @@ class FakeAuthServer:
     #: Where the protected-resource metadata is served: ``path``, ``root`` or nowhere.
     metadata_at: str = "path"
     secret_client: bool = False
-    requests: list[httpx.Request] = field(default_factory=list)
+    requests: list[httpx2.Request] = field(default_factory=list)
     clients: dict[str, dict[str, Any]] = field(default_factory=dict)
     grants: dict[str, Grant] = field(default_factory=dict)
     access_tokens: set[str] = field(default_factory=set)
@@ -147,35 +147,35 @@ class FakeAuthServer:
 
     # -- Requests ----------------------------------------------------------------------
 
-    def handle(self, request: httpx.Request) -> httpx.Response:
+    def handle(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
         url = request.url
         origin = f"{url.scheme}://{url.netloc.decode('ascii')}"
         path = url.path
         resource_origin = "{0.scheme}://{0.netloc}".format(urlsplit(self.resource))
         if origin == resource_origin and path in self._prm_paths() and request.method == "GET":
-            return httpx.Response(200, json=self._prm())
+            return httpx2.Response(200, json=self._prm())
         issuer = urlsplit(self.issuer)
         if origin == f"{issuer.scheme}://{issuer.netloc}":
             issuer_path = issuer.path.rstrip("/")
             if request.method == "GET" and path == (
                 f"/.well-known/oauth-authorization-server{issuer_path}"
             ):
-                return httpx.Response(200, json=self._asm())
+                return httpx2.Response(200, json=self._asm())
             if path == f"{issuer_path}/register" and request.method == "POST":
                 return self._register(request)
             if path == f"{issuer_path}/token" and request.method == "POST":
                 return self._token(request)
-        return httpx.Response(404, json={"error": "not_found"})
+        return httpx2.Response(404, json={"error": "not_found"})
 
-    def transport(self) -> httpx.MockTransport:
-        return httpx.MockTransport(self.handle)
+    def transport(self) -> httpx2.MockTransport:
+        return httpx2.MockTransport(self.handle)
 
-    def _register(self, request: httpx.Request) -> httpx.Response:
+    def _register(self, request: httpx2.Request) -> httpx2.Response:
         body = json.loads(request.content)
         uris = body.get("redirect_uris")
         if not isinstance(uris, list) or not uris:
-            return httpx.Response(400, json={"error": "invalid_redirect_uri"})
+            return httpx2.Response(400, json={"error": "invalid_redirect_uri"})
         client_id = self._new("client")
         record: dict[str, Any] = {"redirect_uris": uris, "request": body}
         answer: dict[str, Any] = {"client_id": client_id, "redirect_uris": uris}
@@ -186,7 +186,7 @@ class FakeAuthServer:
         else:
             answer["token_endpoint_auth_method"] = "none"
         self.clients[client_id] = record
-        return httpx.Response(201, json=answer)
+        return httpx2.Response(201, json=answer)
 
     def _client_ok(self, form: dict[str, str]) -> bool:
         client = self.clients.get(form.get("client_id", ""))
@@ -209,11 +209,11 @@ class FakeAuthServer:
             answer["expires_in"] = self.expires_in
         return answer
 
-    def _token(self, request: httpx.Request) -> httpx.Response:
+    def _token(self, request: httpx2.Request) -> httpx2.Response:
         form = {k: v[0] for k, v in parse_qs(request.content.decode("ascii")).items()}
         self.token_requests.append(form)
         if not self._client_ok(form):
-            return httpx.Response(401, json={"error": "invalid_client"})
+            return httpx2.Response(401, json={"error": "invalid_client"})
         if form.get("grant_type") == "authorization_code":
             grant = self.grants.pop(form.get("code", ""), None)
             if (
@@ -223,21 +223,21 @@ class FakeAuthServer:
                 or grant.resource != form.get("resource")
                 or s256(form.get("code_verifier", "")) != grant.challenge
             ):
-                return httpx.Response(400, json={"error": "invalid_grant"})
-            return httpx.Response(200, json=self._tokens(grant.client_id))
+                return httpx2.Response(400, json={"error": "invalid_grant"})
+            return httpx2.Response(200, json=self._tokens(grant.client_id))
         if form.get("grant_type") == "refresh_token":
             refresh = form.get("refresh_token", "")
             owner = self.refresh_tokens.get(refresh)
             if owner is None or owner != form.get("client_id") or refresh in self.revoked:
-                return httpx.Response(400, json={"error": "invalid_grant"})
+                return httpx2.Response(400, json={"error": "invalid_grant"})
             answer = self._tokens(owner)
             if self.rotate:
                 self.revoked.add(refresh)
                 del self.refresh_tokens[refresh]
             else:
                 del self.refresh_tokens[answer.pop("refresh_token")]
-            return httpx.Response(200, json=answer)
-        return httpx.Response(400, json={"error": "unsupported_grant_type"})
+            return httpx2.Response(200, json=answer)
+        return httpx2.Response(400, json={"error": "unsupported_grant_type"})
 
     def asgi(self) -> Any:
         """The same server as an ASGI app, for loopback tests (the browser's half too)."""
@@ -254,7 +254,7 @@ class FakeAuthServer:
                 await RedirectResponse(target, status_code=302)(scope, receive, send)
                 return
             answer = self.handle(
-                httpx.Request(
+                httpx2.Request(
                     request.method,
                     str(request.url),
                     headers=list(request.headers.items()),

@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import os
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-server = FastMCP("stdio-example")
+server = MCPServer("stdio-example")
 
 
 @server.tool(description="Echo the text back.")

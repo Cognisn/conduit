@@ -1,6 +1,6 @@
 """The loopback sign-in hook, and the whole OAuth sign-in over loopback HTTP.
 
-The browser is simulated by a synchronous httpx request that follows redirects
+The browser is simulated by a synchronous httpx2 request that follows redirects
 (the hook runs its opener in a worker thread). Every server binds 127.0.0.1 inside
 this worktree's slot.
 """
@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-import httpx
+import httpx2
 import pytest
 from starlette.responses import JSONResponse
 
@@ -30,14 +30,14 @@ from tests.unit.mcp.servers import LoopbackServer, build_server, port, serving
 
 def browser(url: str) -> bool:
     """The person approves: the browser follows every redirect to the callback."""
-    with httpx.Client(follow_redirects=True, timeout=10, trust_env=False) as client:
+    with httpx2.Client(follow_redirects=True, timeout=10, trust_env=False) as client:
         client.get(url)
     return True
 
 
 def visit(path: str) -> Any:
     def opener(url: str) -> bool:
-        with httpx.Client(timeout=10, trust_env=False) as client:
+        with httpx2.Client(timeout=10, trust_env=False) as client:
             client.get(f"http://127.0.0.1:{port('callback')}{path}")
         return True
 
@@ -99,7 +99,7 @@ class TestLoopbackSignIn:
 
     async def test_another_path_does_not_complete_it(self) -> None:
         def opener(url: str) -> bool:
-            with httpx.Client(timeout=10, trust_env=False) as client:
+            with httpx2.Client(timeout=10, trust_env=False) as client:
                 base = f"http://127.0.0.1:{port('callback')}"
                 assert client.get(f"{base}/favicon.ico").status_code == 404
                 assert client.get(f"{base}/callback?code=c&state=s1").status_code == 200
@@ -133,7 +133,7 @@ class TestLoopbackSignIn:
         answers: list[int] = []
 
         def opener(url: str) -> bool:
-            with httpx.Client(timeout=10, trust_env=False) as client:
+            with httpx2.Client(timeout=10, trust_env=False) as client:
                 base = f"http://127.0.0.1:{port('callback')}/callback"
                 answers.append(client.get(f"{base}?code=forged&state=forged").status_code)
                 answers.append(client.get(f"{base}?code=forged").status_code)
@@ -149,7 +149,7 @@ class TestLoopbackSignIn:
         pages: list[str] = []
 
         def opener(url: str) -> bool:
-            with httpx.Client(timeout=10, trust_env=False) as client:
+            with httpx2.Client(timeout=10, trust_env=False) as client:
                 base = f"http://127.0.0.1:{port('callback')}/callback"
                 pages.append(client.get(f"{base}?error=access_denied&state=s1").text)
             return True
@@ -201,7 +201,7 @@ class TestLoopbackSignIn:
         answers: list[int] = []
 
         def opener(url: str) -> bool:
-            with httpx.Client(timeout=10, trust_env=False) as client:
+            with httpx2.Client(timeout=10, trust_env=False) as client:
                 base = f"http://127.0.0.1:{port('callback')}"
                 answers.append(client.get(f"{base}/elsewhere?code=c&state=s1").status_code)
                 answers.append(client.get(f"{base}/callback?code=c&state=s1").status_code)
@@ -310,7 +310,7 @@ def protect(app: Any, fake: FakeAuthServer) -> Any:
             path = scope["path"]
             if path.startswith("/.well-known/oauth-protected-resource"):
                 origin = fake.resource.rsplit("/mcp", 1)[0]
-                answer = fake.handle(httpx.Request("GET", f"{origin}{path}"))
+                answer = fake.handle(httpx2.Request("GET", f"{origin}{path}"))
                 await JSONResponse(answer.json(), status_code=answer.status_code)(
                     scope, receive, send
                 )

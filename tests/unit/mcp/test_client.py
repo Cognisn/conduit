@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import httpx2
 import pytest
 
 from conduit.core.errors import SecretUnavailable
@@ -20,8 +21,10 @@ from tests.unit.mcp.servers import (
     failing_transport,
     hanging_transport,
     memory_transport,
+    paging_server,
     rejecting_server,
     silent_transport,
+    structured_server,
     stubborn_transport,
 )
 
@@ -116,6 +119,21 @@ class TestLifecycle:
         assert "first part" in mixed.text
         assert "notes" in mixed.text
         assert "https://example.com/doc" in mixed.text
+        assert "[binary resource omitted: application/octet-stream," in mixed.text
+        assert "zz-synthetic-blob-zz" not in mixed.text
+
+    async def test_audio_content_is_described(self) -> None:
+        async with connection() as conn:
+            sound = await conn.call_tool("sound", {})
+        assert sound.text.startswith("[audio content omitted: audio/wav, ")
+
+    async def test_structured_content_alone_is_rendered_as_json(self) -> None:
+        accented = chr(0xE9)
+        conn = connection(memory_transport(structured_server({"b": 2, "a": accented})))
+        async with conn:
+            result = await conn.call_tool("report", {})
+        assert not result.is_error
+        assert result.text == '{"a": "' + accented + '", "b": 2}'
 
     async def test_the_reconnect_after_close_works(self) -> None:
         conn = connection()
@@ -124,6 +142,22 @@ class TestLifecycle:
         await conn.connect()
         assert (await conn.call_tool("echo", {"text": "again"})).text == "again"
         await conn.close()
+
+
+class TestListing:
+    async def test_every_page_of_a_listing_is_read(self) -> None:
+        async with connection(memory_transport(paging_server(3))) as conn:
+            tools = await conn.list_tools()
+        assert [t.name for t in tools] == ["page_0", "page_1", "page_2"]
+        assert tools[0].input_schema == {"type": "object"}
+        assert tools[0].description == "Tool page_0."
+
+    async def test_a_listing_that_never_ends_is_a_protocol_failure(self) -> None:
+        async with connection(memory_transport(paging_server(1, endless=True))) as conn:
+            with pytest.raises(McpError) as caught:
+                await conn.list_tools()
+        assert caught.value.failure is McpFailure.PROTOCOL
+        assert_clean(caught.value)
 
 
 class TestFailures:
@@ -145,6 +179,28 @@ class TestFailures:
         assert_clean(caught.value)
         for text in (str(caught.value), repr(caught.value), repr(caught.value.args)):
             assert SYNTHETIC_SECRET not in text
+
+    @pytest.mark.parametrize(
+        ("status", "failure"),
+        [(401, McpFailure.AUTH), (403, McpFailure.AUTH), (500, McpFailure.CONNECT)],
+    )
+    async def test_an_http_refusal_raised_by_a_transport_names_the_failure(
+        self, status: int, failure: McpFailure
+    ) -> None:
+        # A product's own transport opener (``transport=``) may raise httpx2's status
+        # error itself; conduit's HTTP client is not involved to see the status.
+        request = httpx2.Request("POST", "http://127.0.0.1/mcp")
+        refused = httpx2.HTTPStatusError(
+            f"refused {SYNTHETIC_SECRET}",
+            request=request,
+            response=httpx2.Response(status, request=request),
+        )
+        conn = connection(failing_transport(refused))
+        with pytest.raises(McpError) as caught:
+            await conn.connect()
+        assert caught.value.failure is failure
+        assert_clean(caught.value)
+        assert SYNTHETIC_SECRET not in repr(caught.value.args)
 
     async def test_a_slow_call_times_out_and_the_connection_survives(self) -> None:
         async with connection(call_timeout=0.3) as conn:

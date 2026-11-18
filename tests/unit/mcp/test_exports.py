@@ -21,8 +21,11 @@ def test_an_unknown_name_is_an_attribute_error() -> None:
 
 
 def test_importing_the_package_does_not_load_the_sdk() -> None:
-    probe = "import sys, conduit.mcp; print('mcp' in sys.modules, 'httpx' in sys.modules)"
+    probe = (
+        "import sys, conduit.mcp; "
+        "print(*(name in sys.modules for name in ('mcp', 'httpx', 'httpx2')))"
+    )
     out = subprocess.run(
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True
     ).stdout.split()
-    assert out == ["False", "False"]
+    assert out == ["False", "False", "False"]
