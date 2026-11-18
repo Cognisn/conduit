@@ -1,7 +1,7 @@
 """The OAuth 2.1 client: discovery, registration, PKCE, the callback checks and refresh.
 
 Run in-process against the synthetic authorisation server in ``fake_auth`` (an
-``httpx.MockTransport``): no network.
+``httpx2.MockTransport``): no network.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
-import httpx
+import httpx2
 import pytest
 from pydantic import SecretStr
 
@@ -401,8 +401,8 @@ class TestDiscoveryChecks:
         assert_refused(error, OAuthFailure.TOKEN_EXCHANGE)
 
     async def test_an_unreachable_server_is_a_clean_discovery_failure(self) -> None:
-        def unreachable(request: httpx.Request) -> httpx.Response:
-            raise httpx.ConnectError("zz-network-detail-zz", request=request)
+        def unreachable(request: httpx2.Request) -> httpx2.Response:
+            raise httpx2.ConnectError("zz-network-detail-zz", request=request)
 
         oauth = OAuthClient(
             settings(),
@@ -410,7 +410,7 @@ class TestDiscoveryChecks:
             store=MemoryTokenStore(),
             sign_in=FakeAuthServer().sign_in_hook(),
             secrets=LiteralSecretResolver({}),
-            http_transport=httpx.MockTransport(unreachable),
+            http_transport=httpx2.MockTransport(unreachable),
         )
         with pytest.raises(McpAuthError) as caught:
             await oauth.access_token()
@@ -507,7 +507,7 @@ class TestRefresh:
     async def test_a_rejected_token_is_refreshed_once_under_concurrency(self) -> None:
         server = FakeAuthServer()
 
-        async def slow(request: httpx.Request) -> httpx.Response:
+        async def slow(request: httpx2.Request) -> httpx2.Response:
             await asyncio.sleep(0.05)  # every request yields, so the callers interleave
             return server.handle(request)
 
@@ -517,7 +517,7 @@ class TestRefresh:
             store=MemoryTokenStore(),
             sign_in=server.sign_in_hook(),
             secrets=LiteralSecretResolver({}),
-            http_transport=httpx.MockTransport(slow),
+            http_transport=httpx2.MockTransport(slow),
             clock=Clock(),
         )
         stale = await oauth.access_token()
@@ -552,15 +552,15 @@ class TestHttpxAuth:
         stale = await oauth.access_token()
         seen: list[str] = []
 
-        def resource(request: httpx.Request) -> httpx.Response:
+        def resource(request: httpx2.Request) -> httpx2.Response:
             sent = request.headers.get("authorization", "")
             seen.append(sent)
             if sent == f"Bearer {stale.get_secret_value()}":
-                return httpx.Response(401)
-            return httpx.Response(200, json={"ok": True})
+                return httpx2.Response(401)
+            return httpx2.Response(200, json={"ok": True})
 
-        async with httpx.AsyncClient(
-            auth=oauth.httpx_auth(), transport=httpx.MockTransport(resource)
+        async with httpx2.AsyncClient(
+            auth=oauth.httpx_auth(), transport=httpx2.MockTransport(resource)
         ) as http:
             response = await http.get(RESOURCE)
         assert response.status_code == 200
@@ -574,13 +574,13 @@ class TestHttpxAuth:
         await oauth.access_token()
         calls = 0
 
-        def resource(request: httpx.Request) -> httpx.Response:
+        def resource(request: httpx2.Request) -> httpx2.Response:
             nonlocal calls
             calls += 1
-            return httpx.Response(401)
+            return httpx2.Response(401)
 
-        async with httpx.AsyncClient(
-            auth=oauth.httpx_auth(), transport=httpx.MockTransport(resource)
+        async with httpx2.AsyncClient(
+            auth=oauth.httpx_auth(), transport=httpx2.MockTransport(resource)
         ) as http:
             response = await http.get(RESOURCE)
         assert response.status_code == 401
@@ -679,6 +679,6 @@ def test_the_fake_server_really_checks_the_verifier() -> None:
         "code_verifier": "wrong-verifier" * 4,
     }
     response = server.handle(
-        httpx.Request("POST", f"{ISSUER}/token", content=urlencode(form).encode("ascii"))
+        httpx2.Request("POST", f"{ISSUER}/token", content=urlencode(form).encode("ascii"))
     )
     assert response.status_code == 400

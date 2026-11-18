@@ -23,12 +23,24 @@ from typing import Any
 
 import anyio
 import uvicorn
-from mcp.server.fastmcp import FastMCP, Image
-from mcp.server.lowlevel import Server
-from mcp.shared.exceptions import McpError as SdkMcpError
+from mcp.server import Server, ServerRequestContext
+from mcp.server.mcpserver import Audio, Image, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp.shared.exceptions import MCPError as SdkMcpError
 from mcp.shared.memory import create_client_server_memory_streams
-from mcp.types import EmbeddedResource, ErrorData, ResourceLink, TextResourceContents
-from pydantic import AnyUrl
+from mcp.types import (
+    BlobResourceContents,
+    CallToolRequestParams,
+    CallToolResult,
+    EmbeddedResource,
+    EmptyResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    RequestParams,
+    ResourceLink,
+    TextResourceContents,
+    Tool,
+)
 
 #: Each server's offset within a slot's block, when a base is set. The ``cli_`` names are
 #: the terminal interface's OAuth tests'.
@@ -37,6 +49,7 @@ OFFSETS = {
     "sse": 11,
     "auth": 12,
     "protected": 13,
+    "status": 14,
     "callback": 20,
     "callback2": 21,
     "cli_auth": 50,
@@ -89,8 +102,13 @@ def port(name: str) -> int:
     return _PLAN.port(name)
 
 
-def build_server(name: str = "example", **settings: Any) -> FastMCP:
-    server = FastMCP(name, **settings)
+def build_server(name: str = "example", *, host: str = "127.0.0.1") -> MCPServer:
+    """The synthetic test server. ``host`` must be loopback: the SDK's ASGI app factories
+    (``streamable_http_app``, ``sse_app``) take the host themselves and default to
+    ``127.0.0.1``, which every loopback test server uses."""
+    if host != "127.0.0.1":
+        raise ValueError("test servers run on 127.0.0.1 only")
+    server = MCPServer(name)
 
     @server.tool(description="Echo the text back.")
     def echo(text: str) -> str:
@@ -102,7 +120,9 @@ def build_server(name: str = "example", **settings: Any) -> FastMCP:
 
     @server.tool(description="Always fails.")
     def fail() -> str:
-        raise ValueError("synthetic tool failure")
+        # A ToolError's message reaches the client; since SDK 2.1 any other exception is
+        # reported only as a generic "Error executing tool".
+        raise ToolError("synthetic tool failure")
 
     @server.tool(description="Sleep, then answer.")
     async def slow(seconds: float) -> str:
@@ -124,11 +144,23 @@ def build_server(name: str = "example", **settings: Any) -> FastMCP:
             EmbeddedResource(
                 type="resource",
                 resource=TextResourceContents(
-                    uri=AnyUrl("file:///example/notes.txt"), mimeType="text/plain", text="notes"
+                    uri="file:///example/notes.txt", mime_type="text/plain", text="notes"
                 ),
             ),
-            ResourceLink(type="resource_link", uri=AnyUrl("https://example.com/doc"), name="doc"),
+            EmbeddedResource(
+                type="resource",
+                resource=BlobResourceContents(
+                    uri="file:///example/data.bin",
+                    mime_type="application/octet-stream",
+                    blob=base64.b64encode(b"zz-synthetic-blob-zz").decode("ascii"),
+                ),
+            ),
+            ResourceLink(type="resource_link", uri="https://example.com/doc", name="doc"),
         ]
+
+    @server.tool(description="A short audio clip.")
+    def sound() -> Audio:
+        return Audio(data=b"RIFF0000WAVEfmt ", format="wav")
 
     return server
 
@@ -138,23 +170,78 @@ Streams = tuple[Any, Any]
 
 def rejecting_server() -> Server[Any]:
     """A low-level server that answers every tool listing with a JSON-RPC error."""
-    server: Server[Any] = Server("rejecting")
 
-    @server.list_tools()  # type: ignore[no-untyped-call, untyped-decorator]
-    async def refuse() -> list[Any]:
-        raise SdkMcpError(
-            ErrorData(code=-32603, message="zz-stdio-env-secret-0000zz server-side detail")
+    async def refuse(
+        ctx: ServerRequestContext[Any], params: PaginatedRequestParams | None
+    ) -> ListToolsResult:
+        raise SdkMcpError(-32603, "zz-stdio-env-secret-0000zz server-side detail")
+
+    return Server("rejecting", on_list_tools=refuse)
+
+
+def erroring_server(code: int, *, ping: str = "answer") -> Server[Any]:
+    """A low-level server that lists one tool and answers every call to it with a
+    JSON-RPC error of ``code``, over a connection that stays healthy. ``ping`` is how it
+    meets a ping: ``answer``, ``hang`` (never answers) or ``refuse`` (method not found)."""
+
+    async def pinged(ctx: ServerRequestContext[Any], params: RequestParams | None) -> EmptyResult:
+        if ping == "hang":
+            await anyio.sleep_forever()
+        if ping == "refuse":
+            raise SdkMcpError(-32601, "no ping here")
+        return EmptyResult()
+
+    async def listing(
+        ctx: ServerRequestContext[Any], params: PaginatedRequestParams | None
+    ) -> ListToolsResult:
+        return ListToolsResult(tools=[_tool("refused")])
+
+    async def call(ctx: ServerRequestContext[Any], params: CallToolRequestParams) -> CallToolResult:
+        raise SdkMcpError(code, "zz-stdio-env-secret-0000zz application says no")
+
+    return Server("erroring", on_list_tools=listing, on_call_tool=call, on_ping=pinged)
+
+
+def _tool(name: str) -> Tool:
+    return Tool(name=name, description=f"Tool {name}.", input_schema={"type": "object"})
+
+
+def paging_server(pages: int, *, endless: bool = False) -> Server[Any]:
+    """A low-level server whose tool listing comes in ``pages`` pages, one tool on each,
+    linked by cursors; ``endless`` names a next page on every page."""
+
+    async def listing(
+        ctx: ServerRequestContext[Any], params: PaginatedRequestParams | None
+    ) -> ListToolsResult:
+        index = int(params.cursor) if params is not None and params.cursor else 0
+        last = index + 1 >= pages and not endless
+        return ListToolsResult(
+            tools=[_tool(f"page_{index}")], next_cursor=None if last else str(index + 1)
         )
 
-    return server
+    return Server("paging", on_list_tools=listing)
 
 
-def memory_transport(server: FastMCP | Server[Any]) -> Callable[[], Any]:
+def structured_server(structured: dict[str, Any]) -> Server[Any]:
+    """A low-level server whose one tool answers with structured content and no blocks."""
+
+    async def listing(
+        ctx: ServerRequestContext[Any], params: PaginatedRequestParams | None
+    ) -> ListToolsResult:
+        return ListToolsResult(tools=[_tool("report")])
+
+    async def call(ctx: ServerRequestContext[Any], params: CallToolRequestParams) -> CallToolResult:
+        return CallToolResult(content=[], structured_content=structured)
+
+    return Server("structured", on_list_tools=listing, on_call_tool=call)
+
+
+def memory_transport(server: MCPServer | Server[Any]) -> Callable[[], Any]:
     """A transport opener for ``McpConnection`` that runs ``server`` in-process."""
 
     @asynccontextmanager
     async def opener() -> AsyncIterator[Streams]:
-        lowlevel = server._mcp_server if isinstance(server, FastMCP) else server
+        lowlevel = server._lowlevel_server if isinstance(server, MCPServer) else server
         async with (
             create_client_server_memory_streams() as (client, srv),
             anyio.create_task_group() as group,
@@ -192,7 +279,7 @@ def failing_transport(error: BaseException) -> Callable[[], Any]:
     return opener
 
 
-def hanging_transport(server: FastMCP) -> Callable[[], Any]:
+def hanging_transport(server: MCPServer) -> Callable[[], Any]:
     """A working transport whose exit never finishes unless it is cancelled."""
     inner = memory_transport(server)
 
@@ -207,7 +294,7 @@ def hanging_transport(server: FastMCP) -> Callable[[], Any]:
     return opener
 
 
-def stubborn_transport(server: FastMCP, hold: float) -> Callable[[], Any]:
+def stubborn_transport(server: MCPServer, hold: float) -> Callable[[], Any]:
     """A working transport whose exit takes ``hold`` seconds and ignores cancellation."""
     inner = memory_transport(server)
 

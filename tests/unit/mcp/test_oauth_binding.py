@@ -17,7 +17,7 @@ import weakref
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from pydantic import ValidationError
 
@@ -40,23 +40,23 @@ def evil_server() -> FakeAuthServer:
     return FakeAuthServer(issuer=EVIL, _counter=itertools.count(9000))
 
 
-def routed(*servers: FakeAuthServer, delay: float = 0.0) -> httpx.MockTransport:
+def routed(*servers: FakeAuthServer, delay: float = 0.0) -> httpx2.MockTransport:
     """One transport for several fake servers, each answering for its own issuer's host."""
 
-    async def handle(request: httpx.Request) -> httpx.Response:
+    async def handle(request: httpx2.Request) -> httpx2.Response:
         if delay:
             await asyncio.sleep(delay)  # every request yields, so callers interleave
         host = request.url.host
         for server in servers:
-            if httpx.URL(server.issuer).host == host and server is not servers[0]:
+            if httpx2.URL(server.issuer).host == host and server is not servers[0]:
                 return server.handle(request)
         return servers[0].handle(request)
 
-    return httpx.MockTransport(handle)
+    return httpx2.MockTransport(handle)
 
 
 def make(
-    transport: httpx.AsyncBaseTransport,
+    transport: httpx2.AsyncBaseTransport,
     store: Any,
     clock: Clock,
     hook: Any = None,
@@ -194,7 +194,7 @@ class SharedBacking:
 class TestSharedRefresh:
     async def _signed_in(
         self, server: FakeAuthServer, store: Any, clock: Clock
-    ) -> tuple[httpx.MockTransport, Any]:
+    ) -> tuple[httpx2.MockTransport, Any]:
         transport = routed(server, delay=0.05)
         stale = await make(transport, store, clock, hook=server.sign_in_hook()).access_token()
         return transport, stale
@@ -355,21 +355,21 @@ class TestRefreshedLeavesNothingUnusable:
 class TestOAuthRequests:
     async def test_a_redirect_from_the_token_endpoint_is_not_followed(self) -> None:
         server = FakeAuthServer()
-        elsewhere: list[httpx.Request] = []
+        elsewhere: list[httpx2.Request] = []
 
-        def handle(request: httpx.Request) -> httpx.Response:
+        def handle(request: httpx2.Request) -> httpx2.Response:
             if request.url.host == "elsewhere.example.org":
                 elsewhere.append(request)
-                return httpx.Response(200, json={"access_token": "x", "token_type": "Bearer"})
+                return httpx2.Response(200, json={"access_token": "x", "token_type": "Bearer"})
             if request.url.path == "/token":
                 server.requests.append(request)
-                return httpx.Response(
+                return httpx2.Response(
                     307, headers={"Location": "https://elsewhere.example.org/token"}
                 )
             return server.handle(request)
 
         oauth = make(
-            httpx.MockTransport(handle), MemoryTokenStore(), Clock(), hook=server.sign_in_hook()
+            httpx2.MockTransport(handle), MemoryTokenStore(), Clock(), hook=server.sign_in_hook()
         )
         with pytest.raises(McpAuthError) as caught:
             await oauth.access_token()
@@ -395,7 +395,7 @@ class TestOAuthEnvironment:
     async def test_environment_proxies_are_ignored_on_the_oauth_path(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # httpx 0.28 reads no .netrc on its own (only an explicit NetRCAuth does), so
+        # httpx2 reads no .netrc on its own (only an explicit NetRCAuth does), so
         # the proxy variables are what trust_env would let the environment change.
         origin = f"http://127.0.0.1:{port('auth')}"
         server = FakeAuthServer(resource=f"{origin}/mcp", issuer=origin)

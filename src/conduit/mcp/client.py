@@ -17,20 +17,27 @@ Credentials are resolved through the product's ``SecretResolver`` on every
 
 Environment and logging (D0037):
 
-- An HTTP server is reached with an httpx client conduit builds, with
-  ``trust_env`` off unless ``use_environment_proxies`` is set, so ``HTTP_PROXY``,
-  ``SSL_CERT_FILE`` and ``.netrc`` cannot reroute requests or add credentials.
-  conduit's httpx client never follows a redirect. The SDK's streamable HTTP
-  transport follows one itself only when it keeps the method and stays on the
-  server's origin; the SSE transport and the OAuth requests follow none.
+- An HTTP server is reached with an httpx2 client conduit builds (httpx2 is the
+  SDK's HTTP library from MCP SDK 2.0), with ``trust_env`` off unless
+  ``use_environment_proxies`` is set, so ``HTTP_PROXY``, ``SSL_CERT_FILE`` and
+  ``.netrc`` cannot reroute requests or add credentials. httpx2 checks
+  certificates against the operating system's trust store. conduit's httpx2
+  client never follows a redirect. The SDK's streamable HTTP and SSE transports
+  follow one themselves only when it stays on the server's origin; the OAuth
+  requests follow none.
 - A stdio server gets the SDK's small default environment (``PATH`` and the user's
   profile variables), not the parent's whole environment, plus the configured
   ``env`` and ``secret_env``.
-- The SDK reads no environment variable on the client side. Its own loggers
+- The SDK reads no environment variable on the client side. Its transport loggers
   (``mcp.client.*``) record message content, tool arguments and results included,
   at ``DEBUG``; a product that must not log content keeps the ``mcp`` logger above
-  ``DEBUG``. conduit's own logger (``conduit.mcp``) never records content, URLs
-  with their query, or credentials.
+  ``DEBUG``. The SDK's session logs under ``client`` (tool names, at ``WARNING``).
+  conduit's own logger (``conduit.mcp``) never records content, URLs with their
+  query, or credentials.
+- The SDK makes an OpenTelemetry client span for every request (the method name
+  and request id, no content) and sends the W3C trace context to the server in the
+  request's ``_meta``. Neither does anything unless the product configures an
+  OpenTelemetry tracer provider.
 """
 
 from __future__ import annotations
@@ -44,18 +51,20 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Self
 
-import httpx
+import httpx2
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
-from mcp.shared.exceptions import McpError as SdkMcpError
+from mcp.shared.exceptions import MCPError as SdkMcpError
 from mcp.types import (
+    CONNECTION_CLOSED,
     AudioContent,
     BlobResourceContents,
     CallToolResult,
     EmbeddedResource,
     ImageContent,
+    PaginatedRequestParams,
     ResourceLink,
     TextContent,
     TextResourceContents,
@@ -83,7 +92,7 @@ __all__ = ["CallResult", "McpConnection", "RemoteTool", "TransportOpener"]
 logger = logging.getLogger("conduit.mcp")
 
 #: Opens a transport: an async context manager yielding the read and write streams
-#: first (the SDK's transports yield two or three items). For in-process servers and
+#: first (the SDK's transports yield exactly those two). For in-process servers and
 #: for tests; ``McpConnection`` builds the stdio, streamable HTTP and SSE openers itself.
 TransportOpener = Callable[[], AbstractAsyncContextManager[tuple[Any, ...]]]
 
@@ -125,14 +134,36 @@ def _leaves(error: BaseException) -> list[BaseException]:
     return [error]
 
 
-def _classify_connect(error: BaseException) -> _ConnectFailed:
+_REFUSED = (401, 403)
+
+
+class _LastStatus:
+    """The status of the last HTTP response a connection attempt received.
+
+    The SDK's streamable HTTP transport (from SDK 2.0) answers a refused request with a
+    JSON-RPC error rather than raising the HTTP status, so a refused credential is read
+    here, from conduit's own HTTP client, instead.
+    """
+
+    __slots__ = ("code",)
+
+    def __init__(self) -> None:
+        self.code: int | None = None
+
+    async def record(self, response: httpx2.Response) -> None:
+        self.code = response.status_code
+
+
+def _classify_connect(error: BaseException, status: _LastStatus | None = None) -> _ConnectFailed:
     leaves = _leaves(error)
     for leaf in leaves:
         if isinstance(leaf, McpAuthError):
             return _ConnectFailed(McpFailure.AUTH, leaf.reason)
     for leaf in leaves:
-        if isinstance(leaf, httpx.HTTPStatusError) and leaf.response.status_code in (401, 403):
+        if isinstance(leaf, httpx2.HTTPStatusError) and leaf.response.status_code in _REFUSED:
             return _ConnectFailed(McpFailure.AUTH, OAuthFailure.TOKEN_REJECTED)
+    if status is not None and status.code in _REFUSED:
+        return _ConnectFailed(McpFailure.AUTH, OAuthFailure.TOKEN_REJECTED)
     return _ConnectFailed(McpFailure.CONNECT)
 
 
@@ -144,28 +175,29 @@ def render_content(result: CallToolResult) -> str:
             parts.append(item.text)
         elif isinstance(item, ImageContent | AudioContent):
             kind = "image" if isinstance(item, ImageContent) else "audio"
-            parts.append(f"[{kind} content omitted: {item.mimeType}, {len(item.data)} characters]")
+            parts.append(f"[{kind} content omitted: {item.mime_type}, {len(item.data)} characters]")
         elif isinstance(item, EmbeddedResource):
             resource = item.resource
             if isinstance(resource, TextResourceContents):
                 parts.append(resource.text)
             elif isinstance(resource, BlobResourceContents):
                 parts.append(
-                    f"[binary resource omitted: {resource.mimeType or 'unknown type'}, "
+                    f"[binary resource omitted: {resource.mime_type or 'unknown type'}, "
                     f"{len(resource.blob)} characters]"
                 )
         elif isinstance(item, ResourceLink):
             parts.append(f"[resource link: {item.uri}]")
         else:  # pragma: no cover - every content type the SDK defines is handled above
             parts.append("[unsupported content omitted]")
-    if not parts and result.structuredContent is not None:
-        parts.append(json.dumps(result.structuredContent, sort_keys=True, ensure_ascii=False))
+    if not parts and result.structured_content is not None:
+        parts.append(json.dumps(result.structured_content, sort_keys=True, ensure_ascii=False))
     return "\n".join(parts)
 
 
 def _lister(cursor: str | None) -> Callable[[ClientSession], Any]:
     def make(session: ClientSession) -> Any:
-        return session.list_tools(cursor=cursor)
+        params = PaginatedRequestParams(cursor=cursor) if cursor else None
+        return session.list_tools(params=params)
 
     return make
 
@@ -177,9 +209,9 @@ class McpConnection:
     only in the product's ``TokenStore``, and ``sign_in`` runs the interactive
     sign-in when there are none (without it, a server with no usable tokens is
     refused with ``OAuthFailure.SIGN_IN_REQUIRED``). ``transport`` replaces the
-    configured transport (an in-process server); ``http_transport`` replaces
-    httpx's network transport for every HTTP request this connection makes (custom
-    networking, or tests).
+    configured transport (an in-process server); ``http_transport`` (an httpx2
+    transport, the SDK's HTTP library) replaces httpx2's network transport for every
+    HTTP request this connection makes (custom networking, or tests).
     """
 
     def __init__(
@@ -190,7 +222,7 @@ class McpConnection:
         tokens: TokenStore | None = None,
         sign_in: SignInHook | None = None,
         transport: TransportOpener | None = None,
-        http_transport: httpx.AsyncBaseTransport | None = None,
+        http_transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
         self.settings = settings
         self._secrets = secrets
@@ -261,18 +293,23 @@ class McpConnection:
         return {}
 
     def _http_client(
-        self, headers: Mapping[str, str] | None, auth: httpx.Auth | None, timeout: httpx.Timeout
-    ) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        self,
+        headers: Mapping[str, str] | None,
+        auth: httpx2.Auth | None,
+        timeout: httpx2.Timeout,
+        status: _LastStatus,
+    ) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(
             headers=dict(headers or {}),
             auth=auth,
             timeout=timeout,
             follow_redirects=False,
             trust_env=self.settings.use_environment_proxies,
             transport=self._http_transport,
+            event_hooks={"response": [status.record]},
         )
 
-    async def _opener(self) -> TransportOpener:
+    async def _opener(self, status: _LastStatus) -> TransportOpener:
         """The configured transport, with its credentials resolved now."""
         transport = self.settings.transport
         if isinstance(transport, StdioTransport):
@@ -285,22 +322,22 @@ class McpConnection:
             return lambda: stdio_client(params)
 
         headers = await self._headers()
-        auth: httpx.Auth | None = None
+        auth: httpx2.Auth | None = None
         if self._oauth is not None:
             await self._oauth.access_token(interactive=True)
             auth = self._oauth.httpx_auth()
-        timeout = httpx.Timeout(self.settings.connect_timeout, read=_STREAM_READ_TIMEOUT)
+        timeout = httpx2.Timeout(self.settings.connect_timeout, read=_STREAM_READ_TIMEOUT)
         url = transport.url
 
         if isinstance(transport, SseTransport):
 
             def factory(
                 headers: dict[str, str] | None = None,
-                timeout: httpx.Timeout | None = None,
-                auth: httpx.Auth | None = None,
-            ) -> httpx.AsyncClient:
+                timeout: httpx2.Timeout | None = None,
+                auth: httpx2.Auth | None = None,
+            ) -> httpx2.AsyncClient:
                 return self._http_client(
-                    headers, auth, timeout or httpx.Timeout(self.settings.connect_timeout)
+                    headers, auth, timeout or httpx2.Timeout(self.settings.connect_timeout), status
                 )
 
             return lambda: sse_client(
@@ -315,7 +352,7 @@ class McpConnection:
         @asynccontextmanager
         async def streamable() -> AsyncIterator[tuple[Any, ...]]:
             async with (
-                self._http_client(headers, auth, timeout) as client,
+                self._http_client(headers, auth, timeout, status) as client,
                 streamable_http_client(url, http_client=client) as streams,
             ):
                 yield streams
@@ -328,13 +365,15 @@ class McpConnection:
             if self.connected:
                 return
             await self._end()
-            opener = self._transport if self._transport is not None else await self._opener()
+            status = _LastStatus()
+            opener = self._transport if self._transport is not None else await self._opener(status)
             loop = asyncio.get_running_loop()
             ready: asyncio.Future[None] = loop.create_future()
             self._stop = asyncio.Event()
             self._lost = asyncio.Event()
             self._runner = loop.create_task(
-                self._run(opener, ready, self._stop, self._lost), name=f"conduit-mcp-{self.name}"
+                self._run(opener, ready, self._stop, self._lost, status),
+                name=f"conduit-mcp-{self.name}",
             )
             failed: _ConnectFailed | None = None
             try:
@@ -362,6 +401,7 @@ class McpConnection:
         ready: asyncio.Future[None],
         stop: asyncio.Event,
         lost: asyncio.Event,
+        status: _LastStatus,
     ) -> None:
         """Own one connection from opening to closing (see the module docstring)."""
         try:
@@ -380,7 +420,7 @@ class McpConnection:
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException as error:  # anyio groups included; reported, never chained
-            failed = _classify_connect(error)
+            failed = _classify_connect(error, status)
             if not ready.done():
                 ready.set_exception(failed)
             elif not stop.is_set():
@@ -434,6 +474,23 @@ class McpConnection:
 
     # -- Requests --------------------------------------------------------------------
 
+    async def _gone(self, session: ClientSession) -> bool:
+        """Whether the connection really ended, once the SDK has answered CONNECTION_CLOSED.
+
+        That code (-32000) is also the first of JSON-RPC's server-error range, so a live
+        server may answer with it. A ping, bounded by the close timeout, tells them
+        apart: a session the SDK has shut (closing, or its server gone) refuses it at once
+        with the same code, a live server answers it, and one that cannot answer in time
+        is treated as gone.
+        """
+        try:
+            await asyncio.wait_for(session.send_ping(), timeout=self.settings.close_timeout)
+        except SdkMcpError as error:
+            return error.code == CONNECTION_CLOSED
+        except Exception:  # no answer in time, or a broken transport
+            return True
+        return False
+
     async def _request(self, make: Callable[[ClientSession], Any], timeout: float) -> Any:
         session = self._session
         lost = self._lost
@@ -461,10 +518,18 @@ class McpConnection:
         else:
             try:
                 return work.result()
-            except SdkMcpError:
-                failure = McpFailure.REJECTED
+            except SdkMcpError as error:
+                # The SDK answers a request its closing connection abandoned with
+                # CONNECTION_CLOSED (from SDK 2.0); a live server may send the same code.
+                if lost.is_set():
+                    failure = McpFailure.CLOSED
+                elif error.code != CONNECTION_CLOSED:
+                    failure = McpFailure.REJECTED
             except Exception:
                 failure = McpFailure.CLOSED if lost.is_set() else McpFailure.PROTOCOL
+        if failure is None:  # decided outside the handler, so nothing is chained
+            gone = await self._gone(session)
+            failure = McpFailure.CLOSED if gone else McpFailure.REJECTED
         raise McpError(self.name, failure)
 
     async def list_tools(self) -> tuple[RemoteTool, ...]:
@@ -478,10 +543,10 @@ class McpConnection:
                     RemoteTool(
                         name=tool.name,
                         description=tool.description or "",
-                        input_schema=dict(tool.inputSchema or {}),
+                        input_schema=dict(tool.input_schema or {}),
                     )
                 )
-            cursor = page.nextCursor
+            cursor = page.next_cursor
             if not cursor:
                 return tuple(found)
         raise McpError(self.name, McpFailure.PROTOCOL, "too many pages of tools")
@@ -491,4 +556,4 @@ class McpConnection:
         result = await self._request(
             lambda s: s.call_tool(name, dict(arguments)), self.settings.call_timeout
         )
-        return CallResult(is_error=bool(result.isError), text=render_content(result))
+        return CallResult(is_error=bool(result.is_error), text=render_content(result))

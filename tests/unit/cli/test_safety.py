@@ -51,9 +51,9 @@ class TestHostileTextIsShownSafely:
         server.write_text(
             textwrap.dedent(
                 f"""\
-                from mcp.server.fastmcp import FastMCP
+                from mcp.server.mcpserver import MCPServer
 
-                server = FastMCP("hostile")
+                server = MCPServer("hostile")
 
 
                 @server.tool(description={description!r})

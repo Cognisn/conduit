@@ -1,6 +1,6 @@
 # MCP servers
 
-The `mcp` extra adds a client for Model Context Protocol servers, built on the official MCP Python SDK. A product connects to the servers it configures, and their tools join its tool catalogue for the task classes it grants them to, so the agent runner calls them like any other tool: under the run's budgets and approvals, with results framed as untrusted content and an event for every call.
+The `mcp` extra adds a client for Model Context Protocol servers, built on the official MCP Python SDK (2.3 or later, below 3). A product connects to the servers it configures, and their tools join its tool catalogue for the task classes it grants them to, so the agent runner calls them like any other tool: under the run's budgets and approvals, with results framed as untrusted content and an event for every call.
 
 ```sh
 pip install "cognisn-conduit[mcp]"
@@ -16,7 +16,7 @@ pip install "cognisn-conduit[mcp]"
 | `streamable_http` | The streamable HTTP transport at `url`. |
 | `sse` | The older HTTP with server-sent events transport at `url`. |
 
-HTTP URLs must be https; plain http is accepted on a loopback host only. The HTTP client ignores proxy variables, certificate settings and `.netrc` in the environment unless `use_environment_proxies` is set.
+HTTP URLs must be https; plain http is accepted on a loopback host only. The HTTP client is httpx2, the SDK's own HTTP library since SDK 2.0, and it checks server certificates against the operating system's trust store. It ignores proxy variables, certificate settings and `.netrc` in the environment unless `use_environment_proxies` is set. conduit's own requests never follow a redirect; the SDK's streamable HTTP and SSE transports follow one only when it stays on the server's origin. A custom `http_transport` given to `McpConnection` is an httpx2 transport.
 
 | Authentication | Sends |
 |---|---|
@@ -52,13 +52,13 @@ assert tickets.token_key == "mcp:tickets"
 
 `McpConnection` is one server: `connect`, `list_tools`, `call_tool` and `close` (or `async with`). `McpToolBridge` turns the tools of one or more connections into catalogue tools named `<server>__<tool>`, and gives the runner an executor that sends their calls to the right server and every other call to the product's own executor.
 
-This example runs a small MCP server over stdio, written with the SDK's `FastMCP`, and lets an agent call its tool:
+This example runs a small MCP server over stdio, written with the SDK's `MCPServer` (named `FastMCP` before SDK 2.0), and lets an agent call its tool:
 
 ```python
 Path("ticket_server.py").write_text(
-    "from mcp.server.fastmcp import FastMCP\n"
+    "from mcp.server.mcpserver import MCPServer\n"
     "\n"
-    "server = FastMCP('tickets')\n"
+    "server = MCPServer('tickets')\n"
     "\n"
     "@server.tool(description='Count open tickets for a host.')\n"
     "def open_tickets(host: str) -> str:\n"
@@ -179,6 +179,16 @@ assert call.outcome == "ok"
 Combine MCP tools with the product's own in one catalogue: `ToolCatalogue.from_tools([*product_tools, *await bridge.tools()])`. Each MCP tool's description is the server's, so it is untrusted; the bridge prefixes it with the server's name and caps its length. Server-supplied tool descriptions, and the descriptions and titles in their input schemas, reach the model through `sanitise_untrusted`; a tool whose other schema text (property names, enum values, defaults, patterns) holds hidden characters (control, format and surrogate characters, default-ignorable characters such as U+034F, U+3164 or a variation selector, and line or paragraph separators: the characters `is_hidden_character` reports) or frame markers is left out, with a warning. Results are framed once, by the bridge, as the core's untrusted blocks: `<<UNTRUSTED source="mcp" server="<server>" tool="<tool>" nonce="...">>` ... `<<END UNTRUSTED nonce="...">>`, capped at `max_result_chars`; `FRAMING_NOTE` describes them (see [Untrusted content](integration.md#untrusted-content)). Give `McpTool`s only to `McpToolBridge.executor()`. Each call emits an `McpCallEvent` (server, tool, outcome, duration, and the arguments and result as captured content under the capture policy).
 
 From sync code, connect on the facade's loop (`loop.run(connection.connect())`) and close the same way, as [the sync facade](integration.md#the-sync-facade) explains.
+
+A tool the server reports as failed is a result with `is_error` set, not an exception. A server written with the SDK (2.1 or later) shows the client the message of a `ToolError` only; any other exception in a tool reaches the client as "Error executing tool <name>".
+
+A request the server answers with a JSON-RPC error is `McpFailure.REJECTED`, and the connection stays open. That includes code -32000, which the SDK also uses for a request its closed connection abandoned. conduit reports `McpFailure.CLOSED` only when the connection has really ended: it was lost, or a ping sent on it is refused by the SDK as closed or goes unanswered within `close_timeout`. A server that answers the ping is live, and the call is `McpFailure.REJECTED`. On streamable HTTP, a credential the server stops accepting part-way through a session (a 401 or 403 on a request after connecting) fails that call at once as `McpFailure.REJECTED`, since SDK 2.0 turns the refusal into a JSON-RPC error; under SDK 1.x the call waited for its timeout. Reconnect to sign in again or to use a fresh credential.
+
+### Logging and tracing
+
+conduit's own logger (`conduit.mcp`) never records content, credentials or URLs with their query. The SDK's transport loggers (`mcp.client.*`) record messages, tool arguments and results included, at `DEBUG`: where content must not be logged, keep the `mcp` logger above `DEBUG`. The SDK's session logs under `client`, naming tools, at `WARNING`.
+
+The SDK makes an OpenTelemetry span for every request it sends (the method name and request id, no content) and sends the W3C trace context to the server in the request's `_meta`. Neither does anything unless the product configures an OpenTelemetry tracer provider; once it does, its trace identifiers reach the MCP servers it calls.
 
 ## OAuth sign-in
 

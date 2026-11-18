@@ -292,7 +292,7 @@ class McpServerSettings(SettingsModel):
     call_timeout: float = _timeout(120.0)
     list_timeout: float = _timeout(30.0)
     close_timeout: float = _timeout(10.0)
-    #: Read proxy, CA bundle and ``.netrc`` settings from the environment (httpx's
+    #: Read proxy, CA bundle and ``.netrc`` settings from the environment (httpx2's
     #: ``trust_env``). Off by default, so the environment cannot add credentials or
     #: reroute requests behind the settings' back.
     use_environment_proxies: bool = False

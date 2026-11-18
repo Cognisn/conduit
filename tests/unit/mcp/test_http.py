@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
+from starlette.routing import Mount
 
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.mcp.client import McpConnection
@@ -33,6 +36,11 @@ def require_header(app: Any, header: str, value: str, seen: list[str]) -> Any:
         await app(scope, receive, send)
 
     return guarded
+
+
+def refusing(status: int) -> Starlette:
+    """An app that answers every request with ``status``."""
+    return Starlette(routes=[Mount("/", app=PlainTextResponse("refused", status_code=status))])
 
 
 @pytest.fixture(scope="module")
@@ -110,6 +118,64 @@ class TestStreamableHttp:
         assert caught.value.__cause__ is None
         assert caught.value.__context__ is None
 
+    @pytest.mark.parametrize(
+        ("status", "failure"),
+        [(401, McpFailure.AUTH), (403, McpFailure.AUTH), (500, McpFailure.CONNECT)],
+    )
+    async def test_the_status_that_refuses_a_connection_names_the_failure(
+        self, status: int, failure: McpFailure
+    ) -> None:
+        # Since SDK 2.0 the streamable HTTP transport turns a refused initialise into a
+        # JSON-RPC error, so the status is read from conduit's own HTTP client.
+        with serving(refusing(status), "status"):
+            settings = http_settings(
+                transport={
+                    "type": "streamable_http",
+                    "url": f"http://127.0.0.1:{port('status')}/mcp",
+                },
+                connect_timeout=5,
+            )
+            with pytest.raises(McpError) as caught:
+                await McpConnection(settings, secrets=SECRETS).connect()
+        assert caught.value.failure is failure
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+
+    @pytest.mark.parametrize("status", [401, 403])
+    async def test_a_credential_refused_mid_session_rejects_the_call_at_once(
+        self, status: int
+    ) -> None:
+        # From SDK 2.0 a refused request on an open streamable HTTP session comes back as
+        # a JSON-RPC error, so the call is rejected at once; under SDK 1.x it ran to the
+        # call timeout.
+        refused = {"now": False}
+        inner = build_server("revoking", host="127.0.0.1").streamable_http_app()
+
+        async def revoking(scope: dict[str, Any], receive: Any, send: Any) -> None:
+            if scope["type"] == "http" and refused["now"]:
+                await PlainTextResponse("revoked", status_code=status)(scope, receive, send)
+                return
+            await inner(scope, receive, send)
+
+        with serving(revoking, "status"):
+            settings = http_settings(
+                transport={
+                    "type": "streamable_http",
+                    "url": f"http://127.0.0.1:{port('status')}/mcp",
+                },
+                call_timeout=30,
+            )
+            async with McpConnection(settings, secrets=SECRETS) as conn:
+                assert (await conn.call_tool("echo", {"text": "before"})).text == "before"
+                refused["now"] = True
+                started = time.monotonic()
+                with pytest.raises(McpError) as caught:
+                    await conn.call_tool("echo", {"text": "after"})
+                assert time.monotonic() - started < 10  # not the 30 second call timeout
+        assert caught.value.failure is McpFailure.REJECTED
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+
     async def test_a_server_that_is_not_there_is_a_connect_failure(self) -> None:
         settings = http_settings(
             transport={
@@ -150,6 +216,16 @@ class TestSse:
             assert (await conn.call_tool("add", {"a": 20, "b": 22})).text == "42"
         assert key_seen
         assert set(key_seen) == {API_KEY}
+
+    async def test_a_wrong_key_is_an_auth_failure(self, sse_server: LoopbackServer) -> None:
+        settings = sse_settings(
+            auth={"type": "api_key", "key": "secret://wrong", "header": "X-Example-Key"}
+        )
+        with pytest.raises(McpError) as caught:
+            await McpConnection(settings, secrets=SECRETS).connect()
+        assert caught.value.failure is McpFailure.AUTH
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
 
 
 class TestCredentialsStayOut:

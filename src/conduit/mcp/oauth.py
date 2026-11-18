@@ -56,7 +56,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
-import httpx
+import httpx2
 from pydantic import SecretStr
 
 from conduit.core.backends import TokenSet, TokenStore
@@ -213,7 +213,7 @@ class OAuthClient:
         store: TokenStore,
         sign_in: SignInHook | None,
         secrets: SecretResolver,
-        http_transport: httpx.AsyncBaseTransport | None = None,
+        http_transport: httpx2.AsyncBaseTransport | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         if not isinstance(settings.auth, OAuthAuth):
@@ -271,9 +271,9 @@ class OAuthClient:
 
     # -- HTTP ------------------------------------------------------------------------
 
-    def _http(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
-            timeout=httpx.Timeout(self._settings.connect_timeout),
+    def _http(self) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(
+            timeout=httpx2.Timeout(self._settings.connect_timeout),
             follow_redirects=False,
             trust_env=self._settings.use_environment_proxies,
             transport=self._http_transport,
@@ -289,7 +289,7 @@ class OAuthClient:
         **kwargs: Any,
     ) -> tuple[int, dict[str, Any] | None]:
         failed = False
-        response: httpx.Response | None = None
+        response: httpx2.Response | None = None
         sent = {"Accept": "application/json", **(headers or {})}
         try:
             async with self._http() as http:
@@ -673,24 +673,24 @@ class OAuthClient:
         async with self._lock():
             await self._delete(self._settings.token_key)
 
-    def httpx_auth(self) -> httpx.Auth:
-        """An ``httpx.Auth`` adding the bearer token, refreshing once on a 401."""
+    def httpx_auth(self) -> httpx2.Auth:
+        """An ``httpx2.Auth`` adding the bearer token, refreshing once on a 401."""
         return _BearerFlow(self)
 
 
-class _BearerFlow(httpx.Auth):
+class _BearerFlow(httpx2.Auth):
     def __init__(self, oauth: OAuthClient) -> None:
         self._oauth = oauth
 
     def __repr__(self) -> str:
         return f"_BearerFlow({self._oauth!r})"
 
-    def sync_auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response]:
+    def sync_auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response]:
         raise RuntimeError("the MCP OAuth flow is async only")
 
     async def async_auth_flow(
-        self, request: httpx.Request
-    ) -> AsyncGenerator[httpx.Request, httpx.Response]:
+        self, request: httpx2.Request
+    ) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         token = await self._oauth.access_token(interactive=False)
         request.headers["Authorization"] = f"Bearer {token.get_secret_value()}"
         response = yield request
