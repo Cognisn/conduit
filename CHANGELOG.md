@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0rc4] - 2026-11-18
+
+Fourth release candidate. Wave 12 moves the MCP client to MCP Python SDK 2.x (`build/0.1.0-mcp-v2`).
+
+### Changed
+
+- The `mcp` extra, and the `cli` extra through it, now requires `mcp>=2.3,<3` (was `mcp>=1.30,<2`). It brings mcp-types (MIT), httpx2 and httpcore2 (BSD-3-Clause), truststore (MIT) and opentelemetry-api (Apache-2.0), and no longer installs httpx, httpx-sse, httpcore, certifi, pydantic-settings or python-dotenv.
+- `conduit.mcp` uses httpx2, which the SDK's HTTP transports require. `McpConnection` and `OAuthClient` take an httpx2 transport as `http_transport`, and `OAuthClient.httpx_auth()` returns an `httpx2.Auth`. HTTPS certificates are checked against the operating system's trust store. The rest of the public API, the transports (stdio, streamable HTTP and SSE) and the failure mapping are unchanged.
+- An MCP server's JSON-RPC error is `McpFailure.REJECTED` with the connection left open, including code -32000, which the SDK also uses for a request its closed connection abandoned. conduit reports `McpFailure.CLOSED` only when the connection has really ended (lost, or a ping on it refused as closed or unanswered within `close_timeout`).
+- On streamable HTTP, a 401 or 403 part-way through a session fails the call at once as `McpFailure.REJECTED`; under SDK 1.x it waited for the call timeout. A 401 or 403 while connecting is still `McpFailure.AUTH`.
+- The SSE transport follows same-origin redirects, as SDK 2.x does.
+- The import tripwire confines httpx2 and mcp_types to `conduit.mcp`.
+- The MCP guide names the SDK range, httpx2, the SDK's loggers and its OpenTelemetry spans, which carry the trace context to MCP servers once a product configures OpenTelemetry.
+
 ## [0.1.0rc3] - 2026-11-16
 
 Third release candidate. Wave 11 adds model discovery (`feat/0.1.0-model-discovery`): a product can list the models each configured provider reaches and see which the catalogue declares and allows.
