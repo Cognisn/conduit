@@ -12,6 +12,7 @@ Fourth release candidate. Wave 12 moves the MCP client to MCP Python SDK 2.x (`b
 
 ### Changed
 
+- The README's status and installation notes name 0.1.0rc4 as the release candidate on PyPI.
 - The `mcp` extra, and the `cli` extra through it, now requires `mcp>=2.3,<3` (was `mcp>=1.30,<2`). It brings mcp-types (MIT), httpx2 and httpcore2 (BSD-3-Clause), truststore (MIT) and opentelemetry-api (Apache-2.0), and no longer installs httpx, httpx-sse, httpcore, certifi, pydantic-settings or python-dotenv.
 - `conduit.mcp` uses httpx2, which the SDK's HTTP transports require. `McpConnection` and `OAuthClient` take an httpx2 transport as `http_transport`, and `OAuthClient.httpx_auth()` returns an `httpx2.Auth`. HTTPS certificates are checked against the operating system's trust store. The rest of the public API, the transports (stdio, streamable HTTP and SSE) and the failure mapping are unchanged.
 - An MCP server's JSON-RPC error is `McpFailure.REJECTED` with the connection left open, including code -32000, which the SDK also uses for a request its closed connection abandoned. conduit reports `McpFailure.CLOSED` only when the connection has really ended (lost, or a ping on it refused as closed or unanswered within `close_timeout`).
