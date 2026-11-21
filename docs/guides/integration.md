@@ -304,6 +304,8 @@ assert "outside the allowed regions" in asyncio.run(
 
 The same profile is allowed when the provider routes it only to Regions the policy names, and refused when its listing adds one more: the decision follows the listing, never a stale catalogue. A provider built outside `start` (with `ProviderRegistry.build` and no assignments) is held to the registry's policy on every call instead, on the catalogue's declared residency.
 
+A connection can narrow the policy further with a Region choice: the person's choice of where that provider's requests may be processed, checked after the policy and never instead of it. [Providers](providers.md#choosing-regions) lists each adapter's choice, how it is validated, and `ProviderRegistry.regions` for showing the choices.
+
 Residency in conduit covers where the model provider processes a request. Where the product stores transcripts and events is the product's decision, through its own backends.
 
 ## Discovering the models a provider reaches
