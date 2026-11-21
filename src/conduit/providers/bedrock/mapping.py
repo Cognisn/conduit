@@ -39,7 +39,7 @@ same payload shape as a reasoning block (``reasoningText``, no signature) but it
 state type, ``thinking_text``, and the answer text carries neither the tags nor what
 they hold. A span still open when its block ends (a reply cut off by its token limit) is
 reasoning, not answer text. Whitespace after a closing tag is dropped (one space is kept
-where answer text before the span ended in a word), as is the span's own leading and
+where answer text before the span did not end in whitespace), as is the span's own leading and
 trailing whitespace, and an empty span reports nothing. Streamed text holds back only a
 suffix that could begin ``<thinking>``, and releases it as text if the block ends first.
 Other models' text is never parsed.
@@ -290,13 +290,19 @@ def _messages(messages: Sequence[Message], points: _CachePoints) -> list[dict[st
 
     Bedrock refuses an empty message and needs the roles to alternate, so the user
     messages either side of a left-out turn become one. Messages the caller sent in the
-    same role are passed on as they are.
+    same role are passed on as they are. A turn left with only cache points is left out in
+    the same way.
     """
     out: list[dict[str, Any]] = []
     left_out = False
     for message in messages:
         mapped = _message(message, points)
-        if message.content and not mapped["content"]:
+        if message.content and all("cachePoint" in b for b in mapped["content"]):
+            # Nothing but cache points is not valid content either: leave the turn out
+            # and carry its points to the end of the message before it, which keeps the
+            # cached prefix, unless a point is already there.
+            if out and not any("cachePoint" in b for b in out[-1]["content"][-1:]):
+                out[-1]["content"].extend(mapped["content"][:1])
             left_out = True
             continue
         if left_out and out and out[-1]["role"] == mapped["role"]:

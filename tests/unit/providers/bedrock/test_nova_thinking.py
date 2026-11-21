@@ -23,6 +23,7 @@ from conduit.core.streaming import (
     ToolCallStarted,
 )
 from conduit.core.types import (
+    CacheBreakpoint,
     Message,
     ModelRequest,
     ProviderStateBlock,
@@ -31,6 +32,7 @@ from conduit.core.types import (
     Usage,
 )
 from conduit.providers.bedrock.mapping import (
+    CACHE_POINT,
     StreamMapper,
     build_converse_request,
     events_from_converse_response,
@@ -514,3 +516,54 @@ class TestReasoningOnlyTurns:
     def test_same_role_neighbours_the_caller_sent_are_not_merged(self) -> None:
         params = _params("amazon.nova-lite-v1:0", Message.user("A"), Message.user("B"))
         assert len(params["messages"]) == 2
+
+    def test_the_reset_after_a_merge_stops_later_neighbours_merging(self) -> None:
+        params = _params(
+            "amazon.nova-lite-v1:0",
+            Message.user("a"),
+            self.ONLY,
+            Message.user("b"),
+            Message.user("c"),
+        )
+        assert params["messages"] == [
+            {"role": "user", "content": [{"text": "a"}, {"text": "b"}]},
+            {"role": "user", "content": [{"text": "c"}]},
+        ]
+
+
+class TestEmptiedTurnWithACachePoint:
+    """A breakpoint on an emptied turn is carried to the end of the message before it."""
+
+    CUT_OFF = Message(role="assistant", content=(thought("zz-cut-off-zz").state, CacheBreakpoint()))
+
+    def _cached(self, *messages: Message) -> list[dict[str, Any]]:
+        params = build_converse_request(
+            ModelRequest(model="amazon.nova-lite-v1:0", messages=messages, max_output_tokens=256),
+            prompt_caching=True,
+        )
+        sent: list[dict[str, Any]] = params["messages"]
+        return sent
+
+    def test_the_cache_point_moves_to_the_end_of_the_earlier_message(self) -> None:
+        sent = self._cached(Message.user("a"), self.CUT_OFF, Message.user("b"))
+        assert sent == [
+            {"role": "user", "content": [{"text": "a"}, CACHE_POINT, {"text": "b"}]},
+        ]
+
+    def test_a_trailing_emptied_turn_leaves_its_point_on_the_user_message(self) -> None:
+        sent = self._cached(Message.user("a"), self.CUT_OFF)
+        assert sent == [{"role": "user", "content": [{"text": "a"}, CACHE_POINT]}]
+
+    def test_no_message_is_left_holding_only_a_cache_point(self) -> None:
+        sent = self._cached(Message.user("a"), self.CUT_OFF, Message.user("b"))
+        for message in sent:
+            assert any("cachePoint" not in block for block in message["content"])
+
+    def test_a_point_is_not_doubled_after_one_already_there(self) -> None:
+        first = Message(role="user", content=(TextBlock(text="a"), CacheBreakpoint()))
+        sent = self._cached(first, self.CUT_OFF)
+        assert sent == [{"role": "user", "content": [{"text": "a"}, CACHE_POINT]}]
+
+    def test_with_nothing_before_it_the_point_is_dropped(self) -> None:
+        sent = self._cached(self.CUT_OFF, Message.user("b"))
+        assert sent == [{"role": "user", "content": [{"text": "b"}]}]
