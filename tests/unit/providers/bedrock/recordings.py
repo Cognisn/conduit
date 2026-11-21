@@ -1,0 +1,688 @@
+"""Synthetic Bedrock recordings, and a fake ``bedrock-runtime`` client that replays them.
+
+The recordings in ``tests/recordings/bedrock/`` are written by this module through
+``conduit.testing.replay.save_recording``, which refuses anything unscrubbed. They are
+synthetic: the prompts, hosts and identifiers are invented, and the responses follow
+the Converse and ConverseStream wire shapes. Regenerate them with
+
+    python -m tests.unit.providers.bedrock.recordings
+
+A test checks that the committed files equal what this module builds.
+
+The non-Anthropic recordings (``VENDORS``) follow the Converse wire shapes the Bedrock
+user guide documents; they are not captured from live calls, so those models are
+recorded-response tested until the next live verification pass.
+
+Each recorded request is ``{"operation", "region", "params"}``: the region the client
+was built for and the exact Converse parameters, so a recording also proves the
+request shape (a bare model id called in-region, for example).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+from conduit.testing.replay import Interaction, Recording, Replay, save_recording
+
+DIRECTORY = Path(__file__).resolve().parents[3] / "recordings" / "bedrock"
+
+SYSTEM = "You summarise incident notes for the operations team at example.com."
+NOTES = "Incident notes: host-a.example.com stopped answering on 192.0.2.10 at 09:00."
+TOOL_SPEC = {
+    "toolSpec": {
+        "name": "lookup_host",
+        "description": "Look a host up in the inventory.",
+        "inputSchema": {
+            "json": {
+                "type": "object",
+                "properties": {"host": {"type": "string"}},
+                "required": ["host"],
+            }
+        },
+    }
+}
+CACHE_POINT = {"cachePoint": {"type": "default"}}
+
+
+def _params(model: str, messages: list[dict[str, Any]], *, cached: bool) -> dict[str, Any]:
+    system: list[dict[str, Any]] = [{"text": SYSTEM}]
+    tools: list[dict[str, Any]] = [TOOL_SPEC]
+    if cached:
+        system.append(CACHE_POINT)
+        tools.append(CACHE_POINT)
+    return {
+        "modelId": model,
+        "system": system,
+        "messages": messages,
+        "toolConfig": {"tools": tools},
+        "inferenceConfig": {"maxTokens": 1024},
+    }
+
+
+FIRST_TURN: list[dict[str, Any]] = [{"role": "user", "content": [{"text": NOTES}]}]
+TOOL_TURN: list[dict[str, Any]] = [
+    *FIRST_TURN,
+    {
+        "role": "assistant",
+        "content": [
+            {"text": "Checking the inventory."},
+            {
+                "toolUse": {
+                    "toolUseId": "tooluse_example0001",
+                    "name": "lookup_host",
+                    "input": {"host": "host-a.example.com"},
+                }
+            },
+        ],
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "toolResult": {
+                    "toolUseId": "tooluse_example0001",
+                    "content": [{"text": "host-a.example.com: web tier, owner team-a"}],
+                    "status": "success",
+                }
+            }
+        ],
+    },
+]
+
+
+def _tool_stream(cache_write: int) -> list[dict[str, Any]]:
+    return [
+        {"messageStart": {"role": "assistant"}},
+        {"contentBlockDelta": {"delta": {"text": "Checking "}, "contentBlockIndex": 0}},
+        {"contentBlockDelta": {"delta": {"text": "the inventory."}, "contentBlockIndex": 0}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        {
+            "contentBlockStart": {
+                "start": {"toolUse": {"toolUseId": "tooluse_example0001", "name": "lookup_host"}},
+                "contentBlockIndex": 1,
+            }
+        },
+        {
+            "contentBlockDelta": {
+                "delta": {"toolUse": {"input": '{"host": "host-a'}},
+                "contentBlockIndex": 1,
+            }
+        },
+        {
+            "contentBlockDelta": {
+                "delta": {"toolUse": {"input": '.example.com"}'}},
+                "contentBlockIndex": 1,
+            }
+        },
+        {"contentBlockStop": {"contentBlockIndex": 1}},
+        {"messageStop": {"stopReason": "tool_use"}},
+        {
+            "metadata": {
+                "usage": {
+                    "inputTokens": 52,
+                    "outputTokens": 31,
+                    "totalTokens": 52 + 31 + cache_write,
+                    "cacheReadInputTokens": 0,
+                    "cacheWriteInputTokens": cache_write,
+                },
+                "metrics": {"latencyMs": 812},
+            }
+        },
+    ]
+
+
+ANSWER_STREAM = [
+    {"messageStart": {"role": "assistant"}},
+    {
+        "contentBlockDelta": {
+            "delta": {"text": "host-a.example.com (web tier, team-a) "},
+            "contentBlockIndex": 0,
+        }
+    },
+    {
+        "contentBlockDelta": {
+            "delta": {"text": "stopped answering at 09:00."},
+            "contentBlockIndex": 0,
+        }
+    },
+    {"contentBlockStop": {"contentBlockIndex": 0}},
+    {"messageStop": {"stopReason": "end_turn"}},
+    {
+        "metadata": {
+            "usage": {
+                "inputTokens": 61,
+                "outputTokens": 17,
+                "totalTokens": 61 + 17 + 1200,
+                "cacheReadInputTokens": 1200,
+                "cacheWriteInputTokens": 0,
+            },
+            "metrics": {"latencyMs": 640},
+        }
+    },
+]
+
+
+def sonnet_4_6_in_region() -> Recording:
+    """Two ConverseStream turns on the bare Sonnet 4.6 id in eu-west-2, with cache points."""
+    model = "anthropic.claude-sonnet-4-6"
+    return Recording(
+        name="sonnet-4-6-in-region-stream",
+        provider="bedrock",
+        interactions=(
+            Interaction(
+                request={
+                    "operation": "ConverseStream",
+                    "region": "eu-west-2",
+                    "params": _params(model, FIRST_TURN, cached=True),
+                },
+                response=_tool_stream(cache_write=1200),
+            ),
+            Interaction(
+                request={
+                    "operation": "ConverseStream",
+                    "region": "eu-west-2",
+                    "params": _params(model, TOOL_TURN, cached=True),
+                },
+                response=ANSWER_STREAM,
+            ),
+        ),
+    )
+
+
+def sonnet_5_in_region() -> Recording:
+    """One Converse call on the bare Sonnet 5 id in ap-southeast-1."""
+    model = "anthropic.claude-sonnet-5"
+    return Recording(
+        name="sonnet-5-in-region-converse",
+        provider="bedrock",
+        interactions=(
+            Interaction(
+                request={
+                    "operation": "Converse",
+                    "region": "ap-southeast-1",
+                    "params": _params(model, FIRST_TURN, cached=True),
+                },
+                response={
+                    "output": {
+                        "message": {
+                            "role": "assistant",
+                            "content": [
+                                {"text": "Checking the inventory."},
+                                {
+                                    "toolUse": {
+                                        "toolUseId": "tooluse_example0001",
+                                        "name": "lookup_host",
+                                        "input": {"host": "host-a.example.com"},
+                                    }
+                                },
+                            ],
+                        }
+                    },
+                    "stopReason": "tool_use",
+                    "usage": {
+                        "inputTokens": 52,
+                        "outputTokens": 31,
+                        "totalTokens": 1283,
+                        "cacheReadInputTokens": 0,
+                        "cacheWriteInputTokens": 1200,
+                    },
+                    "metrics": {"latencyMs": 790},
+                },
+            ),
+        ),
+    )
+
+
+def uncached_profile() -> Recording:
+    """A ConverseStream turn on a model whose catalogue entry has no prompt caching."""
+    model = "eu.anthropic.claude-sonnet-4-6"
+    return Recording(
+        name="uncached-profile-stream",
+        provider="bedrock",
+        interactions=(
+            Interaction(
+                request={
+                    "operation": "ConverseStream",
+                    "region": "eu-west-2",
+                    "params": _params(model, FIRST_TURN, cached=False),
+                },
+                response=_tool_stream(cache_write=0),
+            ),
+        ),
+    )
+
+
+#: A reasoning block as non-Anthropic models stream it: text, and no signature.
+REASONING = "The notes name one host and one time."
+
+
+def _vendor_params(
+    model: str, *, tools: bool, system_cache: bool, tools_cache: bool
+) -> dict[str, Any]:
+    system: list[dict[str, Any]] = [{"text": SYSTEM}]
+    if system_cache:
+        system.append(CACHE_POINT)
+    params: dict[str, Any] = {"modelId": model, "system": system, "messages": FIRST_TURN}
+    if tools:
+        params["toolConfig"] = {"tools": [TOOL_SPEC, *([CACHE_POINT] if tools_cache else [])]}
+    params["inferenceConfig"] = {"maxTokens": 1024}
+    return params
+
+
+def _usage(input_tokens: int, output_tokens: int) -> dict[str, Any]:
+    return {
+        "inputTokens": input_tokens,
+        "outputTokens": output_tokens,
+        "totalTokens": input_tokens + output_tokens,
+    }
+
+
+def _answer_stream(*, reasoning: bool, usage: dict[str, Any]) -> list[dict[str, Any]]:
+    """A ConverseStream answer: optionally a reasoning block, then text in two pieces."""
+    events: list[dict[str, Any]] = [{"messageStart": {"role": "assistant"}}]
+    index = 0
+    if reasoning:
+        events += [
+            {
+                "contentBlockDelta": {
+                    "delta": {"reasoningContent": {"text": REASONING[:18]}},
+                    "contentBlockIndex": 0,
+                }
+            },
+            {
+                "contentBlockDelta": {
+                    "delta": {"reasoningContent": {"text": REASONING[18:]}},
+                    "contentBlockIndex": 0,
+                }
+            },
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+        ]
+        index = 1
+    events += [
+        {
+            "contentBlockDelta": {
+                "delta": {"text": "host-a.example.com "},
+                "contentBlockIndex": index,
+            }
+        },
+        {
+            "contentBlockDelta": {
+                "delta": {"text": "stopped answering at 09:00."},
+                "contentBlockIndex": index,
+            }
+        },
+        {"contentBlockStop": {"contentBlockIndex": index}},
+        {"messageStop": {"stopReason": "end_turn"}},
+        {"metadata": {"usage": usage, "metrics": {"latencyMs": 420}}},
+    ]
+    return events
+
+
+def _vendor(
+    name: str,
+    model: str,
+    region: str,
+    response: Any,
+    *,
+    operation: str = "ConverseStream",
+    tools: bool = False,
+    system_cache: bool = False,
+) -> Recording:
+    params = _vendor_params(model, tools=tools, system_cache=system_cache, tools_cache=False)
+    return Recording(
+        name=name,
+        provider="bedrock",
+        interactions=(
+            Interaction(
+                request={"operation": operation, "region": region, "params": params},
+                response=response,
+            ),
+        ),
+    )
+
+
+def nova_lite_tools() -> Recording:
+    """Amazon Nova Lite in-region: a streamed tool call; its tools take no cache point."""
+    return _vendor(
+        "nova-lite-in-region-tool-stream",
+        "amazon.nova-lite-v1:0",
+        "us-east-1",
+        _tool_stream(cache_write=1200),
+        tools=True,
+        system_cache=True,
+    )
+
+
+def mistral_large_tools() -> Recording:
+    """Mistral Large (24.02): tools go through Converse, since ConverseStream refuses them."""
+    return _vendor(
+        "mistral-large-2402-tool-converse",
+        "mistral.mistral-large-2402-v1:0",
+        "eu-west-2",
+        {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "toolUse": {
+                                "toolUseId": "tooluse_example0002",
+                                "name": "lookup_host",
+                                "input": {"host": "host-a.example.com"},
+                            }
+                        }
+                    ],
+                }
+            },
+            "stopReason": "tool_use",
+            "usage": _usage(64, 22),
+            "metrics": {"latencyMs": 530},
+        },
+        operation="Converse",
+        tools=True,
+    )
+
+
+def qwen_tools() -> Recording:
+    """Qwen3 235B in-region: a streamed tool call, no cache points."""
+    return _vendor(
+        "qwen3-235b-tool-stream",
+        "qwen.qwen3-235b-a22b-2507-v1:0",
+        "eu-west-2",
+        _tool_stream(cache_write=0),
+        tools=True,
+    )
+
+
+def gpt_oss_reasoning() -> Recording:
+    """OpenAI gpt-oss-120b in-region: reasoning without a signature, then text."""
+    return _vendor(
+        "gpt-oss-120b-reasoning-stream",
+        "openai.gpt-oss-120b-1:0",
+        "us-west-2",
+        _answer_stream(reasoning=True, usage=_usage(40, 35)),
+    )
+
+
+def gpt_profile_text() -> Recording:
+    """OpenAI GPT-5.6 Terra through its India profile: text only."""
+    return _vendor(
+        "gpt-5-6-terra-in-profile-stream",
+        "in.openai.gpt-5.6-terra",
+        "ap-south-1",
+        _answer_stream(reasoning=False, usage=_usage(38, 12)),
+    )
+
+
+def nemotron_reasoning() -> Recording:
+    """NVIDIA Nemotron Super 3 through Converse: a whole reasoning block, then text."""
+    return _vendor(
+        "nemotron-super-3-reasoning-converse",
+        "nvidia.nemotron-super-3-120b",
+        "eu-west-2",
+        {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"reasoningContent": {"reasoningText": {"text": REASONING}}},
+                        {"text": "host-a.example.com stopped answering at 09:00."},
+                    ],
+                }
+            },
+            "stopReason": "end_turn",
+            "usage": _usage(41, 30),
+            "metrics": {"latencyMs": 610},
+        },
+        operation="Converse",
+    )
+
+
+def _text_only(name: str, model: str, region: str) -> Recording:
+    return _vendor(name, model, region, _answer_stream(reasoning=False, usage=_usage(37, 11)))
+
+
+def deepseek_text() -> Recording:
+    return _text_only("deepseek-v3-2-text-stream", "deepseek.v3.2", "ap-southeast-2")
+
+
+def minimax_text() -> Recording:
+    return _text_only("minimax-m2-5-text-stream", "minimax.minimax-m2.5", "eu-west-2")
+
+
+def kimi_text() -> Recording:
+    return _text_only("kimi-k2-5-text-stream", "moonshotai.kimi-k2.5", "ap-southeast-2")
+
+
+def palmyra_text() -> Recording:
+    return _text_only("palmyra-vision-7b-text-stream", "writer.palmyra-vision-7b", "us-east-1")
+
+
+def glm_text() -> Recording:
+    return _text_only("glm-5-text-stream", "zai.glm-5", "us-west-2")
+
+
+#: What Amazon Nova writes into a reply as reasoning (the Nova user guide: chain-of-thought
+#: "contained in <thinking> tags"), and what follows it.
+NOVA_THOUGHT = "The notes name one host and one time. I should summarise them briefly."
+NOVA_ANSWER = "host-a.example.com stopped answering at 09:00."
+#: A non-Nova answer that merely mentions the tag; it is answer text and stays whole.
+TAG_MENTION = "Wrap your plan in <thinking>...</thinking> tags, like `<thinking>plan</thinking>`."
+
+
+def _text_block(pieces: list[str], index: int) -> list[dict[str, Any]]:
+    return [
+        {"contentBlockDelta": {"delta": {"text": piece}, "contentBlockIndex": index}}
+        for piece in pieces
+    ] + [{"contentBlockStop": {"contentBlockIndex": index}}]
+
+
+def _tool_block(index: int, tool_use_id: str, host: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "contentBlockStart": {
+                "start": {"toolUse": {"toolUseId": tool_use_id, "name": "lookup_host"}},
+                "contentBlockIndex": index,
+            }
+        },
+        {
+            "contentBlockDelta": {
+                "delta": {"toolUse": {"input": '{"host": "' + host[:6]}},
+                "contentBlockIndex": index,
+            }
+        },
+        {
+            "contentBlockDelta": {
+                "delta": {"toolUse": {"input": host[6:] + '"}'}},
+                "contentBlockIndex": index,
+            }
+        },
+        {"contentBlockStop": {"contentBlockIndex": index}},
+    ]
+
+
+def _stream(
+    blocks: list[dict[str, Any]], stop_reason: str, usage: dict[str, Any]
+) -> list[dict[str, Any]]:
+    return [
+        {"messageStart": {"role": "assistant"}},
+        *blocks,
+        {"messageStop": {"stopReason": stop_reason}},
+        {"metadata": {"usage": usage, "metrics": {"latencyMs": 450}}},
+    ]
+
+
+def nova_thinking_split_stream() -> Recording:
+    """Nova Lite: a reply whose <thinking> tags are split across stream chunks."""
+    pieces = [
+        "<thin",
+        "king>The notes name one host and one time.",
+        " I should summarise them briefly.</thin",
+        "king>\n\nhost-a.example.com ",
+        "stopped answering at 09:00.",
+    ]
+    return _vendor(
+        "nova-lite-thinking-split-stream",
+        "amazon.nova-lite-v1:0",
+        "us-east-1",
+        _stream(_text_block(pieces, 0), "end_turn", _usage(48, 40)),
+        system_cache=True,
+    )
+
+
+def nova_thinking_tool_stream() -> Recording:
+    """Nova Lite: a span before and a span after a tool call, then a second tool call."""
+    blocks = [
+        *_text_block(["<thinking>I should look the host up.</thinking>"], 0),
+        *_tool_block(1, "tooluse_example0001", "host-a.example.com"),
+        *_text_block(["<thinking>", "A second lookup helps.", "</thinking>"], 2),
+        *_tool_block(3, "tooluse_example0002", "host-b.example.com"),
+    ]
+    return _vendor(
+        "nova-lite-thinking-tool-stream",
+        "amazon.nova-lite-v1:0",
+        "us-east-1",
+        _stream(blocks, "tool_use", _usage(52, 61)),
+        tools=True,
+        system_cache=True,
+    )
+
+
+def nova_thinking_converse() -> Recording:
+    """Nova Pro through Converse: two spans in one text block, a tool call, then a span."""
+    return _vendor(
+        "nova-pro-thinking-converse",
+        "amazon.nova-pro-v1:0",
+        "us-east-1",
+        {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "text": "<thinking>First thought.</thinking>\n\nChecking now.\n"
+                            "<thinking>Second thought.</thinking>\nOne moment."
+                        },
+                        {
+                            "toolUse": {
+                                "toolUseId": "tooluse_example0001",
+                                "name": "lookup_host",
+                                "input": {"host": "host-a.example.com"},
+                            }
+                        },
+                        {"text": "<thinking>Third thought.</thinking>"},
+                    ],
+                }
+            },
+            "stopReason": "tool_use",
+            "usage": _usage(64, 58),
+            "metrics": {"latencyMs": 700},
+        },
+        operation="Converse",
+        tools=True,
+        system_cache=True,
+    )
+
+
+def nova_plain_stream() -> Recording:
+    """Nova Lite answering with no thinking at all."""
+    return _vendor(
+        "nova-lite-plain-stream",
+        "amazon.nova-lite-v1:0",
+        "us-east-1",
+        _stream(
+            _text_block(["host-a.example.com ", "stopped answering at 09:00."], 0),
+            "end_turn",
+            _usage(48, 12),
+        ),
+        system_cache=True,
+    )
+
+
+def nova_thinking_unclosed_stream() -> Recording:
+    """Nova Lite cut off by its token limit inside a <thinking> span."""
+    pieces = ["<thinking>The notes name one host", " and one time. I sho"]
+    return _vendor(
+        "nova-lite-thinking-unclosed-stream",
+        "amazon.nova-lite-v1:0",
+        "us-east-1",
+        _stream(_text_block(pieces, 0), "max_tokens", _usage(48, 1024)),
+        system_cache=True,
+    )
+
+
+def deepseek_tag_mention() -> Recording:
+    """A non-Nova model whose answer mentions the tag: not parsed, not held back."""
+    pieces = [TAG_MENTION[:20], TAG_MENTION[20:]]
+    return _vendor(
+        "deepseek-v3-2-tag-mention-stream",
+        "deepseek.v3.2",
+        "ap-southeast-2",
+        _stream(_text_block(pieces, 0), "end_turn", _usage(37, 29)),
+    )
+
+
+NOVA_THINKING = (
+    nova_thinking_split_stream,
+    nova_thinking_tool_stream,
+    nova_thinking_converse,
+    nova_plain_stream,
+    nova_thinking_unclosed_stream,
+    deepseek_tag_mention,
+)
+
+#: One recording at least per non-Anthropic vendor the catalogue declares: Amazon,
+#: Mistral AI, Qwen, OpenAI, NVIDIA, DeepSeek, MiniMax, Moonshot AI, Writer and Z.AI.
+VENDORS = (
+    nova_lite_tools,
+    mistral_large_tools,
+    qwen_tools,
+    gpt_oss_reasoning,
+    gpt_profile_text,
+    nemotron_reasoning,
+    deepseek_text,
+    minimax_text,
+    kimi_text,
+    palmyra_text,
+    glm_text,
+)
+
+ALL = (sonnet_4_6_in_region, sonnet_5_in_region, uncached_profile, *VENDORS, *NOVA_THINKING)
+
+
+def path(recording: Recording) -> Path:
+    return DIRECTORY / f"{recording.name}.json"
+
+
+class RecordedRuntime:
+    """A fake ``bedrock-runtime`` client answering from a recording."""
+
+    def __init__(self, recording: Recording, *, region: str) -> None:
+        self.replay = Replay(recording)
+        self.region = region
+        self.closed = False
+
+    def _next(self, operation: str, params: dict[str, Any]) -> Any:
+        return self.replay.next({"operation": operation, "region": self.region, "params": params})
+
+    def converse(self, **params: Any) -> Any:
+        return self._next("Converse", params)
+
+    def converse_stream(self, **params: Any) -> dict[str, Iterator[Any]]:
+        return {"stream": iter(self._next("ConverseStream", params))}
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def main() -> None:
+    DIRECTORY.mkdir(parents=True, exist_ok=True)
+    for build in ALL:
+        recording = build()
+        save_recording(recording, path(recording))
+
+
+if __name__ == "__main__":
+    main()

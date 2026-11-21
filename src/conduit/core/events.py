@@ -1,0 +1,348 @@
+"""Structured events, the event sink protocol, fan-out and the content-capture policy.
+
+Events describe what happened: identifiers, hashes, sizes and outcomes (C19). Prompt
+and tool content is recorded only when the product opts in through ``CapturePolicy``,
+and even then only inside a ``CapturedContent``: every other string field of an event
+is an ``Identifier``, which cannot hold prose. The event-content tripwire in
+``tests/tripwires`` checks that rule for every event class in conduit.
+
+``FanOutSink`` delivers each event to several product-supplied sinks concurrently.
+It enforces its own capture policy on the way through: content the policy does not
+allow is removed before any sink sees it, whatever policy the emitter used. A field
+declared as tool content (``ToolContent``) is treated as tool content whatever kind its
+emitter labelled it. A failing
+sink is logged (its class and the exception class only) and never stops the others. A
+cancellation is never swallowed: cancelling the fan-out cancels every sink, and a sink
+that raises ``CancelledError`` has it raised again, unchanged, after the others finish.
+
+Upper layers define their own event classes by subclassing ``Event``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import logging
+import types
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import (
+    Annotated,
+    Any,
+    Literal,
+    Protocol,
+    Union,
+    get_args,
+    get_origin,
+    runtime_checkable,
+)
+
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, NonNegativeInt
+from pydantic.fields import FieldInfo
+
+from conduit.core.errors import ProviderFailure
+from conduit.core.identifiers import Identifier, new_id
+from conduit.core.settings import SettingsModel
+from conduit.core.types import StopReason, Usage
+
+logger = logging.getLogger("conduit.events")
+
+
+class ContentKind(StrEnum):
+    PROMPT = "prompt"  # system prompt, messages and model output
+    TOOL = "tool"  # tool call arguments and tool results
+
+
+class CapturedContent(BaseModel):
+    """Content as an event may carry it: always its hash and size, its text only if allowed."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: ContentKind
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size: NonNegativeInt  # bytes, UTF-8
+    text: str | None = None
+
+
+class CapturePolicy(SettingsModel):
+    """What content events may carry. Nothing, unless the product opts in."""
+
+    prompts: bool = False
+    tool_content: bool = False
+
+    def allows(self, kind: ContentKind) -> bool:
+        return self.prompts if kind is ContentKind.PROMPT else self.tool_content
+
+    def capture(self, kind: ContentKind, text: str) -> CapturedContent:
+        data = text.encode("utf-8")
+        return CapturedContent(
+            kind=kind,
+            sha256=hashlib.sha256(data).hexdigest(),
+            size=len(data),
+            text=text if self.allows(kind) else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureAs:
+    """Field metadata: the field holds content of ``kind``, whatever an emitter labels it.
+
+    ``enforce_capture`` relabels such a field's ``CapturedContent`` to ``kind`` before
+    applying the policy, so tool content labelled as a prompt is still held to the
+    tool-content setting.
+    """
+
+    kind: ContentKind
+
+
+#: A ``CapturedContent`` field holding tool arguments or results. Upper layers use it
+#: for their own events' tool fields.
+ToolContent = Annotated[CapturedContent, CaptureAs(ContentKind.TOOL)]
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+class Event(BaseModel):
+    """Base for every event. Subclasses set ``type`` and use only metadata fields."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    type: Identifier
+    event_id: Identifier = Field(default_factory=lambda: new_id("evt"))
+    occurred_at: datetime = Field(default_factory=_now)
+    run_id: Identifier | None = None
+    correlation_id: Identifier | None = None
+    task_class: Identifier | None = None
+
+
+CallOutcome = Literal["ok", "failed"]
+
+
+class ModelCallStartedEvent(Event):
+    type: Literal["model_call_started"] = "model_call_started"
+    call_id: Identifier
+    provider: Identifier  # the configured provider's name
+    kind: Identifier
+    model: Identifier
+    request: CapturedContent
+    message_count: NonNegativeInt
+    tool_count: NonNegativeInt
+    max_output_tokens: NonNegativeInt
+
+
+class ModelCallFinishedEvent(Event):
+    """One model call's outcome, with its final usage (the single metering point).
+
+    Every call has exactly one, however it ends. A failed call carries the last usage
+    the provider reported, if any. ``error_type`` is the exception's class name, or
+    ``cancelled`` for a call cancelled part-way (a facade timeout, for example), or
+    ``abandoned`` for a stream its consumer closed before the end.
+    """
+
+    type: Literal["model_call_finished"] = "model_call_finished"
+    call_id: Identifier
+    provider: Identifier
+    kind: Identifier
+    model: Identifier
+    outcome: CallOutcome
+    stop_reason: StopReason | None = None
+    usage: Usage | None = None
+    failure: ProviderFailure | None = None
+    error_type: Identifier | None = None
+    duration_ms: NonNegativeFloat
+    response: CapturedContent | None = None
+    tool_call_count: NonNegativeInt = 0
+
+
+DiscoveryEventOutcome = Literal["ok", "failed", "unsupported"]
+
+
+class DiscoveryFinishedEvent(Event):
+    """One model discovery through the provider registry, however it ended.
+
+    ``allowed`` and ``refused`` count the listed models by outcome; ``uncatalogued``,
+    ``unlisted``, ``limits_differ``, ``capabilities_differ`` and ``regions_declared``
+    count the catalogue drift by reason. ``models`` is the joined listing (each model id
+    with its outcome, residency and drift) as content of the prompt kind: its hash and
+    size always, its text only when the capture policy captures prompts. ``error_type``
+    is the exception's class name for a failure that was not a provider failure.
+    """
+
+    type: Literal["discovery_finished"] = "discovery_finished"
+    discovery_id: Identifier
+    provider: Identifier  # the configured provider's name
+    kind: Identifier
+    outcome: DiscoveryEventOutcome
+    allowed: NonNegativeInt = 0
+    refused: NonNegativeInt = 0
+    uncatalogued: NonNegativeInt = 0
+    unlisted: NonNegativeInt = 0
+    limits_differ: NonNegativeInt = 0
+    capabilities_differ: NonNegativeInt = 0
+    regions_declared: NonNegativeInt = 0
+    failure: ProviderFailure | None = None
+    error_type: Identifier | None = None
+    duration_ms: NonNegativeFloat
+    models: CapturedContent | None = None
+
+
+class ToolCallEvent(Event):
+    type: Literal["tool_call"] = "tool_call"
+    call_id: Identifier
+    tool: Identifier
+    outcome: CallOutcome
+    error_code: Identifier | None = None
+    arguments: ToolContent
+    result: ToolContent | None = None
+    duration_ms: NonNegativeFloat
+
+
+@runtime_checkable
+class EventSink(Protocol):
+    """Receives events. Supplied by the product (a log, an audit trail, a ledger)."""
+
+    async def emit(self, event: Event) -> None: ...
+
+
+class MemoryEventSink:
+    """Keeps every event in a list. For tests and the terminal interface."""
+
+    def __init__(self) -> None:
+        self.events: list[Event] = []
+
+    async def emit(self, event: Event) -> None:
+        self.events.append(event)
+
+
+class NullEventSink:
+    async def emit(self, event: Event) -> None:
+        return None
+
+
+def _marked_kind(annotation: Any) -> ContentKind | None:
+    """The ``CaptureAs`` kind inside ``annotation``, looking through unions
+    (``ToolContent | None``), where pydantic does not lift the metadata to the field."""
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        inner, *metadata = get_args(annotation)
+        marked = next((m.kind for m in metadata if isinstance(m, CaptureAs)), None)
+        return marked if marked is not None else _marked_kind(inner)
+    if origin in (Union, types.UnionType):
+        return next(
+            (k for k in (_marked_kind(a) for a in get_args(annotation)) if k is not None), None
+        )
+    return None
+
+
+def _declared_kind(field: FieldInfo) -> ContentKind | None:
+    direct = next((m.kind for m in field.metadata if isinstance(m, CaptureAs)), None)
+    return direct if direct is not None else _marked_kind(field.annotation)
+
+
+def _enforce(
+    value: Any,
+    policy: CapturePolicy,
+    removed: list[ContentKind],
+    declared: ContentKind | None = None,
+) -> Any:
+    if isinstance(value, CapturedContent):
+        # A field's declared kind wins over the emitter's label.
+        kind = declared if declared is not None else value.kind
+        update: dict[str, Any] = {} if kind is value.kind else {"kind": kind}
+        if value.text is not None and not policy.allows(kind):
+            removed.append(kind)
+            update["text"] = None
+        return value.model_copy(update=update) if update else value
+    if isinstance(value, BaseModel):
+        updates: dict[str, Any] = {}
+        for name, field in type(value).model_fields.items():
+            current = getattr(value, name)
+            enforced = _enforce(current, policy, removed, _declared_kind(field))
+            if enforced is not current:
+                updates[name] = enforced
+        return value.model_copy(update=updates) if updates else value
+    if isinstance(value, tuple | list):
+        items = [_enforce(item, policy, removed, declared) for item in value]
+        if any(a is not b for a, b in zip(items, value, strict=True)):
+            return type(value)(items)
+        return value
+    if isinstance(value, dict):
+        enforced_dict = {k: _enforce(v, policy, removed, declared) for k, v in value.items()}
+        if any(enforced_dict[k] is not value[k] for k in value):
+            return enforced_dict
+        return value
+    return value
+
+
+def enforce_capture(event: Event, policy: CapturePolicy) -> Event:
+    """``event`` with every piece of content ``policy`` does not allow removed."""
+    removed: list[ContentKind] = []
+    enforced = _enforce(event, policy, removed)
+    if removed:
+        logger.warning(
+            "event %s carried %s content the capture policy does not allow; removed",
+            event.type,
+            ", ".join(sorted({k.value for k in removed})),
+        )
+    if not isinstance(enforced, Event):  # pragma: no cover - _enforce keeps the type
+        raise TypeError("capture enforcement changed the event's type")
+    return enforced
+
+
+async def _deliver(sink: EventSink, event: Event) -> Exception | asyncio.CancelledError | None:
+    """``sink.emit(event)``, its failure or its own cancellation returned rather than
+    raised. A cancellation of this delivery (the fan-out being cancelled) is raised."""
+    try:
+        await sink.emit(event)
+    except asyncio.CancelledError as cancelled:
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            raise
+        return cancelled
+    except Exception as failure:
+        return failure
+    return None
+
+
+class FanOutSink:
+    """Delivers each event to every sink, concurrently, under one capture policy.
+
+    The policy is fixed when the fan-out is made: ``policy`` is read only, so whoever is
+    handed the sink cannot loosen what it lets through."""
+
+    def __init__(self, sinks: Iterable[EventSink], *, policy: CapturePolicy | None = None) -> None:
+        self._sinks = tuple(sinks)
+        self._policy = policy or CapturePolicy()
+
+    @property
+    def policy(self) -> CapturePolicy:
+        """The capture policy every event is held to (immutable, and read only here)."""
+        return self._policy
+
+    async def emit(self, event: Event) -> None:
+        """Deliver ``event`` to every sink. A cancellation always propagates unchanged:
+        a cancelled fan-out cancels every sink, and a sink that raises ``CancelledError``
+        itself has it raised again, once the other sinks have finished. Any other sink
+        failure is logged and never raised."""
+        event = enforce_capture(event, self.policy)
+        # Each sink's outcome comes back as a value, so a sink's own CancelledError is the
+        # very exception it raised (gather would hand back a new one). Cancelling the
+        # fan-out still cancels gather, which cancels every sink and raises here.
+        results = await asyncio.gather(*(_deliver(sink, event) for sink in self._sinks))
+        cancelled: asyncio.CancelledError | None = None
+        for sink, result in zip(self._sinks, results, strict=True):
+            if isinstance(result, asyncio.CancelledError):
+                cancelled = cancelled or result
+            elif result is not None:
+                logger.warning(
+                    "event sink %s failed on %s: %s",
+                    type(sink).__name__,
+                    event.type,
+                    type(result).__name__,
+                )
+        if cancelled is not None:
+            raise cancelled

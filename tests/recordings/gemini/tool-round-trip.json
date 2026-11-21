@@ -1,0 +1,217 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "config": {
+          "max_output_tokens": 512,
+          "system_instruction": "You answer questions about the example.com inventory.",
+          "tools": [
+            {
+              "function_declarations": [
+                {
+                  "description": "Look a host up in the inventory.",
+                  "name": "lookup_host",
+                  "parameters_json_schema": {
+                    "properties": {
+                      "host": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "host"
+                    ],
+                    "type": "object"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Is host-a.example.com answering on 192.0.2.10?"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "gemini-3.8-flash"
+      },
+      "response": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "Checking "
+                  }
+                ],
+                "role": "model"
+              },
+              "index": 0
+            }
+          ],
+          "model_version": "gemini-3.8-flash",
+          "response_id": "resp_example0001",
+          "usage_metadata": {
+            "prompt_token_count": 96
+          }
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "the inventory."
+                  },
+                  {
+                    "function_call": {
+                      "args": {
+                        "host": "host-a.example.com"
+                      },
+                      "id": "fc_example0001",
+                      "name": "lookup_host"
+                    },
+                    "thought_signature": "c3ludGhldGljLXRob3VnaHQtc2lnbmF0dXJlLTAwMDE="
+                  }
+                ],
+                "role": "model"
+              },
+              "finish_reason": "STOP",
+              "index": 0
+            }
+          ],
+          "model_version": "gemini-3.8-flash",
+          "response_id": "resp_example0001",
+          "usage_metadata": {
+            "candidates_token_count": 24,
+            "prompt_token_count": 96,
+            "thoughts_token_count": 40,
+            "total_token_count": 160
+          }
+        }
+      ]
+    },
+    {
+      "request": {
+        "config": {
+          "max_output_tokens": 512,
+          "system_instruction": "You answer questions about the example.com inventory.",
+          "tools": [
+            {
+              "function_declarations": [
+                {
+                  "description": "Look a host up in the inventory.",
+                  "name": "lookup_host",
+                  "parameters_json_schema": {
+                    "properties": {
+                      "host": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "host"
+                    ],
+                    "type": "object"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Is host-a.example.com answering on 192.0.2.10?"
+              }
+            ],
+            "role": "user"
+          },
+          {
+            "parts": [
+              {
+                "text": "Checking the inventory."
+              },
+              {
+                "function_call": {
+                  "args": {
+                    "host": "host-a.example.com"
+                  },
+                  "id": "fc_example0001",
+                  "name": "lookup_host"
+                },
+                "thought_signature": "c3ludGhldGljLXRob3VnaHQtc2lnbmF0dXJlLTAwMDE="
+              }
+            ],
+            "role": "model"
+          },
+          {
+            "parts": [
+              {
+                "function_response": {
+                  "id": "fc_example0001",
+                  "name": "lookup_host",
+                  "response": {
+                    "output": "host-a.example.com: up, last seen 09:00 on 192.0.2.10"
+                  }
+                }
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "gemini-3.8-flash"
+      },
+      "response": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "Yes: host-a.example.com "
+                  }
+                ],
+                "role": "model"
+              },
+              "index": 0
+            }
+          ],
+          "model_version": "gemini-3.8-flash",
+          "response_id": "resp_example0001"
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "is up."
+                  }
+                ],
+                "role": "model"
+              },
+              "finish_reason": "STOP",
+              "index": 0
+            }
+          ],
+          "model_version": "gemini-3.8-flash",
+          "response_id": "resp_example0001",
+          "usage_metadata": {
+            "cached_content_token_count": 96,
+            "candidates_token_count": 9,
+            "prompt_token_count": 150,
+            "total_token_count": 159
+          }
+        }
+      ]
+    }
+  ],
+  "name": "gemini-tool-round-trip",
+  "provider": "gemini"
+}

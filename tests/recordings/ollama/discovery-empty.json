@@ -1,0 +1,18 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/tags"
+      },
+      "response": {
+        "body": {
+          "models": []
+        },
+        "status": 200
+      }
+    }
+  ],
+  "name": "ollama-discovery-empty",
+  "provider": "ollama"
+}

@@ -1,0 +1,83 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "operation": "Converse",
+        "params": {
+          "inferenceConfig": {
+            "maxTokens": 1024
+          },
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "Incident notes: host-a.example.com stopped answering on 192.0.2.10 at 09:00."
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "modelId": "mistral.mistral-large-2402-v1:0",
+          "system": [
+            {
+              "text": "You summarise incident notes for the operations team at example.com."
+            }
+          ],
+          "toolConfig": {
+            "tools": [
+              {
+                "toolSpec": {
+                  "description": "Look a host up in the inventory.",
+                  "inputSchema": {
+                    "json": {
+                      "properties": {
+                        "host": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "host"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "name": "lookup_host"
+                }
+              }
+            ]
+          }
+        },
+        "region": "eu-west-2"
+      },
+      "response": {
+        "metrics": {
+          "latencyMs": 530
+        },
+        "output": {
+          "message": {
+            "content": [
+              {
+                "toolUse": {
+                  "input": {
+                    "host": "host-a.example.com"
+                  },
+                  "name": "lookup_host",
+                  "toolUseId": "tooluse_example0002"
+                }
+              }
+            ],
+            "role": "assistant"
+          }
+        },
+        "stopReason": "tool_use",
+        "usage": {
+          "inputTokens": 64,
+          "outputTokens": 22,
+          "totalTokens": 86
+        }
+      }
+    }
+  ],
+  "name": "mistral-large-2402-tool-converse",
+  "provider": "bedrock"
+}

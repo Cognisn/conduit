@@ -1,0 +1,223 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "max_completion_tokens": 512,
+        "messages": [
+          {
+            "content": "You are a concise assistant.",
+            "role": "system"
+          },
+          {
+            "content": [
+              {
+                "text": "Weather in Sydney and Hobart?",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "gpt-5",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "tools": [
+          {
+            "function": {
+              "description": "Current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      },
+      "response": [
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": null,
+                "role": "assistant"
+              },
+              "finish_reason": null,
+              "index": 0
+            }
+          ],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "gpt-5",
+          "object": "chat.completion.chunk",
+          "usage": null
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "",
+                      "name": "get_weather"
+                    },
+                    "id": "call_example_1",
+                    "index": 0,
+                    "type": "function"
+                  }
+                ]
+              },
+              "finish_reason": null,
+              "index": 0
+            }
+          ],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "gpt-5",
+          "object": "chat.completion.chunk",
+          "usage": null
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{\"city\": \"Syd"
+                    },
+                    "index": 0
+                  }
+                ]
+              },
+              "finish_reason": null,
+              "index": 0
+            }
+          ],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "gpt-5",
+          "object": "chat.completion.chunk",
+          "usage": null
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{\"ci",
+                      "name": "get_weather"
+                    },
+                    "id": "call_example_2",
+                    "index": 1,
+                    "type": "function"
+                  }
+                ]
+              },
+              "finish_reason": null,
+              "index": 0
+            }
+          ],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "gpt-5",
+          "object": "chat.completion.chunk",
+          "usage": null
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "ney\"}"
+                    },
+                    "index": 0
+                  }
+                ]
+              },
+              "finish_reason": null,
+              "index": 0
+            }
+          ],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "gpt-5",
+          "object": "chat.completion.chunk",
+          "usage": null
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "ty\": \"Hobart\"}"
+                    },
+                    "index": 1
+                  }
+                ]
+              },
+              "finish_reason": null,
+              "index": 0
+            }
+          ],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "gpt-5",
+          "object": "chat.completion.chunk",
+          "usage": null
+        },
+        {
+          "choices": [
+            {
+              "delta": {},
+              "finish_reason": "tool_calls",
+              "index": 0
+            }
+          ],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "gpt-5",
+          "object": "chat.completion.chunk",
+          "usage": null
+        },
+        {
+          "choices": [],
+          "created": 1793750400,
+          "id": "chatcmpl-example",
+          "model": "gpt-5",
+          "object": "chat.completion.chunk",
+          "usage": {
+            "completion_tokens": 42,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens": 310,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "total_tokens": 352
+          }
+        }
+      ]
+    }
+  ],
+  "name": "openai-parallel-tool-calls",
+  "provider": "openai_compat"
+}

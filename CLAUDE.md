@@ -1,7 +1,7 @@
 # conduit
 
 # Project configuration
-- Kvasir library: conduit
+- Kvasir library: devwork (tag project-conduit); fallback: conduit
 - Issue tracker: github
 - GitHub repository: Cognisn/conduit
 - Default branch: main
@@ -14,7 +14,7 @@
 
 This file is the project-level working agreement for conduit. It sits under the workstation's global working agreement on any Cognisn development workstation; where the two overlap, the global agreement governs process (branching, versioning, commit format, worktrees, ports, Kvasir protocols, tagging) and this file governs what is specific to conduit. On a machine without the global agreement (for example a cloud session), the rules in "Minimum rules without the global agreement" still apply.
 
-Project knowledge lives in the mwh-kvasir library `conduit`; pass `library: "conduit"` on every call. The active development plan, decisions and per-workstream session summaries are there. Releases are tracked in Skuld (project `conduit`).
+New project knowledge goes to the shared mwh-kvasir library `devwork`, tagged `project-conduit`; pass `library: "devwork"` on every call and filter every query by `tags:project-conduit`. The library `conduit` is a read-only fallback holding the knowledge written before the move (the development plan, decisions and session summaries of the earlier waves); the only write to it is re-tagging a document `status-superseded` when a `devwork` document replaces it. Releases are tracked in Skuld (project `conduit`).
 
 ## What conduit is
 
@@ -123,7 +123,7 @@ The integration session works in the main clone on the release branch and merges
 When a session is running in a git worktree (`git rev-parse --git-common-dir` resolves outside the working tree), assume other sessions are active concurrently:
 
 - Work only inside your own worktree, on your own branch. Never touch the main clone or another worktree.
-- The Kvasir library is always `conduit`, and every document submitted from a worktree session carries that branch's `branch-` tag.
+- New Kvasir documents go to `devwork`, tagged `project-conduit` (with `conduit` as the read-only fallback), and every document submitted from a worktree session carries that branch's `branch-` tag.
 - Worktree sessions never bump the version and never create stamp commits.
 - Shared modules are edited only by the session assigned them in its kick-off prompt.
 
@@ -134,7 +134,7 @@ If the global working agreement is not present on this machine, these still appl
 - Australian English; no AI attribution in commits, changelogs or release notes.
 - The release-branch workflow above.
 - Do not push, tag, publish to PyPI or open a pull request unless the maintainer instructs it in the session.
-- Use the `conduit` Kvasir library for project knowledge, pass `library: "conduit"` on every call, and submit a `type-session` summary at the end of every session with the mandatory `project-`, `type-`, `status-` and `source-` tags.
+- Write project knowledge to the `devwork` Kvasir library tagged `project-conduit` (read `conduit` as the fallback), pass `library` explicitly on every call, and submit a `type-session` summary at the end of every session with the mandatory `project-`, `type-`, `status-` and `source-` tags.
 
 ## Session start checklist
 

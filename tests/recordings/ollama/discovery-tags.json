@@ -1,0 +1,85 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/tags"
+      },
+      "response": {
+        "body": {
+          "models": [
+            {
+              "details": {
+                "families": [
+                  "llama"
+                ],
+                "family": "llama",
+                "format": "gguf",
+                "parameter_size": "8.0B",
+                "quantization_level": "Q4_K_M"
+              },
+              "digest": "0000000000000000000000000000000000000000000000000000000000000000",
+              "model": "llama3.1:8b",
+              "modified_at": "2026-10-01T09:30:00.000000+10:00",
+              "name": "llama3.1:8b",
+              "size": 4920000000
+            },
+            {
+              "details": {
+                "families": [
+                  "example"
+                ],
+                "family": "example",
+                "format": "gguf",
+                "parameter_size": "3.2B",
+                "quantization_level": "Q4_K_M"
+              },
+              "digest": "0000000000000000000000000000000000000000000000000000000000000000",
+              "model": "example-local:3b",
+              "modified_at": "2026-10-01T09:30:00.000000+10:00",
+              "name": "example-local:3b",
+              "size": 4920000000
+            },
+            {
+              "details": {
+                "families": [
+                  "nomic-bert"
+                ],
+                "family": "nomic-bert",
+                "format": "gguf",
+                "parameter_size": "137M",
+                "quantization_level": "Q4_K_M"
+              },
+              "digest": "0000000000000000000000000000000000000000000000000000000000000000",
+              "model": "nomic-embed-text:latest",
+              "modified_at": "2026-10-01T09:30:00.000000+10:00",
+              "name": "nomic-embed-text:latest",
+              "size": 4920000000
+            },
+            {
+              "details": {
+                "families": [
+                  "example"
+                ],
+                "family": "example",
+                "format": "gguf",
+                "parameter_size": "120B",
+                "quantization_level": "Q4_K_M"
+              },
+              "digest": "0000000000000000000000000000000000000000000000000000000000000000",
+              "model": "example-cloud:120b",
+              "modified_at": "2026-10-01T09:30:00.000000+10:00",
+              "name": "example-cloud:120b",
+              "remote_host": "https://ollama.example.com:443",
+              "remote_model": "example-cloud:120b",
+              "size": 4920000000
+            }
+          ]
+        },
+        "status": 200
+      }
+    }
+  ],
+  "name": "ollama-discovery-tags",
+  "provider": "ollama"
+}

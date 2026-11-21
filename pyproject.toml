@@ -36,27 +36,51 @@ classifiers = [
     "Typing :: Typed",
 ]
 # The core takes no runtime dependency beyond those agreed in the development
-# plan; every other layer and every provider SDK is an optional extra (C2). A new
-# dependency needs agreement and a licence check (scripts/licence_audit.py).
-dependencies = []
+# plan (pydantic, agreed for Wave 1); every other layer and every provider SDK is
+# an optional extra (C2). A new dependency needs agreement and a licence check
+# (scripts/licence_audit.py).
+dependencies = ["pydantic>=2.9,<3"]
 
 [project.optional-dependencies]
 # Each extra is declared now and filled by the workstream that builds its layer.
 # Provider SDKs (C6).
-bedrock = []
-anthropic = []
-openai = []
-gemini = []
-ollama = []
-all-providers = []
+bedrock = ["boto3>=1.35,<2"]
+anthropic = ["anthropic>=2.4,<3", "azure-identity>=1.27,<2"]
+# Claude on bedrock-mantle: the anthropic SDK's mantle client, and botocore (from boto3)
+# to presign short-term Bedrock API keys.
+bedrock-mantle = ["anthropic>=2.4,<3", "boto3>=1.35,<2"]
+openai = ["openai>=3.45,<4", "azure-identity>=1.27,<2"]
+gemini = ["google-genai>=2.30,<3"]
+ollama = ["httpx>=0.28,<1"]
+all-providers = [
+    "boto3>=1.35,<2",
+    "anthropic>=2.4,<3",
+    "openai>=3.45,<4",
+    "azure-identity>=1.27,<2",
+    "google-genai>=2.30,<3",
+    "httpx>=0.28,<1",
+]
 # Layers (C12 to C15, C19, C10).
-local-embeddings = []
-mcp = []
-sql = []
-konfig = []
-warden = []
-otel = []
-cli = []
+# sentence-transformers on CPU-only torch (C13): install torch from
+# https://download.pytorch.org/whl/cpu first (see conduit.embeddings.local).
+local-embeddings = ["sentence-transformers>=6.2,<7", "torch>=2.15,<3"]
+mcp = ["mcp>=2.3,<3"]
+sql = [
+    "sqlalchemy[asyncio]>=2.0.30,<2.1",
+    "alembic>=1.13,<2",
+    "asyncpg>=0.30,<1",
+    "aiosqlite>=0.20,<1",
+]
+konfig = ["cognisn-konfig>=0.5,<1"]
+# cognisn-warden is published as pre-releases only; the pin names one so resolvers accept it.
+# Its audit recorder needs psycopg (LGPL-3.0), a named licence exception (Q0036).
+warden = ["cognisn-warden>=0.1.0b8,<0.2"]
+otel = ["opentelemetry-api>=1.30,<2"]
+# The terminal interface (C10): rich for its output, and the mcp extra so the uvx form
+# connects MCP servers as it is (Q0039). Provider SDKs stay behind their own extras.
+cli = ["rich>=14,<16", "cognisn-conduit[mcp]"]
+# The conformance suites in conduit.testing are a pytest plugin (Q0031).
+testing = ["pytest>=8"]
 # Development only; never a runtime dependency.
 dev = [
     "pytest>=8",
@@ -65,7 +89,19 @@ dev = [
     "ruff>=0.6",
     # The licence audit reads requirement specifiers with packaging.
     "packaging>=24",
+    # Postgres tests for the sql extra start a throwaway container; the sql extra's own
+    # drivers (asyncpg, aiosqlite) are used, never psycopg.
+    "testcontainers[postgres]>=4.9,<5",
+    # In-memory span and metric exporters for the otel extra's tests (no collector).
+    "opentelemetry-sdk>=1.30,<2",
+    # Test-only libpq, so warden's audit recorder (which imports psycopg) imports on every
+    # platform. LGPL-3.0; dev is never licence-audited (Q0036, Q0038).
+    "psycopg[binary]>=3.2",
 ]
+
+[project.scripts]
+# The terminal interface; without the cli extra it names the extra to install.
+conduit = "conduit.cli.main:main"
 
 [project.urls]
 Homepage = "https://github.com/Cognisn/conduit"

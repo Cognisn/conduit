@@ -1,0 +1,289 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "operation": "ConverseStream",
+        "params": {
+          "inferenceConfig": {
+            "maxTokens": 1024
+          },
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "Incident notes: host-a.example.com stopped answering on 192.0.2.10 at 09:00."
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "modelId": "anthropic.claude-sonnet-4-6",
+          "system": [
+            {
+              "text": "You summarise incident notes for the operations team at example.com."
+            },
+            {
+              "cachePoint": {
+                "type": "default"
+              }
+            }
+          ],
+          "toolConfig": {
+            "tools": [
+              {
+                "toolSpec": {
+                  "description": "Look a host up in the inventory.",
+                  "inputSchema": {
+                    "json": {
+                      "properties": {
+                        "host": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "host"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "name": "lookup_host"
+                }
+              },
+              {
+                "cachePoint": {
+                  "type": "default"
+                }
+              }
+            ]
+          }
+        },
+        "region": "eu-west-2"
+      },
+      "response": [
+        {
+          "messageStart": {
+            "role": "assistant"
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 0,
+            "delta": {
+              "text": "Checking "
+            }
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 0,
+            "delta": {
+              "text": "the inventory."
+            }
+          }
+        },
+        {
+          "contentBlockStop": {
+            "contentBlockIndex": 0
+          }
+        },
+        {
+          "contentBlockStart": {
+            "contentBlockIndex": 1,
+            "start": {
+              "toolUse": {
+                "name": "lookup_host",
+                "toolUseId": "tooluse_example0001"
+              }
+            }
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 1,
+            "delta": {
+              "toolUse": {
+                "input": "{\"host\": \"host-a"
+              }
+            }
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 1,
+            "delta": {
+              "toolUse": {
+                "input": ".example.com\"}"
+              }
+            }
+          }
+        },
+        {
+          "contentBlockStop": {
+            "contentBlockIndex": 1
+          }
+        },
+        {
+          "messageStop": {
+            "stopReason": "tool_use"
+          }
+        },
+        {
+          "metadata": {
+            "metrics": {
+              "latencyMs": 812
+            },
+            "usage": {
+              "cacheReadInputTokens": 0,
+              "cacheWriteInputTokens": 1200,
+              "inputTokens": 52,
+              "outputTokens": 31,
+              "totalTokens": 1283
+            }
+          }
+        }
+      ]
+    },
+    {
+      "request": {
+        "operation": "ConverseStream",
+        "params": {
+          "inferenceConfig": {
+            "maxTokens": 1024
+          },
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "Incident notes: host-a.example.com stopped answering on 192.0.2.10 at 09:00."
+                }
+              ],
+              "role": "user"
+            },
+            {
+              "content": [
+                {
+                  "text": "Checking the inventory."
+                },
+                {
+                  "toolUse": {
+                    "input": {
+                      "host": "host-a.example.com"
+                    },
+                    "name": "lookup_host",
+                    "toolUseId": "tooluse_example0001"
+                  }
+                }
+              ],
+              "role": "assistant"
+            },
+            {
+              "content": [
+                {
+                  "toolResult": {
+                    "content": [
+                      {
+                        "text": "host-a.example.com: web tier, owner team-a"
+                      }
+                    ],
+                    "status": "success",
+                    "toolUseId": "tooluse_example0001"
+                  }
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "modelId": "anthropic.claude-sonnet-4-6",
+          "system": [
+            {
+              "text": "You summarise incident notes for the operations team at example.com."
+            },
+            {
+              "cachePoint": {
+                "type": "default"
+              }
+            }
+          ],
+          "toolConfig": {
+            "tools": [
+              {
+                "toolSpec": {
+                  "description": "Look a host up in the inventory.",
+                  "inputSchema": {
+                    "json": {
+                      "properties": {
+                        "host": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "host"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "name": "lookup_host"
+                }
+              },
+              {
+                "cachePoint": {
+                  "type": "default"
+                }
+              }
+            ]
+          }
+        },
+        "region": "eu-west-2"
+      },
+      "response": [
+        {
+          "messageStart": {
+            "role": "assistant"
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 0,
+            "delta": {
+              "text": "host-a.example.com (web tier, team-a) "
+            }
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 0,
+            "delta": {
+              "text": "stopped answering at 09:00."
+            }
+          }
+        },
+        {
+          "contentBlockStop": {
+            "contentBlockIndex": 0
+          }
+        },
+        {
+          "messageStop": {
+            "stopReason": "end_turn"
+          }
+        },
+        {
+          "metadata": {
+            "metrics": {
+              "latencyMs": 640
+            },
+            "usage": {
+              "cacheReadInputTokens": 1200,
+              "cacheWriteInputTokens": 0,
+              "inputTokens": 61,
+              "outputTokens": 17,
+              "totalTokens": 1278
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "name": "sonnet-4-6-in-region-stream",
+  "provider": "bedrock"
+}

@@ -1,0 +1,522 @@
+# Setting up providers
+
+Each provider adapter is behind its own extra, and imports its SDK only when a client is built: installing conduit without an extra, or building `conduit.providers.builtin_factories()`, never needs one. This guide covers installing each extra, configuring each provider, and what each adapter does about authentication, residency, environment variables and logging.
+
+Configure providers in `ConduitSettings.providers`, assign them to task classes, and pass `builtin_factories()` to `start` (see [Integrating conduit](integration.md)). Every example here validates its settings through a provider registry, as `start` does, without building a client, so none needs credentials or a network.
+
+```python
+from conduit import ConfigurationError, LiteralSecretResolver, ProviderRegistry
+from conduit.providers import builtin_factories
+
+registry = ProviderRegistry(secrets=LiteralSecretResolver({}), factories=builtin_factories())
+
+
+def refused(settings: dict[str, object]) -> str:
+    """The refusal ``start`` would raise for ``settings``."""
+    try:
+        registry.validate("example", settings)
+    except ConfigurationError as refusal:
+        return str(refusal)
+    raise AssertionError("expected a refusal")
+```
+
+## Installing
+
+The distribution is `cognisn-conduit`; the import name is `conduit`. Python 3.12 or later.
+
+| Extra | Provider or layer |
+|---|---|
+| `bedrock` | Amazon Bedrock (bedrock-runtime: Converse and ConverseStream) |
+| `bedrock-mantle` | Claude through Amazon Bedrock's mantle endpoint (single-Region) |
+| `anthropic` | Anthropic direct, and Claude in Microsoft Foundry |
+| `openai` | OpenAI, X.AI and Microsoft Foundry (one OpenAI-compatible adapter) |
+| `gemini` | The Gemini API |
+| `ollama` | Ollama |
+| `all-providers` | Every provider above |
+| `local-embeddings` | Local embeddings with sentence-transformers on CPU-only torch |
+
+With pip, in the product's virtual environment:
+
+```sh
+pip install "cognisn-conduit[bedrock]"
+pip install "cognisn-conduit[anthropic,openai]"
+pip install "cognisn-conduit[all-providers]"
+```
+
+With uv, in a project (adds the dependency to `pyproject.toml`), or into a plain environment:
+
+```sh
+uv add "cognisn-conduit[bedrock]"
+uv pip install "cognisn-conduit[bedrock]"
+```
+
+With uvx, to run the terminal interface without installing anything:
+
+```sh
+uvx --from "cognisn-conduit[cli,all-providers]" conduit
+```
+
+### Local embeddings and CPU-only torch
+
+The `local-embeddings` extra runs sentence-transformers on the CPU. conduit never uses a GPU, so install torch's CPU-only build. On Linux the default torch from PyPI also installs NVIDIA CUDA packages, which are large and which conduit never uses; the macOS and Windows wheels on PyPI are CPU-only already.
+
+With pip, install torch from the CPU index first, then conduit:
+
+```sh
+pip install "torch>=2.15,<3" --index-url https://download.pytorch.org/whl/cpu
+pip install "cognisn-conduit[local-embeddings]"
+```
+
+A later `pip install --upgrade torch` without `--index-url` brings the CUDA build back.
+
+With uv in a project, take torch from the CPU index in `pyproject.toml`, then add torch as a direct dependency alongside conduit, so the source applies to it:
+
+```toml
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+```
+
+```sh
+uv add torch "cognisn-conduit[local-embeddings]"
+```
+
+With uv in a plain environment, or uvx for a throwaway run:
+
+```sh
+uv pip install --torch-backend cpu "cognisn-conduit[local-embeddings]"
+uvx --torch-backend cpu --from "cognisn-conduit[local-embeddings,cli]" conduit
+```
+
+## Amazon Bedrock
+
+Kind `bedrock`, extra `bedrock`. Calls the bedrock-runtime Converse API through boto3 (ConverseStream by default; `use_converse_stream: false` uses Converse). boto3 is blocking, so its calls run in a worker thread.
+
+`region` is required: it is the Region the bedrock-runtime endpoint is called in, and the region the residency policy checks.
+
+### Authentication
+
+`auth.mode` chooses one of four modes. No setting ever holds a credential: every credential is a `secret://` reference.
+
+| Mode | How requests are authenticated |
+|---|---|
+| `credential_chain` (default) | The AWS credential chain (environment, shared profile, SSO, container or instance role), optionally a named `profile`. SigV4. |
+| `access_keys` | An access key id, secret access key and optional session token, each a secret reference resolved through the product's resolver. SigV4. |
+| `short_term_api_key` | conduit generates a short-term Bedrock API key from AWS credentials (`auth.source`: the credential chain or access keys) and sends it as a bearer token. A key lasts `lifetime_s` (15 minutes to 12 hours, 12 by default) or until its signing credentials expire, and is replaced `refresh_before_s` before it expires. |
+| `long_term_api_key` | A long-term Bedrock API key held as a secret reference. AWS recommends long-term keys for exploration only, so they are refused unless `allow_long_term_api_keys` is set. |
+
+```python
+credential_chain = {"kind": "bedrock", "region": "eu-west-2"}
+named_profile = {
+    "kind": "bedrock",
+    "region": "eu-west-2",
+    "auth": {"mode": "credential_chain", "profile": "example-ai"},
+}
+access_keys = {
+    "kind": "bedrock",
+    "region": "eu-west-2",
+    "auth": {
+        "mode": "access_keys",
+        "access_key_id": "secret://aws/access_key_id",
+        "secret_access_key": "secret://aws/secret_access_key",
+    },
+}
+short_term = {
+    "kind": "bedrock",
+    "region": "eu-west-2",
+    "auth": {"mode": "short_term_api_key", "lifetime_s": 3_600, "refresh_before_s": 300},
+}
+long_term = {
+    "kind": "bedrock",
+    "region": "eu-west-2",
+    "allow_long_term_api_keys": True,
+    "auth": {"mode": "long_term_api_key", "api_key": "secret://bedrock/api_key"},
+}
+
+for mapping in (credential_chain, named_profile, access_keys, short_term, long_term):
+    registry.validate("bedrock", mapping)
+
+without_the_flag = {**long_term, "allow_long_term_api_keys": False}
+assert "long-term Bedrock API keys are refused" in refused(without_the_flag)
+```
+
+With a short-term key, the first key is generated when the provider is built, so missing AWS credentials are refused at start-up, not on the first call. The process environment (`AWS_BEARER_TOKEN_BEDROCK`) is never read or written, so two providers in one process can use different keys.
+
+A deployment that does not use Bedrock API keys can deny them outright in IAM: deny the `bedrock:CallWithBearerToken` action for its principals, and no key minted from those credentials will work.
+
+### Residency
+
+Which Bedrock models a provider can use, and where each request is processed, come from the Region's own listing at start-up (C18), never from the catalogue: see [Model discovery](#model-discovery). The default catalogue holds what the listing does not give, keyed by foundation model id (`anthropic.claude-sonnet-5`): kind, capabilities, context window and output limit, for every current Claude model on bedrock-runtime and every other vendor's current chat model that Bedrock serves through Converse on demand (Amazon Nova, DeepSeek, Mistral AI, OpenAI, Qwen, MiniMax, Moonshot AI, NVIDIA, Writer and Z.AI), plus Titan Text Embeddings V2. Models in their legacy period with an end-of-life date are left out. Capabilities follow each model card's bedrock-runtime features: a model whose card lists tool calling only for bedrock-mantle is declared without tools, and prompt caching is declared only where Converse takes cache points (Claude and Amazon Nova). An inference profile takes the entry of the foundation model its listing names. The non-Claude entries are tested against recorded responses until the next live verification pass.
+
+The listing gives each model its scope:
+
+- **On-demand foundation models** (`anthropic.claude-sonnet-5`, as `ListFoundationModels` lists them in the Region) are `in_region`, processed in the Region the provider is called in.
+- **Geographic inference profiles** (`eu.`, `us.`, `au.`, `jp.`, `in.`, `ca.`, `apac.` and `us-gov.` prefixes, and application profiles) are `cross_region` over the destination Regions their `models` list names, exactly as AWS reports them.
+- **Global inference profiles** (`global.` prefix), and any profile whose model ARNs name no Region, are `global`.
+
+A deployment that must keep processing in one Region allows only `local` and `in_region` and names its Regions; an assignment to a profile is then refused at start-up (`ResidencyRefused`). A deployment that may use a geography allows `cross_region` and lists the Regions it accepts; a profile whose listed destinations reach outside the list is refused, and one whose destinations are all inside is allowed, whatever an older catalogue said. Read the destinations a profile has in your Region from `runtime.discovery[name]` or `ProviderRegistry.discover`.
+
+```python
+from conduit import ResidencyPolicy
+
+in_region = ResidencyPolicy(
+    scopes=frozenset({"local", "in_region"}), regions=frozenset({"eu-west-2"})
+)
+europe = ResidencyPolicy(
+    scopes=frozenset({"local", "in_region", "cross_region"}),
+    regions=frozenset({"eu-west-1", "eu-west-2", "eu-west-3", "eu-central-1", "eu-north-1"}),
+)
+assert "cross_region" not in in_region.scopes
+assert "eu-west-2" in (europe.regions or ())
+```
+
+`region` must be a Region where the bedrock-runtime endpoint is offered (`BEDROCK_REGIONS` in `conduit.providers.bedrock.settings`, from AWS's "Regional availability by endpoints"); any other is refused when the settings are validated. `processing` chooses, per connection, the Regions requests may be processed in (see [Choosing Regions](#choosing-regions)): a profile is then allowed only if every destination its listing names is chosen, and a `global.` profile only with `allow_global`. Without `processing` only the deployment's policy applies, as before.
+
+With `endpoint_url` set (or `discovery: {"<name>": "catalogue"}` in the settings) the provider is not listed: it serves only the models the catalogue declares, with the residency an overlay entry declares, and an entry that declares none is `global`, refused under any policy that names Regions.
+
+### Reasoning
+
+Claude and a few other models return a reasoning block (`reasoningContent`) apart from the reply. conduit reports each one, whole and in its place, as a provider state block (`provider_kind` `bedrock`, `state_type` `reasoning_content`), never as answer text, and sends it back on the next turn as Bedrock needs for tool use with reasoning.
+
+Amazon Nova does not return a reasoning block. It writes its reasoning into the reply text as `<thinking>...</thinking>`: the Nova user guide's tool use page says the default behaviour for tool calling is chain-of-thought "contained in <thinking> tags", with multiple tool calls and thinking blocks in one response. For Nova models only (matched on the base model id, so `apac.amazon.nova-lite-v1:0` counts), conduit moves each span out of the text and reports it as a provider state block of the same shape, without a signature, so a product reads Nova's reasoning where it reads Claude's and can show it apart from the answer. Its `state_type` is `thinking_text`, not `reasoning_content`, so that tag text can be told from a native reasoning block:
+
+- The answer text carries neither the tags nor what they hold. Whitespace after a closing tag is dropped (one space is kept where the answer text before the span did not end in whitespace, so "is" and "42" do not join; a paragraph break after the span becomes that one space), and so is the span's own leading and trailing whitespace. Whitespace before a span stays in the answer text.
+- Streamed text holds back only a trailing piece that could be the start of `<thinking>` (such as `<thin`), and releases it as text as soon as it proves not to be, or when the block ends. Ordinary text is never delayed beyond that.
+- Several spans in one reply, before and after tool use, are each reported in their place.
+- A span still open when its block ends (a reply cut off by its token limit) is reasoning, not answer text.
+- `thinking_text` state is never sent back to any model, as a reasoning block or as text: it has no signature and is Nova's own text format, so a transcript handed from Nova to Claude carries none of it. Native `reasoning_content` state keeps the rule above for every model, Nova 2 included. An assistant message that held only `thinking_text` (a reply cut off inside a span) is left out of the next request, and the user messages either side of it are merged so the roles still alternate; a prompt cache point on that message moves to the end of the message before it. This applies to any model's state-only assistant turn, since Bedrock refuses an empty message.
+- Text from any other model is never parsed, so an answer that mentions the tag, or shows it in a code block, is left as it was.
+- Limits: spans do not nest, so the inner closing tag of a nested `<thinking>` ends the span and the rest of the outer span appears in the answer text. The model match is case-sensitive, and an ARN-form model id is not recognised as Nova (as with the other model-family checks in this adapter).
+
+A reasoning request field (turning reasoning on or off, or setting its effort) is not part of this.
+
+### Logging and credentials
+
+botocore's signer logs every signature at DEBUG on `botocore.auth`, and a short-term key can be rebuilt from those records; botocore's endpoint logs each request object at DEBUG, which a buffering handler could render after the bearer key is set. When a provider uses API keys, conduit installs two filters on botocore's loggers, once per process: one drops `botocore.auth` records whose message starts with `Signature:`, and one renders every `botocore.endpoint` record when it is logged. Both are process-wide, so they also apply to the product's own botocore clients. Removing them gives back every signature (and with it every short-term key) and every bearer key to whatever the product's handlers write; do that only for local debugging with throwaway credentials. The presign step is `conduit.providers.bedrock.auth.short_term_keys`, shared by the bedrock and bedrock-mantle adapters.
+
+conduit cannot filter everything botocore logs. When botocore refreshes temporary credentials (assume-role through STS, SSO, a container or instance role) it can log the responses that carry them at DEBUG, on loggers conduit does not touch. **Keep the `botocore` logger above DEBUG in production.**
+
+### Other settings
+
+`endpoint_url` replaces the regional endpoint (an interface VPC endpoint, say; https only). `connect_timeout_s`, `read_timeout_s` and `max_attempts` set botocore's client configuration. Cache breakpoints become Converse cache points where the catalogue says the model supports prompt caching.
+
+## Claude through Bedrock's mantle endpoint
+
+Kind `bedrock_mantle`, extra `bedrock-mantle` (the anthropic SDK and boto3). Calls Claude through the Anthropic Messages API at `https://bedrock-mantle.<region>.api.aws/anthropic`, which runs each request in the Region it is sent to. That makes it the route to single-Region Claude where bedrock-runtime offers only inference profiles: every model the endpoint lists is `in_region` in the endpoint's Region. Its catalogue entries describe each Claude model the Bedrock model cards document on bedrock-mantle (gated Mythos models aside); which Regions serve a model is the endpoint's listing's to say.
+
+`region` must be one of the Regions where the bedrock-mantle endpoint is offered (a subset of bedrock-runtime's: `MANTLE_REGIONS` in `conduit.providers.bedrock_mantle.settings`, which also keeps ap-southeast-4, listed for mantle by several model cards though not by AWS's endpoint table); any other is refused when the settings are validated.
+
+Authentication is by Bedrock API key only: `short_term_api_key` (the default, generated from the credential chain or access keys and refreshed) or `long_term_api_key` behind `allow_long_term_api_keys`. The SDK never signs requests or reads a key or Region from the environment, and the key is set at send time, so it never appears in the request options the SDK logs. `ANTHROPIC_LOG=debug` is refused while set, since it makes the SDK log whole request bodies.
+
+```python
+registry.validate("claude_regional", {"kind": "bedrock_mantle", "region": "eu-west-1"})
+from conduit import default_catalogue
+
+mantle = default_catalogue().require("bedrock_mantle", "anthropic.claude-sonnet-5")
+assert mantle.residency_scope is None  # the endpoint's listing gives it: in_region
+assert mantle.capabilities.prompt_caching
+```
+
+## Anthropic
+
+Kind `anthropic`, extra `anthropic`. Two endpoints:
+
+- `endpoint: direct` (the default) calls Anthropic's API with `api_key`. `base_url` is optional, for a gateway in front of the API; it must be https (plain http only to loopback) and may not carry credentials.
+- `endpoint: foundry` calls Claude in Microsoft Foundry through the resource's Anthropic endpoint, given as `base_url` (`https://<resource>.services.ai.azure.com/anthropic/`), with exactly one of `api_key` and `entra_id`.
+
+```python
+direct = {"kind": "anthropic", "api_key": "secret://anthropic/api_key"}
+foundry_key = {
+    "kind": "anthropic",
+    "endpoint": "foundry",
+    "base_url": "https://example-resource.services.ai.azure.com/anthropic/",
+    "api_key": "secret://foundry/api_key",
+}
+foundry_entra = {
+    "kind": "anthropic",
+    "endpoint": "foundry",
+    "base_url": "https://example-resource.services.ai.azure.com/anthropic/",
+    "entra_id": {"mode": "entra_id"},
+}
+
+for mapping in (direct, foundry_key, foundry_entra):
+    registry.validate("claude", mapping)
+
+assert "settings refused" in refused(
+    {"kind": "anthropic", "endpoint": "foundry", "entra_id": {"mode": "entra_id"}}
+)  # a Foundry endpoint needs base_url
+```
+
+Microsoft Entra ID uses azure-identity's `DefaultAzureCredential` (environment, workload identity, managed identity, developer sign-ins) and a bearer token provider for the scope (`https://ai.azure.com/.default` by default). `managed_identity_client_id` picks a user-assigned managed identity.
+
+The client takes its key, endpoint and headers only from the settings. Three environment variables would let the SDK override them or log content, so a client is refused while one is set:
+
+- `ANTHROPIC_CUSTOM_HEADERS` (merged over the headers conduit sets, including the key);
+- `ANTHROPIC_FOUNDRY_RESOURCE`, for a Foundry endpoint;
+- `ANTHROPIC_LOG=debug` (`info` logs only retries and is allowed).
+
+The SDK's own OpenTelemetry spans are switched off, since they can carry request content outside conduit's capture policy. The catalogue's `anthropic` entries describe the direct API (`global`): every current Claude model and every legacy model still available, as Anthropic's models overview lists them (Claude Mythos models, offered only to verified organisations, are left out). Claude in Foundry is a regional deployment: declare the models you deploy in a catalogue overlay, and their processing with `deployment` (see [Choosing Regions](#choosing-regions)).
+
+`inference_geo: us` keeps inference on US infrastructure for Claude 4.6 and later (Anthropic's data residency page), is sent on every request, and a response whose `usage.inference_geo` names another geography fails the call (`REJECTED`), so a workspace default can never widen the choice. It is refused with a `base_url` gateway, which conduit cannot know passes it on, and on a Foundry endpoint, where processing is the deployment type.
+
+## OpenAI, X.AI and Microsoft Foundry
+
+Kind `openai_compat`, extra `openai`. One adapter serves three services, chosen by `service.name`, through streaming Chat Completions with usage on the final chunk. Prompt caching on these services is automatic, so cache breakpoints are ignored, and cached prompt tokens come back as `cache_read_tokens`.
+
+| Service | Endpoint | Authentication | Catalogue provider |
+|---|---|---|---|
+| `openai` | `https://api.openai.com/v1` | `api_key`; `organization` and `project` sent only when set | `openai` |
+| `xai` | `https://api.x.ai/v1` | `api_key` | `xai` |
+| `foundry` | the resource's `https://<resource>.openai.azure.com/openai/v1/` | an API key or Microsoft Entra ID | `openai`, or `xai` for Grok deployments |
+
+"ChatGPT" in conduit means the OpenAI API through this adapter: signing in with a consumer ChatGPT subscription is not supported.
+
+```python
+openai = {
+    "kind": "openai_compat",
+    "service": {"name": "openai", "api_key": "secret://openai/api_key"},
+}
+xai = {"kind": "openai_compat", "service": {"name": "xai", "api_key": "secret://xai/api_key"}}
+foundry = {
+    "kind": "openai_compat",
+    "service": {
+        "name": "foundry",
+        "endpoint": "https://example-resource.openai.azure.com/openai/v1/",
+        "auth": {
+            "mode": "entra_id",
+            "managed_identity_client_id": "00000000-0000-0000-0000-000000000000",
+        },
+    },
+}
+
+for mapping in (openai, xai, foundry):
+    registry.validate("gpt", mapping)
+```
+
+A Foundry model id is the **deployment name**, which the product declares in a catalogue overlay under the catalogue provider, with its own residency: Foundry deployments are regional, while the default catalogue's `openai` and `xai` entries describe the public APIs: each provider's current chat models with function calling through Chat Completions, and OpenAI's `text-embedding-3-small` and `text-embedding-3-large`. X.AI states no per-model output limit, so its entries carry the API's default of 128,000 tokens. OpenAI's `gpt-6-astra` and `gpt-6.1-sol` take tool calls only through the Responses API, so their entries declare no tools. Name deployments so they do not collide with a public model id, or the overlay would change that entry too.
+
+```python
+from conduit import CatalogueOverlay
+
+foundry_overlay = CatalogueOverlay.model_validate(
+    {
+        "name": "example-foundry",
+        "add": [
+            {
+                "provider": "openai",
+                "model_id": "example-gpt5-swedencentral",
+                "kind": "chat",
+                "residency_scope": "in_region",
+                "regions": ["swedencentral"],
+                "capabilities": {"tools": True, "structured_output": True},
+                "context_window": 400_000,
+                "output_limit": 128_000,
+            }
+        ],
+    }
+)
+declared = (
+    default_catalogue().apply(foundry_overlay).require("openai", "example-gpt5-swedencentral")
+)
+assert declared.residency_scope == "in_region"
+```
+
+Give the Foundry provider `region: swedencentral` in its settings so the residency policy can check it, or declare the deployment type with `deployment` (`{"type": "standard", "azure_region": "swedencentral"}`), which sets `region` to `azure:swedencentral` and gives every deployment the residency its type means (see [Choosing Regions](#choosing-regions)).
+
+Environment variables: the key and base URL are always passed, so `OPENAI_API_KEY` and `OPENAI_BASE_URL` are never used, and `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`, `OPENAI_ADMIN_KEY` and `OPENAI_WEBHOOK_SECRET` are cleared on every client unless the settings give an organisation or project (an OpenAI organisation id is never sent to X.AI or Foundry). Two still reach the SDK, and deployments should know them:
+
+- `OPENAI_LOG` (`info` or `debug`) makes the SDK log each request's options, including prompt and tool content, on its own `openai` logger, outside conduit's capture policy. Leave it unset in production.
+- `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` route every call through a proxy (the TLS session still ends at the provider).
+
+## Gemini
+
+Kind `gemini`, extra `gemini`. The Gemini API with a Google AI Studio key. Vertex AI is not served by this adapter.
+
+```python
+registry.validate("gemini", {"kind": "gemini", "api_key": "secret://gemini/api_key"})
+```
+
+The key, the backend and the endpoint are pinned, so `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_GENAI_USE_ENTERPRISE` and `GOOGLE_GEMINI_BASE_URL` are never read. The rest of the SDK's transport follows the environment as any HTTPS client would: proxy variables and `.netrc`, `SSL_CERT_FILE` and `SSL_CERT_DIR`, and `GOOGLE_GENAI_HTTP_CLIENT`. `base_url` may name an https proxy in front of the API (no credentials, query or fragment); `max_attempts` bounds the SDK's retries. The catalogue's Gemini entries are `global`: the current stable chat models (Pro tier `gemini-4-carbon` and `gemini-4-argon`, and the Flash and Flash-Lite models) and `gemini-embedding-001`.
+
+## Ollama
+
+Kind `ollama`, extra `ollama` (httpx). A locally hosted Ollama server, on loopback by default (`http://127.0.0.1:11434`). The catalogue's Ollama entries are `local`: the deployment's own hosts. A remote server is allowed, but its URL may not carry credentials, a query or a fragment.
+
+```python
+registry.validate("ollama", {"kind": "ollama"})
+registry.validate(
+    "ollama", {"kind": "ollama", "base_url": "http://192.0.2.40:11434", "num_ctx": 32_768}
+)
+assert "base_url" in refused({"kind": "ollama", "base_url": "http://user:pass@192.0.2.40:11434"})
+```
+
+The HTTP client ignores the environment (no proxy variables, no `.netrc`) and never follows redirects. Left unset, `num_ctx` requests the catalogue entry's full context window (131,072 tokens for `llama3.1:8b`), because Ollama's own default is far smaller; a full window needs memory on the Ollama host to match, so set `num_ctx` to request less. A model you pull that the catalogue lacks is usable as listed, on the conservative floor; declare it in a catalogue overlay under provider `ollama` to give it its capabilities and window.
+
+## The stub
+
+Kind `stub`, no extra. A deterministic, scriptable provider for tests: it never reaches a network, streams like a real provider, and reports all four usage counts (including cache reads and writes for requests with cache breakpoints). It needs `not_for_production: true` in its settings and logs a warning when built. Scripts are registered by name with `StubFactory(scripts={...})`: `echo` (the default), `scripted` turns in order, and `answer_tool_results` (call a tool, then answer from its result).
+
+## Choosing Regions
+
+A person configuring a connection can choose where its requests are processed. Each adapter takes the choice in its own terms, validates it against what the provider offers, and turns it into a `RegionChoice` (`settings.region_choice()`): the Regions (or geographies) requests may be processed in, and whether `global` processing is allowed. The choice is checked after the deployment's `ResidencyPolicy`, never instead of it, so it can only narrow what the policy allows; a model outside it is refused at start-up and by `ProviderRegistry.discover`, with the Regions named. A connection that chooses nothing behaves as before.
+
+Some endpoints also guarantee where a model is processed (`settings.declared_residency(model_id)`); that declaration replaces what a listing or a catalogue entry says. AWS Regions are written as bare codes (`ap-southeast-2`); a geography another provider offers carries the provider's prefix (`anthropic:us`, `openai:eu`, `xai:us`, `azure:swedencentral`, `azure:zone-eu`, `azure:geo-australia`), so a deployment's policy never matches a code it did not mean. A policy that names Regions must name such a code for that connection to pass. `region` is set from the choice for these providers and may not be given otherwise.
+
+| Kind (service) | Called in | The choice | Processing |
+|---|---|---|---|
+| `bedrock` | `region`, one of the Regions where bedrock-runtime is offered | `processing`: AWS Regions (including `region`), and `allow_global` | in-Region models in `region`; a geographic inference profile in the destination Regions its listing names (allowed only if every one is chosen); a `global.` profile only with `allow_global` |
+| `bedrock_mantle` | `region`, one of the Regions where bedrock-mantle is offered | none | always `in_region` in `region` |
+| `anthropic` (direct) | Anthropic's API | `inference_geo`: `us` or `global` | `us`: `anthropic:us` for Claude 4.6 and later, sent on every request (an older model would refuse it, so it is refused); `global`: anywhere |
+| `anthropic` (foundry), `openai_compat` (foundry) | the resource's endpoint | `deployment`: `type` (`global`, `data_zone`, `standard`) and `azure_region` | `global`: any Azure region; `data_zone`: the region's data zone (`azure:zone-us`, `-eu`, `-apac`); `standard`: the region's Azure geography (`azure:geo-...`). A declaration conduit cannot verify |
+| `openai_compat` (openai) | `https://<code>.api.openai.com/v1` when `data_residency` is set | `data_residency`: us, eu, au, ca, jp, in, sg, kr, gb, ae | `openai:<code>` where the region processes in-region (us, eu, au, jp, in, ae; au, jp and in only for `gpt-6-luna`); otherwise `global` (ca, sg, kr and gb store data only, so nothing is chosen) |
+| `openai_compat` (xai) | `https://us.api.x.ai/v1` when `endpoint_region` is `us` | `endpoint_region: us` | `xai:us` |
+| `gemini`, `ollama`, `stub` | as configured | none | Gemini `global` (no processing location is stated); Ollama `local`, or `global` for a model the server forwards |
+
+Unlisted Regions are refused: the Region lists are read from each provider's documentation and ship with conduit, so a Region a provider adds needs a conduit release. A product shows the choices with `ProviderRegistry.regions(kind)`: one `RegionListing` per adapter (or per service of it), each with its `OfferedRegion` values (code, name, whether a connection may be called there, what choosing it means, the Regions a geography covers, and whether it only stores data), what `global` means for that provider, the documentation it was read from and when. Where a chosen Bedrock source Region's profiles actually route comes from `ProviderRegistry.discover` on settings for that Region, never from a profile's prefix: AWS documents that destinations can differ by source Region.
+
+```python
+from conduit import RegionChoice
+
+[bedrock_regions] = registry.regions("bedrock")
+assert "ap-southeast-4" in {offered.code for offered in bedrock_regions.regions}
+assert bedrock_regions.global_option is not None
+
+australia = registry.validate(
+    "bedrock_au",
+    {
+        "kind": "bedrock",
+        "region": "ap-southeast-2",
+        "processing": {"regions": ["ap-southeast-2", "ap-southeast-4"]},
+    },
+)
+assert australia.region_choice() == RegionChoice(
+    regions=frozenset({"ap-southeast-2", "ap-southeast-4"})
+)
+assert "must include region" in refused(
+    {"kind": "bedrock", "region": "ap-southeast-2", "processing": {"regions": ["ap-southeast-4"]}}
+)
+assert "Bedrock runtime" in refused({"kind": "bedrock", "region": "xx-nowhere-1"})
+
+europe = registry.validate(
+    "gpt_eu",
+    {
+        "kind": "openai_compat",
+        "service": {"name": "openai", "api_key": "secret://openai/api_key", "data_residency": "eu"},
+    },
+)
+assert europe.region == "openai:eu"
+by_service = {listing.service: listing for listing in registry.regions("openai_compat")}
+assert {offered.code for offered in by_service["openai"].regions if offered.stores_only} == {
+    "openai:ca",
+    "openai:sg",
+    "openai:kr",
+    "openai:gb",
+}
+```
+
+## Model discovery
+
+Each adapter's listing is the source of truth for which models a provider can use and where a request is processed (C18). `start` lists every provider a task class is assigned to, and `ProviderRegistry.discover` lists one on demand; each listed model is joined to the catalogue, with the drift reported (see [Discovering the models a provider reaches](integration.md#discovering-the-models-a-provider-reaches)). What each adapter lists, and the residency it reports:
+
+- **Amazon Bedrock**: `ListFoundationModels` (on-demand models whose output is text or embeddings, `in_region` in the Region its ARN names) and `ListInferenceProfiles` (every page; each profile's type is its label, its `models` ARNs give its destination Regions and its foundation model, and a `global.` profile or an ARN without a Region makes it `global`), on a `bedrock` control-plane client `create_client` builds beside the runtime client, for the same Region and authentication. The credentials need `bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles`. Unsupported when `endpoint_url` replaces the runtime endpoint. AWS documents at most five models per profile, and conduit takes the list as the profile's complete destinations.
+- **Claude through Bedrock's mantle endpoint**: the endpoint's documented OpenAI-compatible listing, `GET /v1/models` on the Region's `bedrock-mantle` host, with the same Bedrock API key; only Claude models (`anthropic.` ids) are kept, each `in_region` in the endpoint's Region. Unsupported when `endpoint_url` is set.
+- **Anthropic**: the Models API (`GET /v1/models`, every page) for `endpoint: direct`, `global`, with each model's `max_input_tokens` and `max_tokens` as its window and output limit, and its image input and structured outputs support. Unsupported for Claude in Foundry, whose endpoint documents no models listing and whose ids are deployment names.
+- **OpenAI and X.AI**: the Models API (`GET /v1/models`), `global`; X.AI's `context_length` is kept as the window. Unsupported for Microsoft Foundry, whose OpenAI v1 endpoint lists the resource's models rather than its deployments.
+- **Gemini**: `models.list` (every page), keeping the models that support `generateContent` (chat) and those that support `embedContent` without it (embedding, for the embedding adapter), `global`, with their input and output token limits; the `models/` prefix is removed. The SDK's model carries no `baseModelId`, so a tuned model's base is its `tuned_model_info.base_model`, and any other model is its own base.
+- **Ollama**: the server's local models (`GET /api/tags`), `local`; a model the server forwards to a remote host (`remote_host` or `remote_model` in the listing) is `global`. In catalogue mode there is no listing, so a declared Ollama model has the scope its entry declares (`local` for the default entries) whether or not the server forwards it: list an Ollama server that may hold remote models. A model pulled without a tag is listed as `name:latest`, and Ollama resolves an untagged name to its `latest` tag, so it is reported under its bare name (`nomic-embed-text`), the name the catalogue declares and the provider calls; any other tag is kept.
+- **The stub**: the ids given as `StubFactory(models=[...])`, each `local`, so a product can test its handling of listed, catalogued and uncatalogued models; `DEFAULT_STUB_MODELS` names the catalogue's. Without `models` the stub is not listed, and serves the stub models the catalogue declares.
+
+### What start-up needs to list
+
+Start-up lists every provider a task class is assigned to, so the credentials need the listing as well as inference. A provider whose credentials cannot list fails to start (the listing's `ProviderError`, before anything is built); give it the permission, or set `"discovery": {"<name>": "catalogue"}` in the settings to serve only the models the catalogue declares, with the residency an overlay entry declares (`global` where it declares none).
+
+| Kind | What the listing needs |
+|---|---|
+| `bedrock` | IAM `bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles` in the provider's Region (a Bedrock API key covers both) |
+| `bedrock_mantle` | The Bedrock API key the provider already uses (`GET /v1/models` on the Region's mantle endpoint) |
+| `anthropic` (direct) | The API key the provider already uses (the Models API) |
+| `openai_compat` (OpenAI, X.AI) | The API key the provider already uses (the Models API) |
+| `gemini` | The API key the provider already uses (`models.list`) |
+| `ollama` | Network access to the server's `/api/tags` |
+| Claude in Foundry, Foundry's OpenAI v1 endpoint, `endpoint_url` | Not listed: catalogue mode |
+
+## Building clients
+
+Each adapter resolves its credential and builds its SDK client in one guarded step. The registry builds every client under the same guard (`guarded_client`, exported from `conduit`), a product's own factories included.
+
+If a client cannot be built, `start()` raises `ConfigurationError` naming the provider, its kind and the exception's class, such as `provider 'primary': the anthropic client could not be built: TypeError`. The error has no cause or context, so the key never appears in a traceback with locals. conduit's own refusals (a missing extra, an unresolved secret, a refused environment variable) keep their own messages, with their traceback, cause, context and notes cleared.
+
+```python
+import asyncio
+from collections.abc import Mapping
+from typing import Any
+
+from pydantic import SecretStr
+
+from conduit import ConduitSettings, ProviderSettings, TaskClass, start
+from conduit.providers.stub import StubFactory
+
+
+class BrokenStubFactory(StubFactory):
+    """A factory whose client step fails with the key in the library's message."""
+
+    def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
+        raise TypeError("sk-example-not-real is not a valid key")
+
+
+async def start_broken() -> ConfigurationError:
+    settings = ConduitSettings.model_validate(
+        {
+            "providers": {"primary": {"kind": "stub", "not_for_production": True}},
+            "assignments": {"triage": {"provider": "primary", "model": "stub-echo"}},
+        }
+    )
+    try:
+        await start(
+            settings,
+            task_classes=[TaskClass(name="triage")],
+            factories=[BrokenStubFactory()],
+            secrets=LiteralSecretResolver({}),
+        )
+    except ConfigurationError as refusal:
+        return refusal
+    raise AssertionError("expected a refusal")
+
+
+refusal = asyncio.run(start_broken())
+assert str(refusal) == "provider 'primary': the stub client could not be built: TypeError"
+assert refusal.__cause__ is None and refusal.__context__ is None
+```
+
+This covers ordinary exceptions. Cancellation, `KeyboardInterrupt` and other `BaseException` propagate unchanged, with the library's frames.
+
+The guard cannot stop a library logging its own arguments before it fails. botocore's signer, for example, logs the canonical request (with the AWS access key id and any session token) at DEBUG when conduit presigns a short-term Bedrock key. Keep SDK loggers above DEBUG in production.
+
+## Writing a provider adapter
+
+A product can add an adapter of its own by giving the registry a `ProviderFactory`: a `kind`, a `settings_model` (a subclass of `ProviderSettings`, whose credential fields must be typed `SecretRef`), `create_client(settings, secrets)` and `create_provider(name, settings, client, *, catalogue=None)`. Only the registry calls `create_client`, and every provider it builds is wrapped in metering, so calls through the adapter get admission checks, residency, usage events and capture enforcement like any other. Subclass `BaseProvider` and implement `stream`; declare the adapter's models in a catalogue overlay under its kind.
+
+The registry already runs `create_client` under the construction guard. A factory that builds a client anywhere else (an embedder's client, a client it refreshes later) can run that step under the same guard with `guarded_client(kind, build, name=...)`: what `build` returns passes through, a conduit error goes on with its traceback, cause, context and notes cleared, and any other exception becomes the fixed `ConfigurationError`.
+
+```python
+from conduit import guarded_client
+
+
+def build_acme_client() -> object:
+    raise ValueError("https://api.example.com/?key=sk-example-not-real refused")
+
+
+try:
+    guarded_client("acme", build_acme_client, name="primary")
+except ConfigurationError as refusal:
+    assert str(refusal) == "provider 'primary': the acme client could not be built: ValueError"
+    assert refusal.__cause__ is None and refusal.__context__ is None
+else:
+    raise AssertionError("expected a refusal")
+
+assert guarded_client("acme", lambda: "client") == "client"
+```

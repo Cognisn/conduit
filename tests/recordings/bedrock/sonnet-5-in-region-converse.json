@@ -1,0 +1,98 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "operation": "Converse",
+        "params": {
+          "inferenceConfig": {
+            "maxTokens": 1024
+          },
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "Incident notes: host-a.example.com stopped answering on 192.0.2.10 at 09:00."
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "modelId": "anthropic.claude-sonnet-5",
+          "system": [
+            {
+              "text": "You summarise incident notes for the operations team at example.com."
+            },
+            {
+              "cachePoint": {
+                "type": "default"
+              }
+            }
+          ],
+          "toolConfig": {
+            "tools": [
+              {
+                "toolSpec": {
+                  "description": "Look a host up in the inventory.",
+                  "inputSchema": {
+                    "json": {
+                      "properties": {
+                        "host": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "host"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "name": "lookup_host"
+                }
+              },
+              {
+                "cachePoint": {
+                  "type": "default"
+                }
+              }
+            ]
+          }
+        },
+        "region": "ap-southeast-1"
+      },
+      "response": {
+        "metrics": {
+          "latencyMs": 790
+        },
+        "output": {
+          "message": {
+            "content": [
+              {
+                "text": "Checking the inventory."
+              },
+              {
+                "toolUse": {
+                  "input": {
+                    "host": "host-a.example.com"
+                  },
+                  "name": "lookup_host",
+                  "toolUseId": "tooluse_example0001"
+                }
+              }
+            ],
+            "role": "assistant"
+          }
+        },
+        "stopReason": "tool_use",
+        "usage": {
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 1200,
+          "inputTokens": 52,
+          "outputTokens": 31,
+          "totalTokens": 1283
+        }
+      }
+    }
+  ],
+  "name": "sonnet-5-in-region-converse",
+  "provider": "bedrock"
+}

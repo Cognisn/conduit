@@ -1,0 +1,130 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "body": {
+          "messages": [
+            {
+              "content": "You answer questions about the example.com inventory.",
+              "role": "system"
+            },
+            {
+              "content": "Is host-a.example.com answering on 192.0.2.10?",
+              "role": "user"
+            }
+          ],
+          "model": "llama3.1:8b",
+          "options": {
+            "num_ctx": 131072,
+            "num_predict": 512
+          },
+          "stream": true,
+          "tools": [
+            {
+              "function": {
+                "description": "Look a host up in the inventory.",
+                "name": "lookup_host",
+                "parameters": {
+                  "properties": {
+                    "host": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "host"
+                  ],
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "method": "POST",
+        "path": "/api/chat"
+      },
+      "response": {
+        "lines": [
+          "{\"created_at\": \"2026-11-04T00:00:00.000000Z\", \"done\": false, \"message\": {\"content\": \"Checking \", \"role\": \"assistant\"}, \"model\": \"llama3.1:8b\"}",
+          "{\"created_at\": \"2026-11-04T00:00:00.000000Z\", \"done\": false, \"message\": {\"content\": \"the inventory.\", \"role\": \"assistant\"}, \"model\": \"llama3.1:8b\"}",
+          "{\"created_at\": \"2026-11-04T00:00:00.000000Z\", \"done\": false, \"message\": {\"content\": \"\", \"role\": \"assistant\", \"tool_calls\": [{\"function\": {\"arguments\": {\"host\": \"host-a.example.com\"}, \"name\": \"lookup_host\"}}]}, \"model\": \"llama3.1:8b\"}",
+          "{\"created_at\": \"2026-11-04T00:00:00.000000Z\", \"done\": true, \"done_reason\": \"stop\", \"eval_count\": 31, \"eval_duration\": 540000000, \"load_duration\": 21000000, \"message\": {\"content\": \"\", \"role\": \"assistant\"}, \"model\": \"llama3.1:8b\", \"prompt_eval_count\": 84, \"prompt_eval_duration\": 310000000, \"total_duration\": 912000000}"
+        ],
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "body": {
+          "messages": [
+            {
+              "content": "You answer questions about the example.com inventory.",
+              "role": "system"
+            },
+            {
+              "content": "Is host-a.example.com answering on 192.0.2.10?",
+              "role": "user"
+            },
+            {
+              "content": "Checking the inventory.",
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": {
+                      "host": "host-a.example.com"
+                    },
+                    "name": "lookup_host"
+                  }
+                }
+              ]
+            },
+            {
+              "content": "host-a.example.com: up, last seen 09:00 on 192.0.2.10",
+              "role": "tool",
+              "tool_name": "lookup_host"
+            }
+          ],
+          "model": "llama3.1:8b",
+          "options": {
+            "num_ctx": 131072,
+            "num_predict": 512
+          },
+          "stream": true,
+          "tools": [
+            {
+              "function": {
+                "description": "Look a host up in the inventory.",
+                "name": "lookup_host",
+                "parameters": {
+                  "properties": {
+                    "host": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "host"
+                  ],
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "method": "POST",
+        "path": "/api/chat"
+      },
+      "response": {
+        "lines": [
+          "{\"created_at\": \"2026-11-04T00:00:00.000000Z\", \"done\": false, \"message\": {\"content\": \"Yes: host-a.example.com \", \"role\": \"assistant\"}, \"model\": \"llama3.1:8b\"}",
+          "{\"created_at\": \"2026-11-04T00:00:00.000000Z\", \"done\": false, \"message\": {\"content\": \"is up.\", \"role\": \"assistant\"}, \"model\": \"llama3.1:8b\"}",
+          "{\"created_at\": \"2026-11-04T00:00:00.000000Z\", \"done\": true, \"done_reason\": \"stop\", \"eval_count\": 12, \"eval_duration\": 540000000, \"load_duration\": 21000000, \"message\": {\"content\": \"\", \"role\": \"assistant\"}, \"model\": \"llama3.1:8b\", \"prompt_eval_cached_count\": 84, \"prompt_eval_count\": 131, \"prompt_eval_duration\": 310000000, \"total_duration\": 912000000}"
+        ],
+        "status": 200
+      }
+    }
+  ],
+  "name": "ollama-tool-round-trip",
+  "provider": "ollama"
+}

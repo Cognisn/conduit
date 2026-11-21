@@ -41,7 +41,29 @@ from packaging.utils import canonicalize_name
 ROOT = "cognisn-conduit"
 NOT_AUDITED = frozenset({"dev"})
 
-EXCEPTIONS: dict[str, str] = {}
+EXCEPTIONS: dict[str, str] = {
+    # Agreed 2026-11-04 (Skuld Q0016): Mozilla's CA bundle, required by httpx and
+    # requests (the ollama, gemini and openai extras); used unmodified and
+    # installed as its own package.
+    "certifi": "MPL-2.0 CA bundle required by httpx and requests; used unmodified, "
+    "installed separately (Q0016)",
+    # Agreed 2026-11-05 (Skuld Q0032): the progress-bar library required by
+    # sentence-transformers, transformers and huggingface_hub (the local-embeddings
+    # extra); conduit never shows its bars. Used unmodified and installed as its own
+    # package.
+    "tqdm": "MPL-2.0 AND MIT progress bars required by sentence-transformers, transformers "
+    "and huggingface_hub; used unmodified, installed separately (Q0032)",
+    # Agreed 2026-11-05 (Skuld Q0036): the PostgreSQL driver required by cognisn-warden
+    # (the warden extra), whose audit recorder imports it. conduit never imports it; used
+    # unmodified and installed as its own package.
+    "psycopg": "LGPL-3.0 PostgreSQL driver required by cognisn-warden (the warden extra); "
+    "used unmodified, installed separately (Q0036)",
+    # Agreed 2026-11-11 (Skuld Q0056): the FIDO2 library required by cognisn-warden from
+    # 0.1.0b18 (the warden extra). BSD-2-Clause, with some files under Apache-2.0 and
+    # MPL-2.0. conduit never imports it; used unmodified and installed as its own package.
+    "fido2": "BSD-2-Clause with Apache-2.0 and MPL-2.0 files, required by cognisn-warden "
+    "(the warden extra); used unmodified, installed separately (Q0056)",
+}
 
 _STRONG = re.compile(
     r"\b(?:A?GPL|GPLv\d|SSPL|EUPL|OSL)\b"
