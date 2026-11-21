@@ -176,6 +176,21 @@ in_region.check(catalogue.require("bedrock", "anthropic.claude-sonnet-5"), "eu-w
 europe.check(catalogue.require("bedrock", "eu.anthropic.claude-sonnet-5"), "eu-west-2", task="chat")
 ```
 
+### Reasoning
+
+Claude and a few other models return a reasoning block (`reasoningContent`) apart from the reply. conduit reports each one, whole and in its place, as a provider state block (`provider_kind` `bedrock`, `state_type` `reasoning_content`), never as answer text, and sends it back on the next turn as Bedrock needs for tool use with reasoning.
+
+Amazon Nova does not return a reasoning block. It writes its reasoning into the reply text as `<thinking>...</thinking>`: the Nova user guide's tool use page says the default behaviour for tool calling is chain-of-thought "contained in <thinking> tags", with multiple tool calls and thinking blocks in one response. For Nova models only (matched on the base model id, so `apac.amazon.nova-lite-v1:0` counts), conduit moves each span out of the text and reports it as the same kind of state block, without a signature, so a product reads Nova's reasoning where it reads Claude's and can show it apart from the answer:
+
+- The answer text carries neither the tags nor what they hold. Whitespace after a closing tag is dropped, and so is the span's own leading and trailing whitespace.
+- Streamed text holds back only a trailing piece that could be the start of `<thinking>` (such as `<thin`), and releases it as text as soon as it proves not to be, or when the block ends. Ordinary text is never delayed beyond that.
+- Several spans in one reply, before and after tool use, are each reported in their place.
+- A span still open when its block ends (a reply cut off by its token limit) is reasoning, not answer text.
+- Nova gets no reasoning back: a request to a Nova model leaves every Bedrock reasoning state block out of the earlier assistant messages, as a reasoning block and as text. Other models keep the rule above.
+- Text from any other model is never parsed, so an answer that mentions the tag, or shows it in a code block, is left as it was.
+
+A reasoning request field (turning reasoning on or off, or setting its effort) is not part of this.
+
 ### Logging and credentials
 
 botocore's signer logs every signature at DEBUG on `botocore.auth`, and a short-term key can be rebuilt from those records; botocore's endpoint logs each request object at DEBUG, which a buffering handler could render after the bearer key is set. When a provider uses API keys, conduit installs two filters on botocore's loggers, once per process: one drops `botocore.auth` records whose message starts with `Signature:`, and one renders every `botocore.endpoint` record when it is logged. Both are process-wide, so they also apply to the product's own botocore clients. Removing them gives back every signature (and with it every short-term key) and every bearer key to whatever the product's handlers write; do that only for local debugging with throwaway credentials. The presign step is `conduit.providers.bedrock.auth.short_term_keys`, shared by the bedrock and bedrock-mantle adapters.
