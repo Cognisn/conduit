@@ -29,6 +29,7 @@ from typing import Any
 
 from conduit.core.discovery import DiscoveredModel
 from conduit.core.errors import ProviderError, ProviderFailure
+from conduit.core.residency import ResidencyScope
 from conduit.providers.anthropic.errors import failure_for
 from conduit.providers.openai_compat.discovery import models_from
 
@@ -62,4 +63,6 @@ async def list_models(client: Any, region: str) -> Sequence[DiscoveredModel]:
     if failure is not None:
         raise ProviderError(failure)  # outside the handler: nothing chained
     data = body.get("data") if isinstance(body, dict) else None
-    return [m for m in models_from(data) if m.model_id.startswith(CLAUDE_PREFIX)]
+    # The mantle endpoint is single-Region: a request is processed where it is sent.
+    listed = models_from(data, scope=ResidencyScope.IN_REGION, regions=frozenset({region}))
+    return [m for m in listed if m.model_id.startswith(CLAUDE_PREFIX)]

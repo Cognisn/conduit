@@ -62,12 +62,19 @@ factory: a ``DiscoveringFactory`` also has ``discovery_unsupported`` and
 ``discover_models``. ``discover`` validates the settings, resolves the secrets and makes
 the client exactly as ``build`` does (``create_client`` stays the only place a client is
 made), lists the models, closes the client through the provider ``create_provider`` wraps
-it in, and joins each listed id to the catalogue, the residency policy and the provider's
-Region. A factory without discovery, or settings it cannot list for, is reported
-unsupported, never raised. A ``DiscoveryFinishedEvent`` records every discovery whose
-settings validate, however it ends: a secret that cannot be resolved, or a client that
-cannot be made or wrapped, is a failed discovery. Nothing discovery reports changes what
-``MeteredProvider`` admits.
+it in, and joins each listed model to the catalogue and the residency policy, with the
+catalogue drift. An embedding adapter that also discovers (each built-in one inherits its
+chat adapter's discovery) lists for a registry that has only embedding adapters. A
+factory without discovery, or settings it cannot list for, is reported unsupported,
+never raised. A ``DiscoveryFinishedEvent`` records every discovery whose settings
+validate, however it ends: a secret that cannot be resolved, or a client that cannot be
+made or wrapped, is a failed discovery.
+
+The listing is the source of truth for which models a provider serves (C18): ``start``
+lists each provider it builds and passes ``build`` (or ``build_embedder``) the listed
+catalogue (``DiscoveryResult.listed_catalogue``), so the provider admits, and its
+adapter looks capabilities up in, the listed models' effective entries only. A provider
+built without a listed catalogue uses the registry's.
 """
 
 from __future__ import annotations
@@ -91,9 +98,11 @@ from pydantic import BaseModel, NonNegativeFloat, NonNegativeInt, SecretStr, Val
 
 from conduit.core.catalogue import Catalogue, ModelEntry, default_catalogue
 from conduit.core.discovery import (
+    CatalogueDrift,
     DiscoveredModel,
     DiscoveryOutcome,
     DiscoveryResult,
+    DriftReason,
     ModelAvailability,
     join_discovered,
 )
@@ -772,16 +781,39 @@ def _well_listed(listed: object) -> bool:
     return all(isinstance(model, DiscoveredModel) for model in listed)
 
 
-def _counts(models: Sequence[ModelAvailability]) -> dict[str, int]:
-    return {
+def _counts(models: Sequence[ModelAvailability], drift: Sequence[CatalogueDrift]) -> dict[str, int]:
+    """The event's counts: listed models by outcome, and drift by reason."""
+    counts = {
         outcome.value: sum(1 for model in models if model.outcome is outcome)
         for outcome in DiscoveryOutcome
     }
+    for reason in DriftReason:
+        counts[reason.value] = sum(1 for item in drift if item.reason is reason)
+    return counts
 
 
-def _capture_listing(models: Sequence[ModelAvailability], policy: CapturePolicy) -> CapturedContent:
+def _capture_listing(
+    models: Sequence[ModelAvailability],
+    policy: CapturePolicy,
+    drift: Sequence[CatalogueDrift] = (),
+) -> CapturedContent:
     """The joined listing as an event carries it: prompt content, under ``policy``."""
-    listing = [{"model_id": model.model_id, "outcome": model.outcome.value} for model in models]
+    listing = {
+        "models": [
+            {
+                "model_id": model.model_id,
+                "outcome": model.outcome.value,
+                "scope": model.scope.value,
+                "regions": sorted(model.regions),
+                "catalogued": model.catalogued,
+            }
+            for model in models
+        ],
+        "drift": [
+            {"model_id": item.model_id, "reason": item.reason.value, "detail": item.detail}
+            for item in drift
+        ],
+    }
     return policy.capture(ContentKind.PROMPT, json.dumps(listing, separators=(",", ":")))
 
 
@@ -955,6 +987,7 @@ class ProviderRegistry:
         *,
         client: Any = _UNSET,
         assigned: Mapping[str, str] | None = None,
+        catalogue: Catalogue | None = None,
     ) -> MeteredProvider:
         """The provider for one configured name. ``client`` replaces the SDK client in tests.
 
@@ -962,14 +995,17 @@ class ProviderRegistry:
         the provider then serves those assignments only. Each assigned model must be
         declared and within the registry's residency policy, checked here before the
         client is made. Without ``assigned``, every call is held to the policy.
+        ``catalogue`` replaces the registry's for this provider: ``start`` passes the
+        provider's listed catalogue, so it serves only what the provider lists.
         """
         validated = self.validate(name, settings)
         factory = self._factory(validated.kind)
+        serving = catalogue if catalogue is not None else self.catalogue
         if assigned is not None:
             if not assigned:
                 raise ConfigurationError(f"provider {name!r} is built for no assignment")
             for task in sorted(assigned):
-                entry = self.catalogue.require(validated.catalogue_provider, assigned[task])
+                entry = serving.require(validated.catalogue_provider, assigned[task])
                 self.residency.check(entry, validated.region, task=task)
         if client is _UNSET:
             secrets = await resolve_secret_fields(validated, self._secrets)
@@ -977,7 +1013,7 @@ class ProviderRegistry:
                 validated.kind, lambda: factory.create_client(validated, secrets), name=name
             )
         try:
-            inner = self._wrap(factory, name, validated, client)
+            inner = self._wrap(factory, name, validated, client, serving)
         except Exception:
             await _close_client(client, name)
             raise
@@ -985,7 +1021,7 @@ class ProviderRegistry:
             inner,
             name=name,
             settings=validated,
-            catalogue=self.catalogue,
+            catalogue=serving,
             events=self._events,
             assigned=assigned,
             residency=self.residency,
@@ -1002,6 +1038,7 @@ class ProviderRegistry:
         client: Any = _UNSET,
         assigned: Mapping[str, str] | None = None,
         dimensions: Mapping[str, int] | None = None,
+        catalogue: Catalogue | None = None,
     ) -> MeteredEmbedder:
         """The embedding provider for one configured name. ``client`` replaces the SDK
         client in tests.
@@ -1010,16 +1047,18 @@ class ProviderRegistry:
         each must be declared, an embedding model, and within the residency policy,
         checked before the client is made. ``dimensions`` fixes a task class's vector
         length below its model's own; the model must offer it. Without ``assigned``,
-        every call is held to the policy.
+        every call is held to the policy. ``catalogue`` replaces the registry's for this
+        provider, as for ``build``.
         """
         validated = self.validate_embedding(name, settings)
         factory = self._embedding_factory(validated.kind)
+        serving = catalogue if catalogue is not None else self.catalogue
         entries: dict[str, ModelEntry] = {}
         if assigned is not None:
             if not assigned:
                 raise ConfigurationError(f"embedding provider {name!r} is built for no assignment")
             for task in sorted(assigned):
-                entry = self.catalogue.require(validated.catalogue_provider, assigned[task])
+                entry = serving.require(validated.catalogue_provider, assigned[task])
                 if entry.kind != "embedding":
                     raise CapabilityRefused(
                         f"{task}: model {assigned[task]!r} is a chat model, not an embedding model"
@@ -1046,7 +1085,7 @@ class ProviderRegistry:
             client = guarded_client(
                 validated.kind, lambda: factory.create_client(validated, secrets), name=name
             )
-        inner = factory.create_embedder(name, validated, client, catalogue=self.catalogue)
+        inner = factory.create_embedder(name, validated, client, catalogue=serving)
         refusal: ConfigurationError | None = None
         for task in sorted(entries):
             model = entries[task].model_id
@@ -1089,17 +1128,48 @@ class ProviderRegistry:
         return embedder
 
     def _wrap(
-        self, factory: ProviderFactory, name: str, settings: ProviderSettings, client: Any
+        self,
+        factory: ProviderFactory,
+        name: str,
+        settings: ProviderSettings,
+        client: Any,
+        catalogue: Catalogue | None = None,
     ) -> Provider:
         """The factory's provider around ``client``, with the catalogue where it takes one."""
-        if self._with_catalogue.get(factory.kind, False):
+        if self._with_catalogue.get(factory.kind, _takes_catalogue(factory)):
             return factory.create_provider(
                 name,
                 settings,
                 client,
-                catalogue=self.catalogue,  # type: ignore[call-arg]
+                catalogue=catalogue if catalogue is not None else self.catalogue,  # type: ignore[call-arg]
             )
         return factory.create_provider(name, settings, client)
+
+    def _lister(
+        self, name: str, settings: ProviderSettings | Mapping[str, Any]
+    ) -> tuple[ProviderSettings, ProviderFactory]:
+        """The validated settings and the factory that lists for them: the chat adapter
+        of their kind, else an embedding adapter that also discovers."""
+        kind = settings.kind if isinstance(settings, ProviderSettings) else settings.get("kind")
+        if isinstance(kind, str) and kind not in self._factories:
+            embedding = self._embedding_factories.get(kind)
+            if embedding is not None:
+                # Its discovery, if it has one (each built-in one inherits its chat
+                # adapter's); one without is reported unsupported, as a chat one is.
+                return self.validate_embedding(name, settings), embedding  # type: ignore[return-value]
+        validated = self.validate(name, settings)
+        return validated, self._factory(validated.kind)
+
+    def discovery_supported(
+        self, name: str, settings: ProviderSettings | Mapping[str, Any]
+    ) -> bool:
+        """Whether ``discover`` can list for these settings: their adapter discovers and
+        does not say these settings cannot be listed. Nothing is resolved or built."""
+        validated, factory = self._lister(name, settings)
+        return (
+            isinstance(factory, DiscoveringFactory)
+            and factory.discovery_unsupported(validated) is None
+        )
 
     async def discover(
         self,
@@ -1112,15 +1182,15 @@ class ProviderRegistry:
 
         The settings are validated, the secrets resolved and the client made exactly as
         ``build`` does; the client is closed again before this returns or raises.
-        ``client`` replaces the SDK client in tests. Each listed id is allowed, refused
-        (with the reason start-up would give) or undeclared; nothing here makes a model
-        usable. A kind whose factory has no discovery, or settings it cannot list for,
-        give an unsupported result. A failed listing raises ``ProviderError`` (any other
-        exception from the adapter becomes ``ProviderError(PROTOCOL)``), with nothing
-        chained; a conduit error goes on as it is.
+        ``client`` replaces the SDK client in tests. Each listed model is allowed or
+        refused (with the reason start-up would give), with its scope, Regions and
+        effective entry, and the result carries the catalogue drift. A kind whose factory
+        has no discovery, or settings it cannot list for, give an unsupported result. A
+        failed listing raises ``ProviderError`` (any other exception from the adapter
+        becomes ``ProviderError(PROTOCOL)``), with nothing chained; a conduit error goes on
+        as it is.
         """
-        validated = self.validate(name, settings)
-        factory = self._factory(validated.kind)
+        validated, factory = self._lister(name, settings)
         began = time.perf_counter()
         discovery_id = new_id("disc")
 
@@ -1203,7 +1273,7 @@ class ProviderRegistry:
         if failure is not None:
             await finished(outcome="failed", failure=failure, error_type=error_type)
             raise ProviderError(failure)  # outside every handler: nothing chained
-        models = join_discovered(
+        models, drift = join_discovered(
             listed,
             self.catalogue,
             catalogue_provider=validated.catalogue_provider,
@@ -1213,11 +1283,11 @@ class ProviderRegistry:
         )
         await finished(
             outcome="ok",
-            models=_capture_listing(models, self._events.policy),
-            **_counts(models),
+            models=_capture_listing(models, self._events.policy, drift),
+            **_counts(models, drift),
         )
         logger.debug("discovered %d models on %s (%s)", len(models), name, validated.kind)
-        return result(supported=True, models=models)
+        return result(supported=True, models=models, drift=drift)
 
     async def aclose(self) -> None:
         embedders, self._embedders = self._embedders, []

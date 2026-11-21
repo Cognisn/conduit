@@ -1,0 +1,92 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "operation": "ListFoundationModels",
+        "params": {
+          "byInferenceType": "ON_DEMAND"
+        }
+      },
+      "response": {
+        "body": {
+          "modelSummaries": []
+        },
+        "status": 200
+      }
+    },
+    {
+      "request": {
+        "operation": "ListInferenceProfiles",
+        "params": {
+          "maxResults": 1000
+        }
+      },
+      "response": {
+        "body": {
+          "inferenceProfileSummaries": [
+            {
+              "inferenceProfileArn": "arn:aws:bedrock:ap-southeast-2:123456789012:inference-profile/au.anthropic.claude-sonnet-4-6",
+              "inferenceProfileId": "au.anthropic.claude-sonnet-4-6",
+              "inferenceProfileName": "au.anthropic.claude-sonnet-4-6",
+              "models": [
+                {
+                  "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/anthropic.claude-sonnet-4-6"
+                },
+                {
+                  "modelArn": "arn:aws:bedrock:ap-southeast-4::foundation-model/anthropic.claude-sonnet-4-6"
+                }
+              ],
+              "status": "ACTIVE",
+              "type": "SYSTEM_DEFINED"
+            },
+            {
+              "inferenceProfileArn": "arn:aws:bedrock:ap-southeast-2:123456789012:inference-profile/au.anthropic.example-claude-unlisted-v1:0",
+              "inferenceProfileId": "au.anthropic.example-claude-unlisted-v1:0",
+              "inferenceProfileName": "au.anthropic.example-claude-unlisted-v1:0",
+              "models": [
+                {
+                  "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/anthropic.example-claude-unlisted-v1:0"
+                },
+                {
+                  "modelArn": "arn:aws:bedrock:ap-southeast-4::foundation-model/anthropic.example-claude-unlisted-v1:0"
+                }
+              ],
+              "status": "ACTIVE",
+              "type": "SYSTEM_DEFINED"
+            },
+            {
+              "inferenceProfileArn": "arn:aws:bedrock:ap-southeast-2:123456789012:inference-profile/apac.example.mixed-v1:0",
+              "inferenceProfileId": "apac.example.mixed-v1:0",
+              "inferenceProfileName": "apac.example.mixed-v1:0",
+              "models": [
+                {
+                  "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/example.mixed-v1:0"
+                },
+                {
+                  "modelArn": "arn:aws:bedrock:ap-southeast-4::foundation-model/example.other-v1:0"
+                }
+              ],
+              "status": "ACTIVE",
+              "type": "SYSTEM_DEFINED"
+            },
+            {
+              "inferenceProfileArn": "arn:aws:bedrock:ap-southeast-2:123456789012:inference-profile/example.no-region-v1:0",
+              "inferenceProfileId": "example.no-region-v1:0",
+              "inferenceProfileName": "example.no-region-v1:0",
+              "models": [
+                {
+                  "modelArn": "arn:aws:bedrock:::foundation-model/example.text-model-v1:0"
+                }
+              ],
+              "status": "ACTIVE",
+              "type": "APPLICATION"
+            }
+          ]
+        },
+        "status": 200
+      }
+    }
+  ],
+  "name": "bedrock-discovery-drift",
+  "provider": "bedrock"
+}

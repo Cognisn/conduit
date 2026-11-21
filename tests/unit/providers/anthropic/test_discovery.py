@@ -13,9 +13,11 @@ from typing import Any
 
 import pytest
 
+from conduit.core.catalogue import Capabilities
 from conduit.core.discovery import DiscoveryOutcome, DiscoveryResult
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.registry import DiscoveringFactory, ProviderRegistry
+from conduit.core.residency import ResidencyPolicy, ResidencyScope
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.providers.anthropic import AnthropicFactory
 from conduit.testing.replay import Replay, load_recording
@@ -49,9 +51,11 @@ def _client(handler: Handler) -> Any:
     )
 
 
-async def _discover(handler: Handler) -> DiscoveryResult:
+async def _discover(handler: Handler, residency: ResidencyPolicy | None = None) -> DiscoveryResult:
     registry = ProviderRegistry(
-        secrets=LiteralSecretResolver({"anthropic/key": KEY}), factories=[AnthropicFactory()]
+        secrets=LiteralSecretResolver({"anthropic/key": KEY}),
+        factories=[AnthropicFactory()],
+        residency=residency,
     )
     return await registry.discover("claude", DIRECT, client=_client(handler))
 
@@ -64,11 +68,28 @@ async def test_every_page_is_listed_and_joined() -> None:
     handler, replay = _replaying("anthropic/discovery-models.json")
     result = await _discover(handler)
     replay.assert_exhausted()  # the second page was asked for with after_id
-    assert {m.model_id: (m.outcome, m.label) for m in result.models} == {
-        "claude-opus-5-5": (DiscoveryOutcome.ALLOWED, "model"),
-        "example-claude-preview": (DiscoveryOutcome.UNDECLARED, "model"),
-        "claude-haiku-4-5": (DiscoveryOutcome.ALLOWED, "model"),
+    assert {m.model_id: (m.outcome, m.label, m.catalogued) for m in result.models} == {
+        "claude-opus-5-5": (DiscoveryOutcome.ALLOWED, "model", True),
+        "example-claude-preview": (DiscoveryOutcome.ALLOWED, "model", False),
+        "claude-haiku-4-5": (DiscoveryOutcome.ALLOWED, "model", True),
     }
+
+
+async def test_each_model_is_global_with_its_reported_limits_and_capabilities() -> None:
+    handler, _ = _replaying("anthropic/discovery-models.json")
+    result = await _discover(handler)
+    assert {m.scope for m in result.models} == {ResidencyScope.GLOBAL}
+    preview = result.get("example-claude-preview")
+    assert preview is not None and preview.entry is not None
+    assert (preview.entry.context_window, preview.entry.output_limit) == (1_000_000, 128_000)
+    assert preview.entry.capabilities == Capabilities(vision=True, structured_output=True)
+
+
+async def test_a_region_restricted_policy_refuses_the_api() -> None:
+    handler, _ = _replaying("anthropic/discovery-models.json")
+    policy = ResidencyPolicy(regions=frozenset({"xx-home-1"}))
+    result = await _discover(handler, residency=policy)
+    assert result.allowed == ()
 
 
 async def test_an_empty_listing() -> None:
@@ -138,3 +159,41 @@ async def test_claude_in_foundry_is_reported_unsupported() -> None:
     )
     assert not result.supported
     assert result.reason is not None and "Foundry" in result.reason
+
+
+async def test_an_uncatalogued_claude_model_takes_the_reported_features_through_the_adapter() -> (
+    None
+):
+    """The floor sets only what the listing reports (vision, structured output); the
+    Anthropic adapter's request path serves both for any model, so an uncatalogued model
+    the listing says supports them gets them, and nothing else (no tools, no caching)."""
+    from conduit.core.catalogue import default_catalogue
+    from conduit.core.types import ImageBlock, Message, ModelRequest
+    from conduit.providers.anthropic.request import build_params
+
+    handler, _ = _replaying("anthropic/discovery-models.json")
+    result = await _discover(handler)
+    listed = result.get("example-claude-preview")
+    assert listed is not None and listed.entry is not None and not listed.catalogued
+    assert listed.entry.capabilities == Capabilities(vision=True, structured_output=True)
+    provider = AnthropicFactory().create_provider(
+        "claude",
+        AnthropicFactory.settings_model.model_validate(DIRECT),
+        object(),
+        catalogue=result.listed_catalogue(default_catalogue()),
+    )
+    assert provider.structured_output("example-claude-preview") is True  # type: ignore[attr-defined]
+    request = ModelRequest(
+        model="example-claude-preview",
+        messages=(
+            Message(
+                role="user",
+                content=(ImageBlock(media_type="image/png", data=b"\x89PNG-synthetic"),),
+            ),
+        ),
+        max_output_tokens=64,
+        output_schema={"type": "object"},
+    )
+    params = build_params(request, structured_output=True)
+    assert params["messages"][0]["content"][0]["type"] == "image"
+    assert params["output_config"]["format"]["type"] == "json_schema"

@@ -25,6 +25,7 @@ from typing import Any
 
 from conduit.core.discovery import DiscoveredModel
 from conduit.core.errors import ProviderError, ProviderFailure
+from conduit.core.residency import ResidencyScope
 from conduit.providers.openai_compat.errors import classify
 
 #: Why a Foundry endpoint cannot be listed.
@@ -38,8 +39,20 @@ def _field(item: object, name: str) -> object:
     return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
 
 
-def models_from(items: object) -> list[DiscoveredModel]:
-    """The models in a Models API ``data`` list (mappings or SDK objects)."""
+def _positive(value: object) -> int | None:
+    """A reported limit, or ``None`` for anything that is not a positive integer."""
+    return value if type(value) is int and value > 0 else None
+
+
+def models_from(
+    items: object,
+    *,
+    scope: ResidencyScope = ResidencyScope.GLOBAL,
+    regions: frozenset[str] = frozenset(),
+) -> list[DiscoveredModel]:
+    """The models in a Models API ``data`` list (mappings or SDK objects), processed
+    where ``scope`` and ``regions`` say: anywhere the provider chooses, by default, since
+    the OpenAI and X.AI APIs have no Region notion. X.AI's ``context_length`` is kept."""
     if not isinstance(items, list):
         raise ProviderError(ProviderFailure.PROTOCOL)
     found: list[DiscoveredModel] = []
@@ -48,7 +61,13 @@ def models_from(items: object) -> list[DiscoveredModel]:
         listed: DiscoveredModel | None = None
         if isinstance(model_id, str) and isinstance(kind, str | None):
             with contextlib.suppress(ValueError):
-                listed = DiscoveredModel(model_id, label=kind or None)
+                listed = DiscoveredModel(
+                    model_id,
+                    label=kind or None,
+                    scope=scope,
+                    regions=regions,
+                    context_window=_positive(_field(item, "context_length")),
+                )
         if listed is None:
             raise ProviderError(ProviderFailure.PROTOCOL)
         found.append(listed)

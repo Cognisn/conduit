@@ -164,11 +164,12 @@ DiscoveryEventOutcome = Literal["ok", "failed", "unsupported"]
 class DiscoveryFinishedEvent(Event):
     """One model discovery through the provider registry, however it ended.
 
-    ``allowed``, ``refused`` and ``undeclared`` count the listed models by outcome.
-    ``models`` is the joined listing (each model id with its outcome) as content of the
-    prompt kind: its hash and size always, its text only when the capture policy
-    captures prompts. ``error_type`` is the exception's class name for a failure that
-    was not a provider failure.
+    ``allowed`` and ``refused`` count the listed models by outcome; ``uncatalogued``,
+    ``unlisted``, ``limits_differ``, ``capabilities_differ`` and ``regions_declared``
+    count the catalogue drift by reason. ``models`` is the joined listing (each model id
+    with its outcome, residency and drift) as content of the prompt kind: its hash and
+    size always, its text only when the capture policy captures prompts. ``error_type``
+    is the exception's class name for a failure that was not a provider failure.
     """
 
     type: Literal["discovery_finished"] = "discovery_finished"
@@ -178,7 +179,11 @@ class DiscoveryFinishedEvent(Event):
     outcome: DiscoveryEventOutcome
     allowed: NonNegativeInt = 0
     refused: NonNegativeInt = 0
-    undeclared: NonNegativeInt = 0
+    uncatalogued: NonNegativeInt = 0
+    unlisted: NonNegativeInt = 0
+    limits_differ: NonNegativeInt = 0
+    capabilities_differ: NonNegativeInt = 0
+    regions_declared: NonNegativeInt = 0
     failure: ProviderFailure | None = None
     error_type: Identifier | None = None
     duration_ms: NonNegativeFloat

@@ -2,8 +2,11 @@
 
 Task classes are the product's: it declares each one with a capability floor and
 assigns a configured provider and a model to it (C18). ``resolve_assignments`` checks
-every assignment once, at start-up: the model must be declared in the catalogue,
-offered in the provider's region, meet the floor and satisfy the residency policy,
+every assignment once, at start-up. For a provider with a listing (``listings``, from
+discovery) the model must be listed by the provider, and its entry is the listed one:
+the provider's scope and Regions with the capabilities and limits the join settled on.
+For any other provider the model must be declared in the catalogue and offered in the
+provider's region. Either way it must meet the floor and satisfy the residency policy,
 and the output budget must fit the model. The result is immutable and holds its own
 copy of each entry, so nothing about a running task changes part-way through, and no
 floor or residency check can fail mid-task. conduit does no learned routing.
@@ -13,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field, NonNegativeInt
 
@@ -26,6 +29,9 @@ from conduit.core.errors import (
 )
 from conduit.core.residency import ResidencyPolicy, ResidencyScope
 from conduit.core.settings import AssignmentSettings, ProviderSettings, SettingsModel
+
+if TYPE_CHECKING:
+    from conduit.core.discovery import DiscoveryResult
 
 TASK_CLASS_PATTERN = r"^[a-z][a-z0-9_.-]{0,63}$"
 
@@ -130,9 +136,28 @@ class Assignments(Mapping[str, ResolvedAssignment]):
 
 
 def _offered_in(entry: ModelEntry, region: str | None) -> bool:
+    """Whether a catalogue entry's own Regions include ``region``. A listed model is
+    offered where it is listed; an entry with no in-Region or cross-Region scope is
+    bounded by nothing here (the residency policy decides)."""
     if entry.residency_scope not in (ResidencyScope.IN_REGION, ResidencyScope.CROSS_REGION):
         return True
     return region is None or region in entry.regions
+
+
+def _listed_entry(
+    name: str, assignment: AssignmentSettings, listing: DiscoveryResult
+) -> ModelEntry:
+    """The listed entry for ``assignment``, or the refusal for a model the provider does
+    not list or that cannot be served (withdrawn, or an embedding model with no entry).
+    A residency refusal is left to the policy check, which gives its own reason."""
+    listed = listing.get(assignment.model)
+    if listed is None:
+        raise AssignmentRefused(
+            f"{name}: model {assignment.model!r} is not listed by provider {assignment.provider!r}"
+        )
+    if listed.entry is None:
+        raise AssignmentRefused(f"{name}: {listed.reason}")
+    return listed.entry
 
 
 def resolve_assignments(
@@ -143,8 +168,12 @@ def resolve_assignments(
     residency: ResidencyPolicy | None = None,
     *,
     require_all: bool = True,
+    listings: Mapping[str, DiscoveryResult] | None = None,
 ) -> Assignments:
     """Every assignment, checked. Raises on the first defect, in task-class order.
+
+    ``listings`` maps a configured provider's name to its discovery result; such a
+    provider's models are taken from its listing, never from ``catalogue``.
 
     Raises ``UndeclaredModel``, ``CapabilityRefused``, ``ResidencyRefused`` or
     ``AssignmentRefused``; all are ``ConfigurationError``.
@@ -170,7 +199,11 @@ def resolve_assignments(
         provider = providers.get(assignment.provider)
         if provider is None:
             raise AssignmentRefused(f"{name}: no provider named {assignment.provider!r}")
-        entry = catalogue.require(provider.catalogue_provider, assignment.model)
+        listing = (listings or {}).get(assignment.provider)
+        if listing is not None:
+            entry = _listed_entry(name, assignment, listing)
+        else:
+            entry = catalogue.require(provider.catalogue_provider, assignment.model)
         if not _offered_in(entry, provider.region):
             raise AssignmentRefused(
                 f"{name}: model {assignment.model!r} is not offered in region {provider.region}"

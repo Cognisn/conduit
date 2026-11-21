@@ -11,6 +11,7 @@ import pytest
 from conduit.core.discovery import DiscoveryOutcome, DiscoveryResult
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.registry import DiscoveringFactory, ProviderRegistry
+from conduit.core.residency import ResidencyPolicy, ResidencyScope
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.providers.ollama import OllamaFactory
 from conduit.providers.ollama.discovery import parse_tags
@@ -32,9 +33,11 @@ def _replaying(name: str) -> tuple[Handler, Replay]:
     return handle, replay
 
 
-async def _discover(handler: Handler) -> DiscoveryResult:
+async def _discover(handler: Handler, residency: ResidencyPolicy | None = None) -> DiscoveryResult:
     factory = OllamaFactory(transport=httpx.MockTransport(handler))
-    registry = ProviderRegistry(secrets=LiteralSecretResolver({}), factories=[factory])
+    registry = ProviderRegistry(
+        secrets=LiteralSecretResolver({}), factories=[factory], residency=residency
+    )
     return await registry.discover("local", {"kind": "ollama"})
 
 
@@ -49,11 +52,27 @@ async def test_the_local_models_are_listed_and_joined() -> None:
     assert result.supported
     assert {m.model_id: m.outcome for m in result.models} == {
         "llama3.1:8b": DiscoveryOutcome.ALLOWED,
-        "example-local:3b": DiscoveryOutcome.UNDECLARED,
+        "example-local:3b": DiscoveryOutcome.ALLOWED,
         # Listed as nomic-embed-text:latest; Ollama resolves the bare name to it.
         "nomic-embed-text": DiscoveryOutcome.ALLOWED,
+        "example-cloud:120b": DiscoveryOutcome.ALLOWED,
     }
     assert all(m.label is None for m in result.models)
+
+
+async def test_a_local_model_is_local_and_a_remote_one_is_global() -> None:
+    handler, _ = _replaying("ollama/discovery-tags.json")
+    result = await _discover(handler)
+    scopes = {m.model_id: m.scope for m in result.models}
+    assert scopes["llama3.1:8b"] is ResidencyScope.LOCAL
+    assert scopes["example-cloud:120b"] is ResidencyScope.GLOBAL
+
+
+async def test_a_local_only_policy_refuses_the_remote_model() -> None:
+    handler, _ = _replaying("ollama/discovery-tags.json")
+    policy = ResidencyPolicy(scopes=frozenset({ResidencyScope.LOCAL}))
+    result = await _discover(handler, residency=policy)
+    assert [m.model_id for m in result.refused] == ["example-cloud:120b"]
 
 
 async def test_an_empty_server() -> None:
@@ -130,3 +149,21 @@ async def test_a_body_that_is_not_the_documented_shape_is_a_protocol_failure(
 def test_the_latest_tag_is_reported_under_the_bare_name(listed: str, reported: str) -> None:
     [model] = parse_tags({"models": [{"name": listed, "model": listed}]})
     assert model.model_id == reported
+
+
+@pytest.mark.parametrize(
+    "remote",
+    [
+        {"remote_host": "https://ollama.example.com:443"},
+        {"remote_model": "example-cloud:120b"},
+        {"remote_model": "example-cloud:120b", "remote_host": "https://ollama.example.com"},
+    ],
+)
+def test_either_remote_field_makes_a_model_global(remote: dict[str, str]) -> None:
+    [listed] = parse_tags({"models": [{"name": "example-cloud:120b", **remote}]})
+    assert listed.scope is ResidencyScope.GLOBAL
+
+
+def test_a_model_without_remote_fields_is_local() -> None:
+    [listed] = parse_tags({"models": [{"name": "llama3.1:8b", "remote_host": ""}]})
+    assert listed.scope is ResidencyScope.LOCAL

@@ -21,10 +21,15 @@ from conduit.core.catalogue import (
     default_catalogue,
 )
 from conduit.core.discovery import (
+    FLOOR_CONTEXT_WINDOW,
+    FLOOR_OUTPUT_LIMIT,
+    CatalogueDrift,
     DiscoveredModel,
     DiscoveryOutcome,
     DiscoveryResult,
+    DriftReason,
     ModelAvailability,
+    ReportedCapabilities,
     join_discovered,
 )
 from conduit.core.errors import (
@@ -145,6 +150,8 @@ from conduit.core.untrusted import (
 )
 
 __all__ = [
+    "FLOOR_CONTEXT_WINDOW",
+    "FLOOR_OUTPUT_LIMIT",
     "FRAMING_NOTE",
     "ApprovalDecision",
     "ApprovalHandler",
@@ -161,6 +168,7 @@ __all__ = [
     "CapturePolicy",
     "CapturedContent",
     "Catalogue",
+    "CatalogueDrift",
     "CatalogueOverlay",
     "CompactionPoint",
     "ConduitError",
@@ -172,6 +180,7 @@ __all__ = [
     "DiscoveryFinishedEvent",
     "DiscoveryOutcome",
     "DiscoveryResult",
+    "DriftReason",
     "EnvironmentSecretResolver",
     "Event",
     "EventSink",
@@ -202,6 +211,7 @@ __all__ = [
     "ProviderStateBlock",
     "ProviderStateReported",
     "ReplayMismatch",
+    "ReportedCapabilities",
     "ResidencyPolicy",
     "ResidencyRefused",
     "ResidencyScope",

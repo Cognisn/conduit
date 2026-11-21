@@ -8,6 +8,7 @@ SDK's own paging (pageToken) runs against the recorded pages. Only chat-capable 
 from __future__ import annotations
 
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -15,8 +16,10 @@ import pytest
 from conduit.core.discovery import DiscoveryOutcome, DiscoveryResult
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.registry import DiscoveringFactory, ProviderRegistry
+from conduit.core.residency import ResidencyScope
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.providers.gemini import GeminiFactory
+from conduit.providers.gemini.discovery import _models
 from conduit.testing.replay import Replay, load_recording
 from tests.unit.providers import discovery_recordings as recordings
 
@@ -54,14 +57,23 @@ def test_the_gemini_factory_discovers() -> None:
     assert isinstance(GeminiFactory(), DiscoveringFactory)
 
 
-async def test_chat_capable_models_on_every_page_are_listed_and_joined() -> None:
+async def test_chat_and_embedding_models_on_every_page_are_listed_and_joined() -> None:
     handler, replay, seen = _replaying("gemini/discovery-models.json")
     result = await _discover(handler)
     replay.assert_exhausted()  # the second page was asked for with its token
     assert {m.model_id: (m.outcome, m.label) for m in result.models} == {
         "gemini-4-argon": (DiscoveryOutcome.ALLOWED, None),
-        "example-gemini-preview": (DiscoveryOutcome.UNDECLARED, None),
+        "gemini-embedding-001": (DiscoveryOutcome.ALLOWED, None),
+        "example-gemini-preview": (DiscoveryOutcome.ALLOWED, None),
     }
+    embedding = result.get("gemini-embedding-001")
+    assert embedding is not None and embedding.entry is not None
+    assert embedding.entry.kind == "embedding"  # the embedding adapter lists it as one
+    assert [m.model_id for m in result.uncatalogued] == ["example-gemini-preview"]
+    assert {m.scope for m in result.models} == {ResidencyScope.GLOBAL}
+    preview = result.get("example-gemini-preview")
+    assert preview is not None and preview.entry is not None
+    assert (preview.entry.context_window, preview.entry.output_limit) == (1_048_576, 65_536)
     assert all(r.url.host == "generativelanguage.googleapis.com" for r in seen)
     assert all(r.headers["x-goog-api-key"] == API_KEY for r in seen)
 
@@ -102,3 +114,28 @@ async def test_a_listing_that_never_ends_is_a_protocol_failure() -> None:
     with pytest.raises(ProviderError) as raised:
         await _discover(handle)
     assert raised.value.failure is ProviderFailure.PROTOCOL
+
+
+def test_a_model_kind_follows_its_generation_methods() -> None:
+    page = [
+        SimpleNamespace(name="models/a", supported_actions=["generateContent", "countTokens"]),
+        SimpleNamespace(name="models/b", supported_actions=["embedContent"]),
+        SimpleNamespace(name="models/c", supported_actions=["predict"]),
+    ]
+    assert {m.model_id: m.kind for m in _models(page)} == {"a": "chat", "b": "embedding"}
+
+
+def test_a_tuned_model_matches_the_entry_of_its_base_model() -> None:
+    # The SDK's Model keeps a tuned model's base as tuned_model_info.base_model; the API's
+    # baseModelId is not on the SDK's Model, so a listed id is otherwise its own base.
+    tuned = SimpleNamespace(
+        name="tunedModels/example-tuned-argon",
+        supported_actions=["generateContent"],
+        tuned_model_info=SimpleNamespace(base_model="models/gemini-4-argon"),
+    )
+    plain = SimpleNamespace(name="models/gemini-4-argon", supported_actions=["generateContent"])
+    found = {m.model_id: m.base_model_id for m in _models([tuned, plain])}
+    assert found == {
+        "tunedModels/example-tuned-argon": "gemini-4-argon",
+        "gemini-4-argon": "gemini-4-argon",
+    }
