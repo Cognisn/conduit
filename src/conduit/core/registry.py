@@ -134,7 +134,7 @@ from conduit.core.provider import (
     EmbeddingResponse,
     Provider,
 )
-from conduit.core.residency import ResidencyPolicy
+from conduit.core.residency import RegionListing, ResidencyPolicy
 from conduit.core.secrets import SecretResolver, resolve_secret_fields
 from conduit.core.settings import KIND_PATTERN, ProviderSettings, refusals
 from conduit.core.streaming import (
@@ -376,7 +376,12 @@ class MeteredProvider:
                 f"{request.model!r}'s output limit of {entry.output_limit}"
             )
         if self._assigned is None or self._models is None:
-            self._residency.check(entry, self.settings.region, task=request.task_class or self.name)
+            self._residency.check(
+                entry,
+                self.settings.region,
+                task=request.task_class or self.name,
+                provider=self.settings,
+            )
             return
         if request.task_class is not None:
             if self._assigned.get(request.task_class) != request.model:
@@ -673,7 +678,7 @@ class MeteredEmbedder:
         wanted = request.dimensions
         if self._assigned is None or self._models is None:
             task = request.task_class or self.name
-            self._residency.check(entry, self.settings.region, task=task)
+            self._residency.check(entry, self.settings.region, task=task, provider=self.settings)
         elif request.task_class is not None:
             if self._assigned.get(request.task_class) != model:
                 raise ModelNotAssigned(self.name, model, request.task_class)
@@ -1006,7 +1011,7 @@ class ProviderRegistry:
                 raise ConfigurationError(f"provider {name!r} is built for no assignment")
             for task in sorted(assigned):
                 entry = serving.require(validated.catalogue_provider, assigned[task])
-                self.residency.check(entry, validated.region, task=task)
+                self.residency.check(entry, validated.region, task=task, provider=validated)
         if client is _UNSET:
             secrets = await resolve_secret_fields(validated, self._secrets)
             client = guarded_client(
@@ -1063,7 +1068,7 @@ class ProviderRegistry:
                     raise CapabilityRefused(
                         f"{task}: model {assigned[task]!r} is a chat model, not an embedding model"
                     )
-                self.residency.check(entry, validated.region, task=task)
+                self.residency.check(entry, validated.region, task=task, provider=validated)
                 entries[task] = entry
         fixed = dict(dimensions or {})
         for task in sorted(fixed):
@@ -1160,6 +1165,19 @@ class ProviderRegistry:
         validated = self.validate(name, settings)
         return validated, self._factory(validated.kind)
 
+    def regions(self, kind: str) -> tuple[RegionListing, ...]:
+        """The Regions the adapter for ``kind`` offers, for a product to show as choices:
+        static, documented lists (``ProviderSettings.offered_regions``). Where a chosen
+        Region actually routes comes from ``discover`` on settings for it."""
+        chat = self._factories.get(kind)
+        model = chat.settings_model if chat is not None else None
+        if model is None:
+            embedding = self._embedding_factories.get(kind)
+            model = embedding.settings_model if embedding is not None else None
+        if model is None:
+            raise ConfigurationError(f"there is no adapter for provider kind {kind!r}")
+        return tuple(model.offered_regions())
+
     def discovery_supported(
         self, name: str, settings: ProviderSettings | Mapping[str, Any]
     ) -> bool:
@@ -1211,6 +1229,7 @@ class ProviderRegistry:
                 kind=validated.kind,
                 catalogue_provider=validated.catalogue_provider,
                 region=validated.region,
+                choice=validated.region_choice(),
                 **fields,
             )
 
@@ -1280,6 +1299,7 @@ class ProviderRegistry:
             region=validated.region,
             residency=self.residency,
             provider=name,
+            connection=validated,
         )
         await finished(
             outcome="ok",

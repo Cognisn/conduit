@@ -7,8 +7,13 @@ from urllib.parse import SplitResult, urlsplit
 
 from pydantic import Field, field_validator
 
+from conduit.core.residency import RegionListing
 from conduit.core.secrets import SecretRef
 from conduit.core.settings import ProviderSettings
+
+#: The Gemini API lists where it is available to users, not where requests are
+#: processed, and offers no choice of processing location.
+AVAILABILITY_DOCUMENTATION = "https://aistudio.google.com/docs/available-regions"
 
 #: The Gemini API's endpoint, set explicitly so the SDK's environment override
 #: (GOOGLE_GEMINI_BASE_URL) can never redirect prompts.
@@ -29,6 +34,19 @@ class GeminiSettings(ProviderSettings):
     api_key: SecretRef
     base_url: str = DEFAULT_BASE_URL
     max_attempts: int = Field(default=3, ge=1, le=10)
+
+    @classmethod
+    def offered_regions(cls) -> tuple[RegionListing, ...]:
+        return (
+            RegionListing(
+                kind="gemini",
+                service=None,
+                regions=(),
+                global_option=("no processing location is stated and none can be chosen: global"),
+                documentation=AVAILABILITY_DOCUMENTATION,
+                as_of="2026-11-21",
+            ),
+        )
 
     @field_validator("base_url")
     @classmethod

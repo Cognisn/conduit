@@ -49,7 +49,8 @@ from typing import Literal
 
 from conduit.core.catalogue import Capabilities, Catalogue, ModelEntry, ModelKey
 from conduit.core.errors import ResidencyRefused
-from conduit.core.residency import ResidencyPolicy, ResidencyScope
+from conduit.core.residency import RegionChoice, ResidencyPolicy, ResidencyScope
+from conduit.core.settings import ProviderSettings
 from conduit.core.tasks import _offered_in  # start-up's own Region rule, not a copy
 
 #: The longest model id or label kept from a listing.
@@ -194,6 +195,7 @@ class DiscoveryResult:
 
     ``supported`` is ``False`` when the adapter has no listing for these settings, with
     ``reason`` saying why; ``models`` is then empty. Unsupported is reported, never raised.
+    ``choice`` is the connection's Region choice the listing was held to, or ``None``.
     """
 
     provider: str
@@ -204,6 +206,7 @@ class DiscoveryResult:
     reason: str | None = None
     models: tuple[ModelAvailability, ...] = field(default=())
     drift: tuple[CatalogueDrift, ...] = field(default=())
+    choice: RegionChoice | None = None
 
     def _with(self, outcome: DiscoveryOutcome) -> tuple[ModelAvailability, ...]:
         return tuple(model for model in self.models if model.outcome is outcome)
@@ -239,14 +242,18 @@ class DiscoveryResult:
 
 
 def _refusal(
-    entry: ModelEntry, region: str | None, residency: ResidencyPolicy, provider: str
+    entry: ModelEntry,
+    region: str | None,
+    residency: ResidencyPolicy,
+    provider: str,
+    connection: ProviderSettings | None,
 ) -> str | None:
     """Why start-up would refuse an assignment to ``entry``, or ``None``."""
     if not _offered_in(entry, region):
         return f"{provider}: model {entry.model_id!r} is not offered in region {region}"
     reason: str | None = None
     try:
-        residency.check(entry, region, task=provider)
+        residency.check(entry, region, task=provider, provider=connection)
     except ResidencyRefused as refused:
         reason = str(refused)  # only the message is kept, never the exception
     return reason
@@ -365,12 +372,15 @@ def join_discovered(
     region: str | None,
     residency: ResidencyPolicy,
     provider: str,
+    connection: ProviderSettings | None = None,
 ) -> tuple[tuple[ModelAvailability, ...], tuple[CatalogueDrift, ...]]:
     """Each listed model, in listing order, joined to ``catalogue`` and ``residency``,
     and the drift between the two: each listed model's first, then the unlisted entries.
 
     A repeated id is reported once, as first listed. ``provider`` (the configured name)
-    begins each refusal reason, as a task class begins it at start-up.
+    begins each refusal reason, as a task class begins it at start-up. ``connection``
+    is the provider's validated settings: a residency it declares for a listed model
+    replaces the listing's, and each model is held to its Region choice too.
     """
     joined: list[ModelAvailability] = []
     drift: list[CatalogueDrift] = []
@@ -382,6 +392,11 @@ def join_discovered(
         seen.add(model.model_id)
         scope = model.scope or ResidencyScope.GLOBAL
         regions = model.regions if scope in _REGION_BOUND else frozenset()
+        declaration = (
+            connection.declared_residency(model.model_id) if connection is not None else None
+        )
+        if declaration is not None:  # the endpoint's guarantee replaces the listing's
+            scope, regions = declaration.scope, declaration.regions
         join = _Join(model, scope, regions, drift)
         keys = _keys(catalogue_provider, model)
         matched.update(keys)  # an entry under the listed or the base id is listed
@@ -407,7 +422,7 @@ def join_discovered(
             entry = None
             reason = f"{provider}: model {model.model_id!r} is withdrawn by a catalogue overlay"
         if entry is not None:
-            reason = _refusal(entry, region, residency, provider)
+            reason = _refusal(entry, region, residency, provider, connection)
         outcome = DiscoveryOutcome.ALLOWED if reason is None else DiscoveryOutcome.REFUSED
         joined.append(
             ModelAvailability(

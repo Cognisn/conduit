@@ -83,7 +83,14 @@ from conduit.core.registry import (
     ProviderRegistry,
     guarded_client,
 )
-from conduit.core.residency import ResidencyPolicy, ResidencyScope
+from conduit.core.residency import (
+    OfferedRegion,
+    RegionChoice,
+    RegionListing,
+    Residency,
+    ResidencyPolicy,
+    ResidencyScope,
+)
 from conduit.core.runtime import ConduitSettings, Runtime, TaskBinding, start
 from conduit.core.secrets import (
     EnvironmentSecretResolver,
@@ -202,6 +209,7 @@ __all__ = [
     "ModelRequest",
     "ModelResponse",
     "NullEventSink",
+    "OfferedRegion",
     "Provider",
     "ProviderError",
     "ProviderFactory",
@@ -210,8 +218,11 @@ __all__ = [
     "ProviderSettings",
     "ProviderStateBlock",
     "ProviderStateReported",
+    "RegionChoice",
+    "RegionListing",
     "ReplayMismatch",
     "ReportedCapabilities",
+    "Residency",
     "ResidencyPolicy",
     "ResidencyRefused",
     "ResidencyScope",

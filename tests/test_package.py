@@ -181,7 +181,14 @@ REEXPORTS: dict[str, tuple[str, ...]] = {
         "Assignments",
         "ResolvedAssignment",
     ),
-    "conduit.core.residency": ("ResidencyPolicy", "ResidencyScope"),
+    "conduit.core.residency": (
+        "OfferedRegion",
+        "RegionChoice",
+        "RegionListing",
+        "Residency",
+        "ResidencyPolicy",
+        "ResidencyScope",
+    ),
     "conduit.core.events": (
         "CaptureAs",
         "DiscoveryFinishedEvent",

@@ -7,6 +7,7 @@ from urllib.parse import SplitResult, urlsplit
 
 from pydantic import Field, PositiveInt, field_validator
 
+from conduit.core.residency import RegionListing
 from conduit.core.settings import ProviderSettings
 
 #: Ollama's own default address, on loopback so prompts never leave the host.
@@ -29,6 +30,21 @@ class OllamaSettings(ProviderSettings):
     kind: Literal["ollama"] = "ollama"
     base_url: str = DEFAULT_BASE_URL
     num_ctx: PositiveInt | None = Field(default=None)
+
+    @classmethod
+    def offered_regions(cls) -> tuple[RegionListing, ...]:
+        # No Region notion: a model runs on the configured server (``local``), or on the
+        # upstream host the server forwards it to (``global``).
+        return (
+            RegionListing(
+                kind="ollama",
+                service=None,
+                regions=(),
+                global_option=None,
+                documentation="https://docs.ollama.com/faq",
+                as_of="2026-11-21",
+            ),
+        )
 
     @field_validator("base_url")
     @classmethod

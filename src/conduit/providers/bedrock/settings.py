@@ -14,22 +14,99 @@ Four authentication modes, chosen by ``auth.mode``:
   ``allow_long_term_api_keys`` is set.
 
 No setting holds a credential: every credential is a ``SecretRef``.
+
+Regions: ``region`` is the Region the provider is called in (the source Region of an
+inference profile), and must be one where Amazon Bedrock's bedrock-runtime endpoint is
+offered (``BEDROCK_REGIONS``, from the documented list below). ``processing`` is the
+person's choice of where requests may be processed: AWS Regions, which must include
+``region``, and ``allow_global`` for ``global.`` inference profiles (any supported AWS
+commercial Region). Without ``processing`` only the deployment's residency policy
+applies, as before. Where a chosen source Region's profiles actually route is the
+listing's, never a guess from a profile's prefix (C18).
 """
 
 from __future__ import annotations
 
 from typing import Annotated, Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
+from conduit.core.residency import (
+    OfferedRegion,
+    RegionChoice,
+    RegionListing,
+    ResidencyScope,
+)
 from conduit.core.secrets import SecretRef
-from conduit.core.settings import ProviderSettings, SettingsModel
+from conduit.core.settings import FieldsRefused, ProviderSettings, SettingsModel
 
 #: Bedrock's own ceiling on a short-term key's lifetime (12 hours).
 MAX_SHORT_TERM_LIFETIME_S = 43_200
 MIN_SHORT_TERM_LIFETIME_S = 900
 
 REGION_PATTERN = r"^[a-z]{2}(-gov|-iso[a-z]?)?-[a-z]+-\d$"
+
+#: Where Regions are documented, and when the lists below were read.
+REGIONS_DOCUMENTATION = (
+    "https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints-region-availability.html"
+)
+REGIONS_AS_OF = "2026-11-21"
+
+#: The Regions where the bedrock-runtime endpoint is offered, with AWS's names
+#: (REGIONS_DOCUMENTATION, "Regional availability by endpoints"). A Region missing here
+#: is refused; a Region AWS adds needs a conduit release.
+BEDROCK_REGIONS: dict[str, str] = {
+    "us-east-1": "US East (N. Virginia)",
+    "us-east-2": "US East (Ohio)",
+    "us-west-1": "US West (N. California)",
+    "us-west-2": "US West (Oregon)",
+    "ca-central-1": "Canada (Central)",
+    "ca-west-1": "Canada West (Calgary)",
+    "mx-central-1": "Mexico (Central)",
+    "eu-central-1": "Europe (Frankfurt)",
+    "eu-central-2": "Europe (Zurich)",
+    "eu-north-1": "Europe (Stockholm)",
+    "eu-south-1": "Europe (Milan)",
+    "eu-south-2": "Europe (Spain)",
+    "eu-west-1": "Europe (Ireland)",
+    "eu-west-2": "Europe (London)",
+    "eu-west-3": "Europe (Paris)",
+    "ap-east-2": "Asia Pacific (Taipei)",
+    "ap-northeast-1": "Asia Pacific (Tokyo)",
+    "ap-northeast-2": "Asia Pacific (Seoul)",
+    "ap-northeast-3": "Asia Pacific (Osaka)",
+    "ap-south-1": "Asia Pacific (Mumbai)",
+    "ap-south-2": "Asia Pacific (Hyderabad)",
+    "ap-southeast-1": "Asia Pacific (Singapore)",
+    "ap-southeast-2": "Asia Pacific (Sydney)",
+    "ap-southeast-3": "Asia Pacific (Jakarta)",
+    "ap-southeast-4": "Asia Pacific (Melbourne)",
+    "ap-southeast-5": "Asia Pacific (Malaysia)",
+    "ap-southeast-6": "Asia Pacific (New Zealand)",
+    "ap-southeast-7": "Asia Pacific (Thailand)",
+    "il-central-1": "Israel (Tel Aviv)",
+    "me-central-1": "Middle East (UAE)",
+    "me-south-1": "Middle East (Bahrain)",
+    "af-south-1": "Africa (Cape Town)",
+    "sa-east-1": "South America (Sao Paulo)",
+    "us-gov-east-1": "AWS GovCloud (US-East)",
+    "us-gov-west-1": "AWS GovCloud (US-West)",
+}
+
+#: What a global inference profile means (the global cross-Region inference guide).
+GLOBAL_OPTION = (
+    "global. inference profiles: processed in any supported AWS commercial Region, a set "
+    "AWS may grow"
+)
+
+NOT_SERVED = "region is not a Region where the Bedrock runtime endpoint is offered"
+
+
+def bedrock_region(value: str) -> str:
+    """``value`` if the bedrock-runtime endpoint is offered there; refused otherwise."""
+    if value not in BEDROCK_REGIONS:
+        raise ValueError(NOT_SERVED)
+    return value
 
 
 class CredentialChainAuth(SettingsModel):
@@ -92,7 +169,9 @@ class BedrockSettings(ProviderSettings):
     """One configured Amazon Bedrock provider.
 
     ``region`` is the Region the Bedrock runtime endpoint is called in, and the region
-    the residency policy checks. ``use_converse_stream`` chooses ConverseStream (the
+    the residency policy checks; it must be one of ``BEDROCK_REGIONS``. ``processing``
+    optionally chooses where requests may be processed (Regions that include
+    ``region``, and ``allow_global``). ``use_converse_stream`` chooses ConverseStream (the
     default) or Converse for every call; both produce the same conduit stream events.
     """
 
@@ -105,6 +184,12 @@ class BedrockSettings(ProviderSettings):
     read_timeout_s: float = Field(default=300, gt=0, le=3_600)
     max_attempts: int = Field(default=3, ge=1, le=10)
     use_converse_stream: bool = True
+    processing: RegionChoice | None = None
+
+    @field_validator("region")
+    @classmethod
+    def _served(cls, value: str) -> str:
+        return bedrock_region(value)
 
     @model_validator(mode="after")
     def _long_term_keys_gated(self) -> Self:
@@ -114,3 +199,40 @@ class BedrockSettings(ProviderSettings):
                 "set; use short_term_api_key, access_keys or the credential chain"
             )
         return self
+
+    @model_validator(mode="after")
+    def _choice_within_bedrock(self) -> Self:
+        if self.processing is None:
+            return self
+        if any(region not in BEDROCK_REGIONS for region in self.processing.regions):
+            raise FieldsRefused(
+                "processing names a Region the Bedrock runtime endpoint does not serve",
+                ["processing.regions"],
+            )
+        if self.region not in self.processing.regions:
+            raise FieldsRefused(
+                "processing must include region, the Region the provider is called in",
+                ["processing.regions"],
+            )
+        return self
+
+    def region_choice(self) -> RegionChoice | None:
+        return self.processing
+
+    @classmethod
+    def offered_regions(cls) -> tuple[RegionListing, ...]:
+        return (
+            RegionListing(
+                kind="bedrock",
+                service=None,
+                regions=tuple(
+                    OfferedRegion(
+                        code, BEDROCK_REGIONS[code], invocation=True, scope=ResidencyScope.IN_REGION
+                    )
+                    for code in sorted(BEDROCK_REGIONS)
+                ),
+                global_option=GLOBAL_OPTION,
+                documentation=REGIONS_DOCUMENTATION,
+                as_of=REGIONS_AS_OF,
+            ),
+        )
