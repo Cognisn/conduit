@@ -509,10 +509,10 @@ async def check_discovery(
     result = await registry.discover("live", settings)
     assert result.supported, "discovery is reported unsupported"
     assert result.models, "the provider listed no models"
-    declared = len(result.allowed) + len(result.refused)
+    declared = len([m for m in result.models if m.catalogued])
     detail = (
         f"allowed {len(result.allowed)}, refused {len(result.refused)}, "
-        f"undeclared {len(result.undeclared)}"
+        f"uncatalogued {len(result.uncatalogued)}"
     )
     verdict = Verdict.MATCH if declared else Verdict.MISMATCH
     REPORT.record("discovery", subject, "catalogue models listed", verdict, detail)

@@ -1,6 +1,9 @@
 """Residency policy: where a deployment allows its requests to be processed.
 
-Each catalogue entry states its residency scope:
+Each model has a residency scope, taken from the provider's own listing where conduit
+can list the provider (``conduit.core.discovery``), and otherwise from the catalogue
+entry a product declares; a model whose scope nobody states is ``global``, the least
+bounded, so it is never let through a policy that restricts Regions:
 
 - ``local``: runs on the deployment's own hosts (Ollama, the stub).
 - ``in_region``: processed in the region the provider is called in, one of the
@@ -9,7 +12,9 @@ Each catalogue entry states its residency scope:
   geographic inference profile, for example).
 - ``global``: may be processed anywhere the provider chooses.
 
-A ``ResidencyPolicy`` allows a set of scopes and, optionally, a set of regions. An
+For a listed model, ``regions`` are the Regions the provider reports: a Bedrock
+inference profile's destination Regions, or the Region an in-Region model is called
+in. A ``ResidencyPolicy`` allows a set of scopes and, optionally, a set of regions. An
 assignment that would breach it is refused when assignments are resolved at
 start-up (``conduit.core.tasks.resolve_assignments``), never part-way through a task.
 """
@@ -47,7 +52,7 @@ class ResidencyPolicy(SettingsModel):
 
     def check(self, entry: ModelEntry, provider_region: str | None, *, task: str) -> None:
         """Raise ``ResidencyRefused`` if calling ``entry`` from ``provider_region`` breaches."""
-        scope = entry.residency_scope
+        scope = entry.residency_scope or ResidencyScope.GLOBAL  # unstated is unbounded
         where = f"{task}: model {entry.model_id!r} ({scope.value})"
         if scope not in self.scopes:
             allowed = ", ".join(sorted(s.value for s in self.scopes)) or "none"

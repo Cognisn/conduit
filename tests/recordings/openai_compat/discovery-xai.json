@@ -16,6 +16,7 @@
               "owned_by": "xai"
             },
             {
+              "context_length": 131072,
               "created": 1790000000,
               "id": "example-grok-preview",
               "object": "model",

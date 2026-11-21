@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0rc5] - 2026-11-21
+
+Fifth release candidate. Wave 13 makes each provider's own model listing the source of truth for which models exist and where a request is processed, replacing the declared-catalogue rule, to end catalogue drift against live provider listings (`feat/0.1.0-discovery-led-catalogue`).
+
+### Changed
+
+- **C18 is revised:** each provider's own model listing is the source of truth for which models a configured provider can use and where each request is processed.
+  - **Start-up.** `start` and `start_embeddings` list every provider a task class is assigned to (only those), once, before anything is built, and keep the results on `Runtime.discovery` and `EmbeddingRuntime.discovery`. A listing that fails stops start-up. Start-up therefore needs the listing permissions: Bedrock needs `bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles`, and the other providers use their Models APIs with the same key.
+  - **Matching.** Each listed model is matched to the catalogue by its id or by the base model the listing names.
+  - **Residency** is the listing's: a Bedrock inference profile's destination Regions from its model ARNs (`global` for a `global.` profile or an ARN with no Region); `global` for the Anthropic, OpenAI, X.AI and Gemini APIs; `local` for an Ollama model unless the server forwards it (`remote_host` or `remote_model`).
+  - **Capabilities and limits** come from an overlay, the limits the listing reports, the default entry, or a conservative floor: an 8,192-token window, a 4,096-token output, and only the capability flags the listing reports as supported.
+  - **Refused although listed:** a model an overlay withdraws, and an uncatalogued embedding model (one the listing marks as embedding, or whose id names embeddings).
+- **The default catalogue holds only capabilities and limits** (version 2026.11.21, 109 entries, down from 190). Bedrock entries are keyed by foundation model, and no entry carries Region data. The Bedrock and bedrock-mantle entries declare no residency scope. As a result, `ProviderRegistry.build` used directly, without a listed catalogue, under a policy that names Regions refuses every Bedrock and bedrock-mantle model unless an overlay declares its residency.
+- **Catalogue mode.** `ConduitSettings.discovery` puts a provider in catalogue mode: declared models only, with the residency an entry declares, `global` where it declares none. Adapters that cannot list (Claude in Foundry, Foundry's OpenAI v1 endpoint, `endpoint_url`) work this way.
+- **Discovery results.** `DiscoveryResult.drift` reports catalogue drift (`uncatalogued`, `unlisted`, `limits_differ`, `capabilities_differ`, `regions_declared`), and `DiscoveryFinishedEvent` counts each reason. `DiscoveryFinishedEvent.undeclared` is removed. `DiscoveryOutcome.UNDECLARED` and `DiscoveryResult.undeclared` are removed: use `ModelAvailability.catalogued` and `DiscoveryResult.uncatalogued`. `join_discovered` now returns a pair, the models and the drift.
+- **Catalogue entries and overlays.** `ModelEntry.residency_scope` is optional. `Catalogue.apply` no longer refuses withdrawing a model the catalogue lacks: it logs a warning, and a withdrawal no listed model matches is reported as `unlisted` drift.
+- **Gemini discovery** lists embedding models (`embedContent`) as well as chat models.
+- **`StubFactory()`** without `models` reports discovery unsupported; pass `models=DEFAULT_STUB_MODELS` to list the catalogue's stub models.
+- **CLI.** `conduit check` lists each assigned provider and resolves assignments on the listings; `conduit models` shows residency as `listed`.
+
+### Added
+
+- `CatalogueDrift`, `DriftReason`, `ReportedCapabilities`, `FLOOR_CONTEXT_WINDOW` and `FLOOR_OUTPUT_LIMIT` are exported from `conduit`.
+- `ModelAvailability` gains `catalogued`, `scope` and `regions`. `DiscoveryResult` gains `drift`, `uncatalogued`, `get` and `listed_catalogue`.
+- `DiscoveredModel` takes `kind`, `scope`, `regions`, `base_model_id`, `context_window`, `output_limit` and `capabilities`.
+- `ProviderRegistry.discovery_supported`.
+- `build` and `build_embedder` take `catalogue=`.
+- `resolve_assignments` takes `listings=`.
+- `Catalogue.overlaid` and `Catalogue.withdrawn`.
+
 ## [0.1.0rc4] - 2026-11-18
 
 Fourth release candidate. Wave 12 moves the MCP client to MCP Python SDK 2.x (`build/0.1.0-mcp-v2`).

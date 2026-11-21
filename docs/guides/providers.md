@@ -150,31 +150,31 @@ A deployment that does not use Bedrock API keys can deny them outright in IAM: d
 
 ### Residency
 
-The default catalogue declares every current Claude model on bedrock-runtime and every other vendor's current chat model that Bedrock serves through Converse on demand (Amazon Nova, DeepSeek, Mistral AI, OpenAI, Qwen, MiniMax, Moonshot AI, NVIDIA, Writer and Z.AI), with each in-Region id and inference profile the model cards document, plus Titan Text Embeddings V2. Models in their legacy period with an end-of-life date are left out. Capabilities follow each model card's bedrock-runtime features: a model whose card lists tool calling only for bedrock-mantle is declared without tools, and prompt caching is declared only where Converse takes cache points (Claude and Amazon Nova). The non-Claude entries are tested against recorded responses until the next live verification pass. Each model id is declared with its scope:
+Which Bedrock models a provider can use, and where each request is processed, come from the Region's own listing at start-up (C18), never from the catalogue: see [Model discovery](#model-discovery). The default catalogue holds what the listing does not give, keyed by foundation model id (`anthropic.claude-sonnet-5`): kind, capabilities, context window and output limit, for every current Claude model on bedrock-runtime and every other vendor's current chat model that Bedrock serves through Converse on demand (Amazon Nova, DeepSeek, Mistral AI, OpenAI, Qwen, MiniMax, Moonshot AI, NVIDIA, Writer and Z.AI), plus Titan Text Embeddings V2. Models in their legacy period with an end-of-life date are left out. Capabilities follow each model card's bedrock-runtime features: a model whose card lists tool calling only for bedrock-mantle is declared without tools, and prompt caching is declared only where Converse takes cache points (Claude and Amazon Nova). An inference profile takes the entry of the foundation model its listing names. The non-Claude entries are tested against recorded responses until the next live verification pass.
 
-- **In-region** model ids (`anthropic.claude-sonnet-5`) are processed in the Region the provider is called in, and are declared only for the Regions that serve them.
-- **Geographic inference profiles** (`eu.`, `us.`, `au.`, `jp.`, `in.`, `ca.`, `apac.` and `us-gov.` prefixes) are `cross_region`: Bedrock may process a request in any Region of the profile, and the catalogue lists them.
-- **Global inference profiles** (`global.` prefix) are `global`.
+The listing gives each model its scope:
 
-A deployment that must keep processing in one Region allows only `local` and `in_region` and names its Regions; an assignment to a profile is then refused at start-up (`ResidencyRefused`), before any client exists. A deployment that may use a geography allows `cross_region` and lists every Region of the profile; a profile reaching outside the list is refused.
+- **On-demand foundation models** (`anthropic.claude-sonnet-5`, as `ListFoundationModels` lists them in the Region) are `in_region`, processed in the Region the provider is called in.
+- **Geographic inference profiles** (`eu.`, `us.`, `au.`, `jp.`, `in.`, `ca.`, `apac.` and `us-gov.` prefixes, and application profiles) are `cross_region` over the destination Regions their `models` list names, exactly as AWS reports them.
+- **Global inference profiles** (`global.` prefix), and any profile whose model ARNs name no Region, are `global`.
+
+A deployment that must keep processing in one Region allows only `local` and `in_region` and names its Regions; an assignment to a profile is then refused at start-up (`ResidencyRefused`). A deployment that may use a geography allows `cross_region` and lists the Regions it accepts; a profile whose listed destinations reach outside the list is refused, and one whose destinations are all inside is allowed, whatever an older catalogue said. Read the destinations a profile has in your Region from `runtime.discovery[name]` or `ProviderRegistry.discover`.
 
 ```python
-from conduit import ResidencyPolicy, default_catalogue
+from conduit import ResidencyPolicy
 
 in_region = ResidencyPolicy(
     scopes=frozenset({"local", "in_region"}), regions=frozenset({"eu-west-2"})
 )
 europe = ResidencyPolicy(
     scopes=frozenset({"local", "in_region", "cross_region"}),
-    regions=frozenset(
-        default_catalogue().require("bedrock", "eu.anthropic.claude-sonnet-5").regions
-    ),
+    regions=frozenset({"eu-west-1", "eu-west-2", "eu-west-3", "eu-central-1", "eu-north-1"}),
 )
-
-catalogue = default_catalogue()
-in_region.check(catalogue.require("bedrock", "anthropic.claude-sonnet-5"), "eu-west-2", task="chat")
-europe.check(catalogue.require("bedrock", "eu.anthropic.claude-sonnet-5"), "eu-west-2", task="chat")
+assert "cross_region" not in in_region.scopes
+assert "eu-west-2" in (europe.regions or ())
 ```
+
+With `endpoint_url` set (or `discovery: {"<name>": "catalogue"}` in the settings) the provider is not listed: it serves only the models the catalogue declares, with the residency an overlay entry declares, and an entry that declares none is `global`, refused under any policy that names Regions.
 
 ### Reasoning
 
@@ -204,14 +204,17 @@ conduit cannot filter everything botocore logs. When botocore refreshes temporar
 
 ## Claude through Bedrock's mantle endpoint
 
-Kind `bedrock_mantle`, extra `bedrock-mantle` (the anthropic SDK and boto3). Calls Claude through the Anthropic Messages API at `https://bedrock-mantle.<region>.api.aws/anthropic`, which runs each request in the Region it is sent to. That makes it the route to single-Region Claude where bedrock-runtime offers only inference profiles: its catalogue entries are `in_region`, one for each Claude model the Bedrock model cards document on bedrock-mantle (gated Mythos models aside), declared for the Regions each card lists.
+Kind `bedrock_mantle`, extra `bedrock-mantle` (the anthropic SDK and boto3). Calls Claude through the Anthropic Messages API at `https://bedrock-mantle.<region>.api.aws/anthropic`, which runs each request in the Region it is sent to. That makes it the route to single-Region Claude where bedrock-runtime offers only inference profiles: every model the endpoint lists is `in_region` in the endpoint's Region. Its catalogue entries describe each Claude model the Bedrock model cards document on bedrock-mantle (gated Mythos models aside); which Regions serve a model is the endpoint's listing's to say.
 
 Authentication is by Bedrock API key only: `short_term_api_key` (the default, generated from the credential chain or access keys and refreshed) or `long_term_api_key` behind `allow_long_term_api_keys`. The SDK never signs requests or reads a key or Region from the environment, and the key is set at send time, so it never appears in the request options the SDK logs. `ANTHROPIC_LOG=debug` is refused while set, since it makes the SDK log whole request bodies.
 
 ```python
 registry.validate("claude_regional", {"kind": "bedrock_mantle", "region": "eu-west-1"})
-mantle = catalogue.require("bedrock_mantle", "anthropic.claude-sonnet-5")
-assert mantle.residency_scope == "in_region" and "eu-west-1" in mantle.regions
+from conduit import default_catalogue
+
+mantle = default_catalogue().require("bedrock_mantle", "anthropic.claude-sonnet-5")
+assert mantle.residency_scope is None  # the endpoint's listing gives it: in_region
+assert mantle.capabilities.prompt_caching
 ```
 
 ## Anthropic
@@ -310,7 +313,9 @@ foundry_overlay = CatalogueOverlay.model_validate(
         ],
     }
 )
-declared = catalogue.apply(foundry_overlay).require("openai", "example-gpt5-swedencentral")
+declared = (
+    default_catalogue().apply(foundry_overlay).require("openai", "example-gpt5-swedencentral")
+)
 assert declared.residency_scope == "in_region"
 ```
 
@@ -343,7 +348,7 @@ registry.validate(
 assert "base_url" in refused({"kind": "ollama", "base_url": "http://user:pass@192.0.2.40:11434"})
 ```
 
-The HTTP client ignores the environment (no proxy variables, no `.netrc`) and never follows redirects. Left unset, `num_ctx` requests the catalogue entry's full context window (131,072 tokens for `llama3.1:8b`), because Ollama's own default is far smaller; a full window needs memory on the Ollama host to match, so set `num_ctx` to request less. Declare any other model you pull in a catalogue overlay under provider `ollama` with scope `local`.
+The HTTP client ignores the environment (no proxy variables, no `.netrc`) and never follows redirects. Left unset, `num_ctx` requests the catalogue entry's full context window (131,072 tokens for `llama3.1:8b`), because Ollama's own default is far smaller; a full window needs memory on the Ollama host to match, so set `num_ctx` to request less. A model you pull that the catalogue lacks is usable as listed, on the conservative floor; declare it in a catalogue overlay under provider `ollama` to give it its capabilities and window.
 
 ## The stub
 
@@ -351,15 +356,29 @@ Kind `stub`, no extra. A deterministic, scriptable provider for tests: it never 
 
 ## Model discovery
 
-`ProviderRegistry.discover` lists the models a configured provider reaches and joins them to the catalogue (see [Discovering the models a provider reaches](integration.md#discovering-the-models-a-provider-reaches)). What each adapter lists:
+Each adapter's listing is the source of truth for which models a provider can use and where a request is processed (C18). `start` lists every provider a task class is assigned to, and `ProviderRegistry.discover` lists one on demand; each listed model is joined to the catalogue, with the drift reported (see [Discovering the models a provider reaches](integration.md#discovering-the-models-a-provider-reaches)). What each adapter lists, and the residency it reports:
 
-- **Amazon Bedrock**: `ListFoundationModels` (on-demand models whose output is text or embeddings) and `ListInferenceProfiles` (every page; each profile's type is its label), on a `bedrock` control-plane client `create_client` builds beside the runtime client, for the same Region and authentication. The credentials need `bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles`. Unsupported when `endpoint_url` replaces the runtime endpoint.
-- **Claude through Bedrock's mantle endpoint**: the endpoint's documented OpenAI-compatible listing, `GET /v1/models` on the Region's `bedrock-mantle` host, with the same Bedrock API key; only Claude models (`anthropic.` ids) are kept. Unsupported when `endpoint_url` is set.
-- **Anthropic**: the Models API (`GET /v1/models`, every page) for `endpoint: direct`. Unsupported for Claude in Foundry, whose endpoint documents no models listing and whose ids are deployment names.
-- **OpenAI and X.AI**: the Models API (`GET /v1/models`). Unsupported for Microsoft Foundry, whose OpenAI v1 endpoint lists the resource's models rather than its deployments.
-- **Gemini**: `models.list` (every page), keeping only the models that support `generateContent`; the `models/` prefix is removed.
-- **Ollama**: the server's local models (`GET /api/tags`). A model pulled without a tag is listed as `name:latest`, and Ollama resolves an untagged name to its `latest` tag, so it is reported under its bare name (`nomic-embed-text`), the name the catalogue declares and the provider calls; any other tag is kept. Every pulled model that the catalogue lacks is reported as undeclared; declare an untagged pull in an overlay by its bare name.
-- **The stub**: the ids given as `StubFactory(models=[...])`, by default the stub models conduit's catalogue declares (`stub-echo`, `stub-embed`), so a product can test its handling of each outcome.
+- **Amazon Bedrock**: `ListFoundationModels` (on-demand models whose output is text or embeddings, `in_region` in the Region its ARN names) and `ListInferenceProfiles` (every page; each profile's type is its label, its `models` ARNs give its destination Regions and its foundation model, and a `global.` profile or an ARN without a Region makes it `global`), on a `bedrock` control-plane client `create_client` builds beside the runtime client, for the same Region and authentication. The credentials need `bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles`. Unsupported when `endpoint_url` replaces the runtime endpoint. AWS documents at most five models per profile, and conduit takes the list as the profile's complete destinations.
+- **Claude through Bedrock's mantle endpoint**: the endpoint's documented OpenAI-compatible listing, `GET /v1/models` on the Region's `bedrock-mantle` host, with the same Bedrock API key; only Claude models (`anthropic.` ids) are kept, each `in_region` in the endpoint's Region. Unsupported when `endpoint_url` is set.
+- **Anthropic**: the Models API (`GET /v1/models`, every page) for `endpoint: direct`, `global`, with each model's `max_input_tokens` and `max_tokens` as its window and output limit, and its image input and structured outputs support. Unsupported for Claude in Foundry, whose endpoint documents no models listing and whose ids are deployment names.
+- **OpenAI and X.AI**: the Models API (`GET /v1/models`), `global`; X.AI's `context_length` is kept as the window. Unsupported for Microsoft Foundry, whose OpenAI v1 endpoint lists the resource's models rather than its deployments.
+- **Gemini**: `models.list` (every page), keeping the models that support `generateContent` (chat) and those that support `embedContent` without it (embedding, for the embedding adapter), `global`, with their input and output token limits; the `models/` prefix is removed. The SDK's model carries no `baseModelId`, so a tuned model's base is its `tuned_model_info.base_model`, and any other model is its own base.
+- **Ollama**: the server's local models (`GET /api/tags`), `local`; a model the server forwards to a remote host (`remote_host` or `remote_model` in the listing) is `global`. In catalogue mode there is no listing, so a declared Ollama model has the scope its entry declares (`local` for the default entries) whether or not the server forwards it: list an Ollama server that may hold remote models. A model pulled without a tag is listed as `name:latest`, and Ollama resolves an untagged name to its `latest` tag, so it is reported under its bare name (`nomic-embed-text`), the name the catalogue declares and the provider calls; any other tag is kept.
+- **The stub**: the ids given as `StubFactory(models=[...])`, each `local`, so a product can test its handling of listed, catalogued and uncatalogued models; `DEFAULT_STUB_MODELS` names the catalogue's. Without `models` the stub is not listed, and serves the stub models the catalogue declares.
+
+### What start-up needs to list
+
+Start-up lists every provider a task class is assigned to, so the credentials need the listing as well as inference. A provider whose credentials cannot list fails to start (the listing's `ProviderError`, before anything is built); give it the permission, or set `"discovery": {"<name>": "catalogue"}` in the settings to serve only the models the catalogue declares, with the residency an overlay entry declares (`global` where it declares none).
+
+| Kind | What the listing needs |
+|---|---|
+| `bedrock` | IAM `bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles` in the provider's Region (a Bedrock API key covers both) |
+| `bedrock_mantle` | The Bedrock API key the provider already uses (`GET /v1/models` on the Region's mantle endpoint) |
+| `anthropic` (direct) | The API key the provider already uses (the Models API) |
+| `openai_compat` (OpenAI, X.AI) | The API key the provider already uses (the Models API) |
+| `gemini` | The API key the provider already uses (`models.list`) |
+| `ollama` | Network access to the server's `/api/tags` |
+| Claude in Foundry, Foundry's OpenAI v1 endpoint, `endpoint_url` | Not listed: catalogue mode |
 
 ## Building clients
 

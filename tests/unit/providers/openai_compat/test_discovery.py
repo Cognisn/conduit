@@ -15,6 +15,7 @@ import pytest
 from conduit.core.discovery import DiscoveryOutcome, DiscoveryResult
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.registry import DiscoveringFactory, ProviderRegistry
+from conduit.core.residency import ResidencyScope
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.providers.openai_compat import OpenAICompatFactory
 from conduit.providers.openai_compat.factory import OpenAICompatClient
@@ -76,7 +77,7 @@ async def test_openai_models_are_listed_and_joined() -> None:
     assert result.catalogue_provider == "openai"
     assert {m.model_id: (m.outcome, m.label) for m in result.models} == {
         "gpt-5.6-sol": (DiscoveryOutcome.ALLOWED, "model"),
-        "example-gpt-tuned": (DiscoveryOutcome.UNDECLARED, "model"),
+        "example-gpt-tuned": (DiscoveryOutcome.ALLOWED, "model"),
         "text-embedding-3-small": (DiscoveryOutcome.ALLOWED, "model"),
     }
 
@@ -88,8 +89,13 @@ async def test_xai_models_join_the_xai_catalogue() -> None:
     assert result.catalogue_provider == "xai"
     assert {m.model_id: m.outcome for m in result.models} == {
         "grok-4.7": DiscoveryOutcome.ALLOWED,
-        "example-grok-preview": DiscoveryOutcome.UNDECLARED,
+        "example-grok-preview": DiscoveryOutcome.ALLOWED,
     }
+    assert [m.model_id for m in result.uncatalogued] == ["example-grok-preview"]
+    assert {m.scope for m in result.models} == {ResidencyScope.GLOBAL}
+    preview = result.get("example-grok-preview")
+    assert preview is not None and preview.entry is not None
+    assert preview.entry.context_window == 131_072  # X.AI's context_length
 
 
 async def test_an_empty_listing() -> None:

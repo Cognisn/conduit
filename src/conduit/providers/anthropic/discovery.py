@@ -22,8 +22,9 @@ import contextlib
 from collections.abc import Sequence
 from typing import Any
 
-from conduit.core.discovery import DiscoveredModel
+from conduit.core.discovery import DiscoveredModel, ReportedCapabilities
 from conduit.core.errors import ProviderError, ProviderFailure
+from conduit.core.residency import ResidencyScope
 from conduit.providers.anthropic.errors import failure_for
 
 #: Models asked for per page (the API's maximum).
@@ -38,6 +39,31 @@ FOUNDRY_UNSUPPORTED = (
 )
 
 
+def _get(item: object, name: str) -> object:
+    return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
+
+
+def _positive(value: object) -> int | None:
+    """A reported limit, or ``None`` for anything that is not a positive integer."""
+    return value if type(value) is int and value > 0 else None
+
+
+def _supported(capabilities: object, name: str) -> bool | None:
+    flag = _get(_get(capabilities, name), "supported")
+    return flag if isinstance(flag, bool) else None
+
+
+def _capabilities(capabilities: object) -> ReportedCapabilities | None:
+    """What the listing says of the flags conduit knows: image input is vision, and
+    structured outputs structured output. Tools and prompt caching are not reported."""
+    if capabilities is None:
+        return None
+    return ReportedCapabilities(
+        vision=_supported(capabilities, "image_input"),
+        structured_output=_supported(capabilities, "structured_outputs"),
+    )
+
+
 def _models(page: Any) -> tuple[list[DiscoveredModel], bool, str | None]:
     data = getattr(page, "data", None)
     more = getattr(page, "has_more", None)
@@ -50,7 +76,14 @@ def _models(page: Any) -> tuple[list[DiscoveredModel], bool, str | None]:
         listed: DiscoveredModel | None = None
         if isinstance(model_id, str) and isinstance(kind, str | None):
             with contextlib.suppress(ValueError):
-                listed = DiscoveredModel(model_id, label=kind or None)
+                listed = DiscoveredModel(
+                    model_id,
+                    label=kind or None,
+                    scope=ResidencyScope.GLOBAL,
+                    context_window=_positive(_get(model, "max_input_tokens")),
+                    output_limit=_positive(_get(model, "max_tokens")),
+                    capabilities=_capabilities(_get(model, "capabilities")),
+                )
         if listed is None:
             raise ProviderError(ProviderFailure.PROTOCOL)
         found.append(listed)

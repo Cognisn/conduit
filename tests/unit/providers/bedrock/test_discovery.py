@@ -17,13 +17,15 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
-from conduit.core.discovery import DiscoveryOutcome, DiscoveryResult
+from conduit.core.discovery import DiscoveryOutcome, DiscoveryResult, DriftReason
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.registry import DiscoveringFactory, ProviderRegistry
+from conduit.core.residency import ResidencyPolicy, ResidencyScope
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.core.settings import ProviderSettings
 from conduit.embeddings.bedrock import BedrockEmbeddingFactory
 from conduit.providers.bedrock import BedrockFactory, BedrockSettings
+from conduit.providers.bedrock.discovery import list_models
 from conduit.providers.bedrock.factory import BedrockClients
 from conduit.testing.replay import Replay, load_recording
 from tests.unit.providers import discovery_recordings as recordings
@@ -31,6 +33,7 @@ from tests.unit.providers import discovery_recordings as recordings
 from .test_errors import ClientError
 
 REGION = recordings.REGION
+OTHER = recordings.OTHER_REGION
 SETTINGS = {"kind": "bedrock", "region": REGION}
 # The documentation example access key pair, never a real credential.
 ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
@@ -63,13 +66,28 @@ class FakeControl:
         return self._answer("ListInferenceProfiles", params)
 
 
-def _registry() -> ProviderRegistry:
-    return ProviderRegistry(secrets=LiteralSecretResolver(SECRETS), factories=[BedrockFactory()])
+def _registry(residency: ResidencyPolicy | None = None) -> ProviderRegistry:
+    return ProviderRegistry(
+        secrets=LiteralSecretResolver(SECRETS),
+        factories=[BedrockFactory()],
+        residency=residency,
+    )
 
 
-async def _discover(control: Any, settings: Mapping[str, Any] = SETTINGS) -> DiscoveryResult:
+async def _discover(
+    control: Any,
+    settings: Mapping[str, Any] = SETTINGS,
+    residency: ResidencyPolicy | None = None,
+) -> DiscoveryResult:
     clients = BedrockClients(runtime=object(), control=control)
-    return await _registry().discover("bedrock_sydney", settings, client=clients)
+    return await _registry(residency).discover("bedrock_sydney", settings, client=clients)
+
+
+#: A deployment that may use the Australian geography and nothing wider.
+AUSTRALIA = ResidencyPolicy(
+    scopes=frozenset({ResidencyScope.IN_REGION, ResidencyScope.CROSS_REGION}),
+    regions=frozenset({REGION, OTHER}),
+)
 
 
 def _replay(name: str) -> Replay:
@@ -86,26 +104,61 @@ class TestListing:
         result = await _discover(FakeControl(replay))
         replay.assert_exhausted()  # both profile pages were read
         assert result.supported
-        assert {m.model_id: (m.outcome, m.label) for m in result.models} == {
-            "amazon.nova-lite-v1:0": (DiscoveryOutcome.ALLOWED, None),
-            "amazon.titan-embed-text-v2:0": (DiscoveryOutcome.ALLOWED, None),
-            "example.text-model-v1:0": (DiscoveryOutcome.UNDECLARED, None),
-            "anthropic.claude-opus-5-5": (DiscoveryOutcome.REFUSED, None),
-            "au.anthropic.claude-opus-5-5": (DiscoveryOutcome.ALLOWED, "SYSTEM_DEFINED"),
-            "global.anthropic.claude-opus-5-5": (DiscoveryOutcome.ALLOWED, "SYSTEM_DEFINED"),
-            "example-application-1": (DiscoveryOutcome.UNDECLARED, "APPLICATION"),
+        assert {m.model_id: (m.outcome, m.label, m.catalogued) for m in result.models} == {
+            "amazon.nova-lite-v1:0": (DiscoveryOutcome.ALLOWED, None, True),
+            "amazon.titan-embed-text-v2:0": (DiscoveryOutcome.ALLOWED, None, True),
+            "example.text-model-v1:0": (DiscoveryOutcome.ALLOWED, None, False),
+            "anthropic.claude-opus-5-5": (DiscoveryOutcome.ALLOWED, None, True),
+            "au.anthropic.claude-opus-5-5": (DiscoveryOutcome.ALLOWED, "SYSTEM_DEFINED", True),
+            "global.anthropic.claude-opus-5-5": (
+                DiscoveryOutcome.ALLOWED,
+                "SYSTEM_DEFINED",
+                True,
+            ),
+            "example-application-1": (DiscoveryOutcome.ALLOWED, "APPLICATION", False),
         }
+
+    async def test_each_model_carries_the_residency_the_listing_reports(self) -> None:
+        result = await _discover(FakeControl(_replay("bedrock/discovery-listing.json")))
+        found = {m.model_id: (m.scope, m.regions) for m in result.models}
+        assert found["anthropic.claude-opus-5-5"] == (
+            ResidencyScope.IN_REGION,
+            frozenset({REGION}),
+        )
+        assert found["au.anthropic.claude-opus-5-5"] == (
+            ResidencyScope.CROSS_REGION,
+            frozenset({REGION, OTHER}),
+        )
+        assert found["global.anthropic.claude-opus-5-5"] == (ResidencyScope.GLOBAL, frozenset())
+        assert found["example-application-1"] == (
+            ResidencyScope.CROSS_REGION,
+            frozenset({REGION}),
+        )
+
+    async def test_a_profile_matches_the_entry_of_its_foundation_model(self) -> None:
+        result = await _discover(FakeControl(_replay("bedrock/discovery-listing.json")))
+        profile = result.get("au.anthropic.claude-opus-5-5")
+        assert profile is not None and profile.entry is not None
+        assert profile.entry.capabilities.prompt_caching
+        assert profile.entry.model_id == "au.anthropic.claude-opus-5-5"
+
+    async def test_an_embedding_model_is_listed_as_one(self) -> None:
+        result = await _discover(FakeControl(_replay("bedrock/discovery-listing.json")))
+        titan = result.get("amazon.titan-embed-text-v2:0")
+        assert titan is not None and titan.entry is not None
+        assert titan.entry.kind == "embedding"
 
     async def test_a_model_without_text_or_embedding_output_is_left_out(self) -> None:
         result = await _discover(FakeControl(_replay("bedrock/discovery-listing.json")))
         assert "example.image-model-v1:0" not in {m.model_id for m in result.models}
 
-    async def test_the_region_refusal_is_the_start_up_reason(self) -> None:
-        result = await _discover(FakeControl(_replay("bedrock/discovery-listing.json")))
-        [refused] = result.refused
-        assert refused.reason == (
-            f"bedrock_sydney: model 'anthropic.claude-opus-5-5' is not offered in region {REGION}"
+    async def test_the_global_profile_is_refused_under_a_regional_policy(self) -> None:
+        result = await _discover(
+            FakeControl(_replay("bedrock/discovery-listing.json")), residency=AUSTRALIA
         )
+        assert [m.model_id for m in result.refused] == ["global.anthropic.claude-opus-5-5"]
+        [refused] = result.refused
+        assert refused.reason is not None and "scope global is not allowed" in refused.reason
 
     async def test_an_empty_account(self) -> None:
         replay = _replay("bedrock/discovery-empty.json")
@@ -157,6 +210,130 @@ class TestListing:
         with pytest.raises(ProviderError) as raised:
             await _discover(Endless())
         assert raised.value.failure is ProviderFailure.PROTOCOL
+
+
+class TestDrift:
+    """Catalogue drift against the live listing (synthetic recording)."""
+
+    async def _drift(self, residency: ResidencyPolicy | None = AUSTRALIA) -> DiscoveryResult:
+        replay = _replay("bedrock/discovery-drift.json")
+        result = await _discover(FakeControl(replay), residency=residency)
+        replay.assert_exhausted()
+        return result
+
+    async def test_a_profile_is_allowed_on_the_regions_it_routes_to(self) -> None:
+        result = await self._drift()
+        profile = result.get("au.anthropic.claude-sonnet-4-6")
+        assert profile is not None
+        assert profile.outcome is DiscoveryOutcome.ALLOWED
+        assert profile.regions == {REGION, OTHER}
+        assert profile.catalogued
+
+    async def test_a_profile_with_no_entry_is_usable_and_reported(self) -> None:
+        result = await self._drift()
+        new = result.get("au.anthropic.example-claude-unlisted-v1:0")
+        assert new is not None
+        assert new.outcome is DiscoveryOutcome.ALLOWED
+        assert not new.catalogued
+        reasons = {(d.model_id, d.reason) for d in result.drift}
+        assert ("au.anthropic.example-claude-unlisted-v1:0", DriftReason.UNCATALOGUED) in reasons
+
+    async def test_entries_the_region_does_not_list_are_reported_unlisted(self) -> None:
+        result = await self._drift()
+        unlisted = {d.model_id for d in result.drift if d.reason is DriftReason.UNLISTED}
+        assert "anthropic.claude-opus-5-5" in unlisted
+        assert "anthropic.claude-sonnet-4-6" not in unlisted  # listed behind its profile
+
+    async def test_a_profile_whose_models_disagree_matches_no_entry(self) -> None:
+        result = await self._drift()
+        mixed = result.get("apac.example.mixed-v1:0")
+        assert mixed is not None and not mixed.catalogued
+        assert mixed.regions == {REGION, OTHER}
+
+    def test_the_listing_names_a_base_model_only_when_every_arn_agrees(self) -> None:
+        listed = {
+            m.model_id: m.base_model_id
+            for m in list_models(FakeControl(_replay("bedrock/discovery-drift.json")))
+        }
+        assert listed["au.anthropic.claude-sonnet-4-6"] == "anthropic.claude-sonnet-4-6"
+        assert listed["apac.example.mixed-v1:0"] is None
+
+    async def test_a_model_arn_without_a_region_makes_the_profile_global(self) -> None:
+        result = await self._drift()
+        unbounded = result.get("example.no-region-v1:0")
+        assert unbounded is not None
+        assert unbounded.scope is ResidencyScope.GLOBAL
+        assert unbounded.outcome is DiscoveryOutcome.REFUSED
+
+    @pytest.mark.parametrize(
+        "profile",
+        [
+            {"inferenceProfileId": "au.x.y-v1:0", "type": "SYSTEM_DEFINED"},
+            {"inferenceProfileId": "au.x.y-v1:0", "type": "SYSTEM_DEFINED", "models": "x"},
+            {"inferenceProfileId": "au.x.y-v1:0", "type": "SYSTEM_DEFINED", "models": [1]},
+            {
+                "inferenceProfileId": "au.x.y-v1:0",
+                "type": "SYSTEM_DEFINED",
+                "models": [{"modelArn": 7}],
+            },
+        ],
+    )
+    async def test_a_profile_without_its_documented_models_is_a_protocol_failure(
+        self, profile: dict[str, Any]
+    ) -> None:
+        class Odd(FakeControl):
+            def list_foundation_models(self, **params: Any) -> Any:
+                return {"modelSummaries": []}
+
+            def list_inference_profiles(self, **params: Any) -> Any:
+                return {"inferenceProfileSummaries": [profile]}
+
+        with pytest.raises(ProviderError) as raised:
+            await _discover(Odd())
+        assert raised.value.failure is ProviderFailure.PROTOCOL
+
+    @pytest.mark.parametrize("models", [None, "x", [1], [{"modelArn": 7}]])
+    async def test_an_inactive_profile_is_left_out_before_its_models_are_read(
+        self, models: Any
+    ) -> None:
+        profile: dict[str, Any] = {
+            "inferenceProfileId": "au.x.legacy-v1:0",
+            "type": "SYSTEM_DEFINED",
+            "status": "EXAMPLE_RETIRED",
+        }
+        if models is not None:
+            profile["models"] = models
+
+        class Legacy(FakeControl):
+            def list_foundation_models(self, **params: Any) -> Any:
+                return {"modelSummaries": []}
+
+            def list_inference_profiles(self, **params: Any) -> Any:
+                return {"inferenceProfileSummaries": [profile]}
+
+        result = await _discover(Legacy())
+        assert result.models == ()
+
+    async def test_a_profile_that_is_not_active_is_left_out(self) -> None:
+        class Inactive(FakeControl):
+            def list_foundation_models(self, **params: Any) -> Any:
+                return {"modelSummaries": []}
+
+            def list_inference_profiles(self, **params: Any) -> Any:
+                arn = f"arn:aws:bedrock:{REGION}::foundation-model/x.y-v1:0"
+                return {
+                    "inferenceProfileSummaries": [
+                        {
+                            "inferenceProfileId": "au.x.y-v1:0",
+                            "type": "SYSTEM_DEFINED",
+                            "status": "EXAMPLE_PENDING",
+                            "models": [{"modelArn": arn}],
+                        }
+                    ]
+                }
+
+        result = await _discover(Inactive())
+        assert result.models == ()
 
 
 class TestUnsupported:

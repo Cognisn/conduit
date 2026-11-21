@@ -131,7 +131,10 @@
               "inferenceProfileName": "au.anthropic.claude-opus-5-5",
               "models": [
                 {
-                  "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/example"
+                  "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/anthropic.claude-opus-5-5"
+                },
+                {
+                  "modelArn": "arn:aws:bedrock:ap-southeast-4::foundation-model/anthropic.claude-opus-5-5"
                 }
               ],
               "status": "ACTIVE",
@@ -143,7 +146,10 @@
               "inferenceProfileName": "global.anthropic.claude-opus-5-5",
               "models": [
                 {
-                  "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/example"
+                  "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/anthropic.claude-opus-5-5"
+                },
+                {
+                  "modelArn": "arn:aws:bedrock:ap-southeast-4::foundation-model/anthropic.claude-opus-5-5"
                 }
               ],
               "status": "ACTIVE",
@@ -172,7 +178,7 @@
               "inferenceProfileName": "example-application-1",
               "models": [
                 {
-                  "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/example"
+                  "modelArn": "arn:aws:bedrock:ap-southeast-2::foundation-model/example.text-model-v1:0"
                 }
               ],
               "status": "ACTIVE",
