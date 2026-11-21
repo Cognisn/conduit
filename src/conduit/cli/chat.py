@@ -33,6 +33,7 @@ from conduit import (
     CapturePolicy,
     ConduitError,
     Message,
+    ResidencyScope,
     Runtime,
     TaskTools,
     TextBlock,
@@ -247,8 +248,10 @@ class Chat:
         )
         assignment = runtime.assignments.for_task(CHAT)
         self.model = f"{assignment.provider} {assignment.model}"
+        # A scope no listing or entry states is unbounded (C18).
+        scope = assignment.entry.residency_scope or ResidencyScope.GLOBAL
         screen.say(
-            f"conduit chat on {self.model} ({assignment.entry.residency_scope.value}). "
+            f"conduit chat on {self.model} ({scope.value}). "
             "Type /help for commands, /quit to leave."
         )
         if self.transcripts is None:

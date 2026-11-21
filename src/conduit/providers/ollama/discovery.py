@@ -27,6 +27,7 @@ from typing import Any
 
 from conduit.core.discovery import DiscoveredModel
 from conduit.core.errors import ProviderError, ProviderFailure
+from conduit.core.residency import ResidencyScope
 from conduit.providers.ollama.mapping import failure_for_status
 
 #: Ollama's listing of local models.
@@ -61,7 +62,10 @@ def parse_tags(body: object) -> tuple[DiscoveredModel, ...]:
         name = item.get("name") if isinstance(item, dict) else None
         if not isinstance(name, str) or not name:
             raise ProviderError(ProviderFailure.PROTOCOL)
-        found.append(DiscoveredModel(bare_name(name)))
+        remote = item.get("remote_host") if isinstance(item, dict) else None
+        # A remote model is processed on its upstream host, not the deployment's own.
+        scope = ResidencyScope.GLOBAL if remote else ResidencyScope.LOCAL
+        found.append(DiscoveredModel(bare_name(name), scope=scope))
     return tuple(found)
 
 

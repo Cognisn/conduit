@@ -13,9 +13,11 @@ from typing import Any
 
 import pytest
 
+from conduit.core.catalogue import Capabilities
 from conduit.core.discovery import DiscoveryOutcome, DiscoveryResult
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.registry import DiscoveringFactory, ProviderRegistry
+from conduit.core.residency import ResidencyPolicy, ResidencyScope
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.providers.anthropic import AnthropicFactory
 from conduit.testing.replay import Replay, load_recording
@@ -49,9 +51,11 @@ def _client(handler: Handler) -> Any:
     )
 
 
-async def _discover(handler: Handler) -> DiscoveryResult:
+async def _discover(handler: Handler, residency: ResidencyPolicy | None = None) -> DiscoveryResult:
     registry = ProviderRegistry(
-        secrets=LiteralSecretResolver({"anthropic/key": KEY}), factories=[AnthropicFactory()]
+        secrets=LiteralSecretResolver({"anthropic/key": KEY}),
+        factories=[AnthropicFactory()],
+        residency=residency,
     )
     return await registry.discover("claude", DIRECT, client=_client(handler))
 
@@ -64,11 +68,28 @@ async def test_every_page_is_listed_and_joined() -> None:
     handler, replay = _replaying("anthropic/discovery-models.json")
     result = await _discover(handler)
     replay.assert_exhausted()  # the second page was asked for with after_id
-    assert {m.model_id: (m.outcome, m.label) for m in result.models} == {
-        "claude-opus-5-5": (DiscoveryOutcome.ALLOWED, "model"),
-        "example-claude-preview": (DiscoveryOutcome.UNDECLARED, "model"),
-        "claude-haiku-4-5": (DiscoveryOutcome.ALLOWED, "model"),
+    assert {m.model_id: (m.outcome, m.label, m.catalogued) for m in result.models} == {
+        "claude-opus-5-5": (DiscoveryOutcome.ALLOWED, "model", True),
+        "example-claude-preview": (DiscoveryOutcome.ALLOWED, "model", False),
+        "claude-haiku-4-5": (DiscoveryOutcome.ALLOWED, "model", True),
     }
+
+
+async def test_each_model_is_global_with_its_reported_limits_and_capabilities() -> None:
+    handler, _ = _replaying("anthropic/discovery-models.json")
+    result = await _discover(handler)
+    assert {m.scope for m in result.models} == {ResidencyScope.GLOBAL}
+    preview = result.get("example-claude-preview")
+    assert preview is not None and preview.entry is not None
+    assert (preview.entry.context_window, preview.entry.output_limit) == (1_000_000, 128_000)
+    assert preview.entry.capabilities == Capabilities(vision=True, structured_output=True)
+
+
+async def test_a_region_restricted_policy_refuses_the_api() -> None:
+    handler, _ = _replaying("anthropic/discovery-models.json")
+    policy = ResidencyPolicy(regions=frozenset({"xx-home-1"}))
+    result = await _discover(handler, residency=policy)
+    assert result.allowed == ()
 
 
 async def test_an_empty_listing() -> None:

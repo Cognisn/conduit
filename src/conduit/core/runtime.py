@@ -1,10 +1,19 @@
 """Start-up: conduit's settings, resolved and built in one step.
 
 ``start`` applies the settings' catalogue overlays, validates every configured
-provider against its adapter, resolves every task-class assignment (capability floors,
-residency, undeclared models) and only then builds the providers some task class is
-assigned to. A refusal therefore happens at start-up, before any client exists, and
-never part-way through a task.
+provider against its adapter, lists the models of every provider some task class is
+assigned to (C18: the provider's listing decides which models exist and where a request
+is processed), resolves every task-class assignment against those listings (capability
+floors, residency, models the provider does not list) and only then builds the
+providers, each on its listed catalogue. A refusal therefore happens at start-up, before
+any model is called, and never part-way through a task. A listing that fails stops
+start-up: nothing is built on a stale or partial view of the provider.
+
+A provider is listed unless its adapter cannot list for its settings, or the settings
+name it in ``discovery`` with ``"catalogue"``; such a provider serves the models the
+applied catalogue declares, with the residency an entry declares (``global`` where it
+declares none). ``Runtime.discovery`` holds each listing start-up made, fixed for the
+runtime's life.
 
 Each provider is built for the assignments resolved to it, and serves only those: a
 call through ``Runtime.providers`` or ``TaskBinding.provider`` that names another
@@ -22,11 +31,12 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 
 from conduit.core.catalogue import Catalogue, CatalogueOverlay, default_catalogue
+from conduit.core.discovery import DiscoveryResult
 from conduit.core.errors import ConfigurationError
 from conduit.core.events import CapturePolicy, EventSink, FanOutSink
 from conduit.core.identifiers import IDENTIFIER_PATTERN
@@ -47,6 +57,8 @@ class ConduitSettings(SettingsModel):
     capture: CapturePolicy = CapturePolicy()
     catalogue: tuple[CatalogueOverlay, ...] = ()
     require_all_assignments: bool = True
+    #: Per configured provider: ``listing`` (the default) or ``catalogue``.
+    discovery: dict[str, Literal["listing", "catalogue"]] = Field(default_factory=dict)
 
     @field_validator("providers")
     @classmethod
@@ -131,11 +143,14 @@ class Runtime:
         registry: ProviderRegistry,
         events: EventSink | None = None,
         capture: CapturePolicy | None = None,
+        discovery: Mapping[str, DiscoveryResult] | None = None,
     ) -> None:
         self.catalogue = catalogue
         self.assignments = assignments
         self.providers = dict(providers)
         self.registry = registry
+        #: The listing start-up made for each provider it listed, by provider name.
+        self.discovery: Mapping[str, DiscoveryResult] = dict(discovery or {})
         self._capture = capture if capture is not None else CapturePolicy()
         self._events = FanOutSink([events] if events is not None else [], policy=self._capture)
 
@@ -157,6 +172,27 @@ class Runtime:
         await self.registry.aclose()
 
 
+async def _list_providers(
+    registry: ProviderRegistry,
+    settings: ConduitSettings,
+    providers: Mapping[str, ProviderSettings],
+) -> dict[str, DiscoveryResult]:
+    """The listing of each of ``providers`` that can be listed and is not in catalogue
+    mode. A failed listing raises, as ``ProviderRegistry.discover`` does."""
+    unknown = sorted(set(settings.discovery) - set(settings.providers))
+    if unknown:
+        raise ConfigurationError(
+            f"discovery names providers that are not configured: {', '.join(unknown)}"
+        )
+    found: dict[str, DiscoveryResult] = {}
+    for name in sorted(providers):
+        if settings.discovery.get(name, "listing") == "catalogue":
+            continue
+        if registry.discovery_supported(name, providers[name]):
+            found[name] = await registry.discover(name, providers[name])
+    return found
+
+
 async def start(
     settings: ConduitSettings,
     *,
@@ -166,7 +202,8 @@ async def start(
     events: EventSink | None = None,
     catalogue: Catalogue | None = None,
 ) -> Runtime:
-    """Resolve and build. Raises a ``ConfigurationError`` before any client is made.
+    """List, resolve and build. Raises a ``ConfigurationError`` before any model call, or
+    the ``ProviderError`` of a listing that failed, before any provider is built.
 
     Embedding task classes (a floor whose ``kind`` is ``embedding``) may be given with
     the chat ones, so one list and one ``ConduitSettings`` serve both start-ups: they,
@@ -200,6 +237,10 @@ async def start(
         for name, provider in settings.providers.items()
         if name not in embedding_only
     }
+    in_use = {a.provider for a in chosen.values()}
+    listings = await _list_providers(
+        registry, settings, {name: s for name, s in validated.items() if name in in_use}
+    )
     assignments = resolve_assignments(
         [task for task in declared if task.name not in embedding],
         chosen,
@@ -207,6 +248,7 @@ async def start(
         applied,
         settings.residency,
         require_all=settings.require_all_assignments,
+        listings=listings,
     )
     providers: dict[str, MeteredProvider] = {}
     try:
@@ -216,7 +258,13 @@ async def start(
                 for task, resolved in assignments.items()
                 if resolved.provider == name
             }
-            providers[name] = await registry.build(name, validated[name], assigned=assigned)
+            listed = listings.get(name)
+            providers[name] = await registry.build(
+                name,
+                validated[name],
+                assigned=assigned,
+                catalogue=listed.listed_catalogue(applied) if listed is not None else None,
+            )
     except BaseException:
         await registry.aclose()
         raise
@@ -227,4 +275,5 @@ async def start(
         registry=registry,
         events=events,
         capture=settings.capture,
+        discovery=listings,
     )

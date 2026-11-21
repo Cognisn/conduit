@@ -31,6 +31,7 @@ from conduit.core.types import (
     Usage,
 )
 from conduit.providers.bedrock import BedrockFactory, BedrockProvider, BedrockSettings
+from conduit.providers.bedrock.mapping import PROFILE_PREFIXES, base_model_id
 from conduit.providers.bedrock.provider import STREAM_BUFFER
 from conduit.testing.replay import load_recording
 from tests.unit.providers.bedrock import recordings
@@ -93,6 +94,19 @@ def settings(region: str = "eu-west-2", **fields: Any) -> BedrockSettings:
     return BedrockSettings(region=region, **fields)
 
 
+def profiled_catalogue(base: Catalogue | None = None) -> Catalogue:
+    """The catalogue a listed Bedrock provider is built on (C18): each foundation model's
+    entry also under every inference profile id naming it, as a listing would give."""
+    catalogue = base if base is not None else default_catalogue()
+    profiles = tuple(
+        entry.model_copy(update={"model_id": f"{prefix}.{entry.model_id}"})
+        for entry in catalogue
+        if entry.provider == "bedrock"
+        for prefix in sorted(PROFILE_PREFIXES)
+    )
+    return catalogue.apply(CatalogueOverlay(name="listed-profiles", add=profiles))
+
+
 async def built(
     runtime: Any,
     *,
@@ -104,7 +118,7 @@ async def built(
     sink = MemoryEventSink()
     registry = ProviderRegistry(
         secrets=LiteralSecretResolver({}),
-        catalogue=catalogue,
+        catalogue=catalogue if catalogue is not None else profiled_catalogue(),
         events=sink,
         factories=[factory or BedrockFactory()],
     )
@@ -298,11 +312,12 @@ class TestOtherVendors:
         runtime.replay.assert_exhausted()
 
     @pytest.mark.parametrize("build", recordings.VENDORS, ids=lambda b: b.__name__)
-    def test_each_vendor_model_is_declared_for_its_recorded_region(self, build: Any) -> None:
-        request = build().interactions[0].request
-        entry = default_catalogue().require("bedrock", request["params"]["modelId"])
-        assert entry.residency_scope.value in {"in_region", "cross_region"}
-        assert request["region"] in entry.regions
+    def test_each_vendor_model_is_described_by_its_foundation_model(self, build: Any) -> None:
+        # Where it is offered is the listing's to say (C18); the catalogue describes the
+        # foundation model a profile names.
+        model = build().interactions[0].request["params"]["modelId"]
+        entry = default_catalogue().require("bedrock", base_model_id(model))
+        assert entry.residency_scope is None and entry.regions == frozenset()
 
 
 class TestCacheGating:
@@ -310,11 +325,11 @@ class TestCacheGating:
         self,
     ) -> None:
         model = "eu.anthropic.claude-sonnet-4-6"
-        entry = default_catalogue().require("bedrock", model)
+        entry = profiled_catalogue().require("bedrock", model)
         uncached = entry.model_copy(
             update={"capabilities": entry.capabilities.model_copy(update={"prompt_caching": False})}
         )
-        catalogue = default_catalogue().apply(
+        catalogue = profiled_catalogue().apply(
             CatalogueOverlay(name="no-cache", override=(uncached,))
         )
         recording = load_recording(recordings.path(recordings.uncached_profile()))

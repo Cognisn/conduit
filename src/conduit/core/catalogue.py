@@ -1,10 +1,18 @@
-"""The model catalogue: what conduit knows about each model, and product overlays.
+"""The model catalogue: what providers do not report about a model, and product overlays.
 
-A capability floor or a residency policy is only a protection if it is checked against
-a record the deployment controls, so every model a product uses must be declared here:
-an undeclared model is refused (C18). conduit ships a versioned default catalogue as
-package data (``data/catalogue.json``); a product overlays it to add, override or
-withdraw entries. Catalogues are immutable; ``apply`` returns a new one.
+The provider's own listing decides which models a configured provider can use and
+where each request is processed (C18, ``conduit.core.discovery``). The catalogue holds
+what listings do not give: a model's kind, capability flags, context window, output
+limit, embedding dimensions and the product's labels. conduit ships a versioned default
+catalogue as package data (``data/catalogue.json``), keyed by the provider's base model
+id, with no Region data; a product overlays it to add, override or withdraw entries.
+Catalogues are immutable; ``apply`` returns a new one, and remembers which entries an
+overlay added or overrode (``overlaid``) and which models it withdrew (``withdrawn``),
+since an overlay is the deployment's own reviewed statement and wins over a listing.
+
+An entry may declare a residency scope and Regions. A listing replaces them for every
+model it lists; they are used only for a provider conduit cannot list, and an entry
+that declares no scope is then treated as ``global``.
 
 Entries are keyed by ``(provider, model_id)``: the same model identifier under two
 providers is two entries. ``provider`` is the catalogue provider name
@@ -55,7 +63,7 @@ class ModelEntry(SettingsModel):
     model_id: str = Field(min_length=1, max_length=256)
     provider: str = Field(min_length=1, max_length=64)
     kind: Literal["chat", "embedding"] = "chat"
-    residency_scope: ResidencyScope
+    residency_scope: ResidencyScope | None = None
     regions: frozenset[str] = frozenset()
     capabilities: Capabilities = Capabilities()
     context_window: PositiveInt
@@ -78,7 +86,8 @@ class ModelEntry(SettingsModel):
         if self.residency_scope in _REGION_BOUND and not self.regions:
             raise ValueError(f"a {self.residency_scope.value} model needs regions")
         if self.residency_scope not in _REGION_BOUND and self.regions:
-            raise ValueError(f"a {self.residency_scope.value} model lists no regions")
+            scope = self.residency_scope.value if self.residency_scope else "unscoped"
+            raise ValueError(f"a {scope} model lists no regions")
         return self
 
     @property
@@ -104,6 +113,8 @@ class Catalogue:
         *,
         version: str,
         overlays: tuple[str, ...] = (),
+        overlaid: Iterable[ModelKey] = (),
+        withdrawn: Iterable[ModelKey] = (),
     ) -> None:
         found: dict[ModelKey, ModelEntry] = {}
         for entry in entries:
@@ -113,6 +124,10 @@ class Catalogue:
         self._entries = dict(sorted(found.items(), key=lambda item: str(item[0])))
         self.version = version
         self.overlays = overlays
+        #: The entries an overlay added or overrode: the deployment's own statements.
+        self.overlaid = frozenset(key for key in overlaid if key in self._entries)
+        #: The models an overlay withdrew: refused even when a provider lists them.
+        self.withdrawn = frozenset(withdrawn) - self._entries.keys()
 
     def get(self, provider: str, model_id: str) -> ModelEntry | None:
         return self._entries.get(ModelKey(provider=provider, model_id=model_id))
@@ -139,27 +154,40 @@ class Catalogue:
     def apply(self, *overlays: CatalogueOverlay) -> Catalogue:
         entries = dict(self._entries)
         names = list(self.overlays)
+        overlaid = set(self.overlaid)
+        withdrawn = set(self.withdrawn)
         for overlay in overlays:
             keys = [e.key for e in overlay.add + overlay.override] + list(overlay.withdraw)
             if len(set(keys)) != len(keys):
                 raise ConfigurationError(f"overlay {overlay.name!r} names a model twice")
             for key in overlay.withdraw:
-                if entries.pop(key, None) is None:
-                    raise ConfigurationError(f"overlay {overlay.name!r} withdraws absent {key}")
+                # A model the catalogue lacks may be withdrawn: a provider may list it.
+                entries.pop(key, None)
+                overlaid.discard(key)
+                withdrawn.add(key)
             for entry in overlay.override:
                 if entry.key not in entries:
                     raise ConfigurationError(
                         f"overlay {overlay.name!r} overrides absent {entry.key}"
                     )
                 entries[entry.key] = entry
+                overlaid.add(entry.key)
             for entry in overlay.add:
                 if entry.key in entries:
                     raise ConfigurationError(
                         f"overlay {overlay.name!r} adds {entry.key}, which is already declared"
                     )
                 entries[entry.key] = entry
+                overlaid.add(entry.key)
+                withdrawn.discard(entry.key)
             names.append(overlay.name)
-        return Catalogue(entries.values(), version=self.version, overlays=tuple(names))
+        return Catalogue(
+            entries.values(),
+            version=self.version,
+            overlays=tuple(names),
+            overlaid=overlaid,
+            withdrawn=withdrawn,
+        )
 
 
 class _CatalogueFile(SettingsModel):

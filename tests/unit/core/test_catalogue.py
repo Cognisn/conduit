@@ -123,10 +123,6 @@ class TestOverlays:
             pytest.param(CatalogueOverlay(add=(entry(model_id="a"),)), id="add-existing"),
             pytest.param(CatalogueOverlay(override=(entry(model_id="z"),)), id="override-missing"),
             pytest.param(
-                CatalogueOverlay(withdraw=(ModelKey(provider="example", model_id="z"),)),
-                id="withdraw-missing",
-            ),
-            pytest.param(
                 CatalogueOverlay(
                     override=(entry(model_id="a"),),
                     withdraw=(ModelKey(provider="example", model_id="a"),),
@@ -138,6 +134,13 @@ class TestOverlays:
     def test_a_contradictory_overlay_is_refused(self, overlay: CatalogueOverlay) -> None:
         with pytest.raises(ConfigurationError):
             self.base().apply(overlay)
+
+    def test_withdrawing_a_model_the_catalogue_lacks_is_remembered(self) -> None:
+        # A provider's listing may name a model no entry declares (C18).
+        key = ModelKey(provider="example", model_id="z")
+        applied = self.base().apply(CatalogueOverlay(withdraw=(key,)))
+        assert key in applied.withdrawn
+        assert len(applied) == len(self.base())
 
     def test_overlay_from_a_mapping(self) -> None:
         overlay = CatalogueOverlay.model_validate(
@@ -172,33 +175,39 @@ class TestDefaultData:
         assert {"anthropic", "bedrock", "openai", "xai", "gemini", "ollama", "stub"} <= providers
         assert catalogue.version
 
-    def test_it_has_embedding_and_cross_region_entries(self) -> None:
-        catalogue = default_catalogue()
-        assert any(e.kind == "embedding" for e in catalogue)
-        assert any(e.residency_scope is ResidencyScope.CROSS_REGION for e in catalogue)
-        assert any(e.residency_scope is ResidencyScope.IN_REGION for e in catalogue)
+    def test_it_has_embedding_entries(self) -> None:
+        assert any(e.kind == "embedding" for e in default_catalogue())
 
-    def test_australian_residency_against_the_default_bedrock_entries(self) -> None:
+    def test_no_default_entry_carries_region_data(self) -> None:
+        # Where a model is processed is the provider listing's to say (C18).
+        assert all(e.regions == frozenset() for e in default_catalogue())
+        for entry in default_catalogue():
+            assert entry.residency_scope not in (
+                ResidencyScope.IN_REGION,
+                ResidencyScope.CROSS_REGION,
+            )
+
+    def test_bedrock_entries_are_keyed_by_foundation_model_and_scope_nothing(self) -> None:
+        bedrock = [e for e in default_catalogue() if e.provider in ("bedrock", "bedrock_mantle")]
+        assert bedrock
+        assert all(e.residency_scope is None for e in bedrock)
+        prefixes = {"us", "eu", "apac", "au", "jp", "ca", "in", "us-gov", "global"}
+        assert not [e.model_id for e in bedrock if e.model_id.split(".")[0] in prefixes]
+        assert default_catalogue().get("bedrock", "anthropic.claude-sonnet-4-6") is not None
+        assert default_catalogue().get("bedrock", "au.anthropic.claude-sonnet-4-6") is None
+
+    def test_an_unscoped_entry_is_global_to_a_residency_policy(self) -> None:
         from conduit.core.errors import ResidencyRefused
         from conduit.core.residency import ResidencyPolicy
 
-        catalogue = default_catalogue()
-        au_profile = catalogue.require("bedrock", "au.anthropic.claude-sonnet-5-5")
-        global_profile = catalogue.require("bedrock", "global.anthropic.claude-sonnet-5-5")
+        entry = default_catalogue().require("bedrock", "anthropic.claude-sonnet-4-6")
         au = frozenset({"ap-southeast-2", "ap-southeast-4"})
-        in_region_only = ResidencyPolicy(scopes=frozenset({ResidencyScope.IN_REGION}), regions=au)
         within_au = ResidencyPolicy(
             scopes=frozenset({ResidencyScope.IN_REGION, ResidencyScope.CROSS_REGION}), regions=au
         )
-        with pytest.raises(ResidencyRefused):
-            in_region_only.check(au_profile, "ap-southeast-2", task="t")
-        within_au.check(au_profile, "ap-southeast-2", task="t")
-        with pytest.raises(ResidencyRefused):
-            within_au.check(global_profile, "ap-southeast-2", task="t")
-        # Sonnet 4.6's Australian profile also routes to ap-southeast-6.
-        wider = catalogue.require("bedrock", "au.anthropic.claude-sonnet-4-6")
-        with pytest.raises(ResidencyRefused, match="ap-southeast-6"):
-            within_au.check(wider, "ap-southeast-2", task="t")
+        with pytest.raises(ResidencyRefused, match="global"):
+            within_au.check(entry, "ap-southeast-2", task="t")
+        ResidencyPolicy().check(entry, "ap-southeast-2", task="t")
 
     def test_the_stub_model_is_local(self) -> None:
         stub = default_catalogue().require("stub", "stub-echo")

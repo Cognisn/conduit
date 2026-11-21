@@ -1,11 +1,18 @@
 """``providers``, ``models`` and ``check``: what conduit offers and whether it is ready.
 
 ``check`` builds every configured provider through conduit's provider registry, so each
-one's secrets are resolved and its client is made exactly as a product's would be, and
-then resolves every assignment against the catalogue, the capability floors and the
-residency policy, one at a time, so each refusal is shown on its own line. No model is
-called: a check never reaches a model, and for the SigV4 modes of Amazon Bedrock the
-credentials themselves are checked by AWS on the first call.
+one's secrets are resolved and its client is made exactly as a product's would be, lists
+the models of each one start-up would list (C18: the provider's listing decides which
+models exist and where they are processed), and then resolves every assignment against
+those listings (or the catalogue, for a provider that is not listed), the capability
+floors and the residency policy, one at a time, so each refusal is shown on its own
+line. No model is called: a check never reaches a model, and for the SigV4 modes of
+Amazon Bedrock that are not listed the credentials themselves are checked by AWS on the
+first call.
+
+``models`` shows the catalogue after the configuration's overlays: what conduit knows of
+each model that a provider's listing does not report. A residency of ``listed`` means
+the provider's listing gives it.
 """
 
 from __future__ import annotations
@@ -16,6 +23,7 @@ from conduit import (
     AssignmentSettings,
     Catalogue,
     ConduitError,
+    DiscoveryResult,
     ProviderRegistry,
     ProviderSettings,
     ResidencyPolicy,
@@ -127,7 +135,7 @@ def models(context: Context, config: CliConfig, provider: str | None) -> int:
                 entry.provider,
                 entry.model_id,
                 entry.kind,
-                entry.residency_scope.value,
+                entry.residency_scope.value if entry.residency_scope else "listed",
                 ", ".join(sorted(entry.regions)) or "-",
                 ", ".join(flags) or "-",
             ]
@@ -153,19 +161,31 @@ async def check(context: Context, config: CliConfig) -> int:
         factories=context.factories,
     )
     validated: dict[str, ProviderSettings] = {}
+    listings: dict[str, DiscoveryResult] = {}
     rows = []
     try:
         for name, given in settings.providers.items():
             outcome = ""
             built: ProviderSettings | None = None
+            listed: DiscoveryResult | None = None
             try:
                 built = registry.validate(name, given)
                 await registry.build(name, built)
+                if settings.discovery.get(
+                    name, "listing"
+                ) == "listing" and registry.discovery_supported(name, built):
+                    listed = await registry.discover(name, built)
             except Exception as error:  # shown by class (and a conduit error's message)
                 outcome = f"refused: {describe_error(error)}"
             if built is not None and not outcome:
                 validated[name] = built
                 outcome = f"ready: {what_was_checked(built)}"
+                if listed is not None:
+                    listings[name] = listed
+                    outcome += (
+                        f"; lists {len(listed.models)} models "
+                        f"({len(listed.uncatalogued)} uncatalogued)"
+                    )
             failed = failed or outcome.startswith("refused")
             mode = auth_mode(built) if built is not None else "-"
             region = (built.region if built is not None else None) or "-"
@@ -179,7 +199,7 @@ async def check(context: Context, config: CliConfig) -> int:
     for task_name, assignment in sorted(settings.assignments.items()):
         rows.append(
             _assignment_row(
-                task_name, assignment, declared, validated, catalogue, settings.residency
+                task_name, assignment, declared, validated, catalogue, settings.residency, listings
             )
         )
         failed = failed or rows[-1][-1].startswith("refused")
@@ -202,6 +222,7 @@ def _assignment_row(
     validated: dict[str, ProviderSettings],
     catalogue: Catalogue,
     residency: ResidencyPolicy,
+    listings: dict[str, DiscoveryResult] | None = None,
 ) -> list[str]:
     """One assignment resolved on its own, so each refusal is shown by itself."""
     row = [task_name, assignment.provider, assignment.model]
@@ -211,8 +232,14 @@ def _assignment_row(
     provider = validated.get(assignment.provider)
     if provider is None:
         return [*row, "-", "refused: its provider was refused or is not configured"]
-    entry = catalogue.get(provider.catalogue_provider, assignment.model)
-    scope = entry.residency_scope.value if entry is not None else "-"
+    listing = (listings or {}).get(assignment.provider)
+    if listing is not None:
+        listed = listing.get(assignment.model)
+        scope = listed.scope.value if listed is not None else "-"
+    else:
+        entry = catalogue.get(provider.catalogue_provider, assignment.model)
+        unscoped = "global" if entry is not None else "-"  # an unstated scope is unbounded
+        scope = entry.residency_scope.value if entry and entry.residency_scope else unscoped
     try:
         resolve_assignments(
             [task],
@@ -221,6 +248,7 @@ def _assignment_row(
             catalogue,
             residency,
             require_all=False,
+            listings={assignment.provider: listing} if listing is not None else None,
         )
     except ConduitError as error:
         return [*row, scope, f"refused: {describe_error(error)}"]

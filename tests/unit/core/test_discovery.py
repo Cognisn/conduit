@@ -1,8 +1,10 @@
 """Model discovery: listed through the registry, joined to the catalogue and the policy.
 
-Discovery never makes a model usable. Every listed id is reported as allowed, refused
-(with the residency or Region reason start-up gives) or undeclared, and an undeclared
-model is still refused by the provider afterwards.
+Every listed model is reported as allowed or refused (with the residency or Region
+reason start-up gives), on the residency its listing reports; a model no entry matches
+is uncatalogued. ``registry.discover`` changes nothing: a provider built without a
+listing still refuses a model its catalogue lacks. Start-up's use of the listing is in
+``test_discovery_led``.
 """
 
 from __future__ import annotations
@@ -89,12 +91,19 @@ CATALOGUE = Catalogue(
 )
 
 LISTED = (
-    DiscoveredModel("fake-local"),
-    DiscoveredModel("fake-global", label="foundation"),
-    DiscoveredModel("fake-here"),
-    DiscoveredModel("fake-elsewhere"),
-    DiscoveredModel("fake-spread", label="profile"),
-    DiscoveredModel("fake-embed"),
+    DiscoveredModel("fake-local", scope=ResidencyScope.LOCAL),
+    DiscoveredModel("fake-global", label="foundation", scope=ResidencyScope.GLOBAL),
+    DiscoveredModel("fake-here", scope=ResidencyScope.IN_REGION, regions=frozenset({"xx-home-1"})),
+    DiscoveredModel(
+        "fake-elsewhere", scope=ResidencyScope.IN_REGION, regions=frozenset({"xx-away-1"})
+    ),
+    DiscoveredModel(
+        "fake-spread",
+        label="profile",
+        scope=ResidencyScope.CROSS_REGION,
+        regions=frozenset({"xx-home-1", "xx-away-1"}),
+    ),
+    DiscoveredModel("fake-embed", scope=ResidencyScope.LOCAL),
     DiscoveredModel("fake-unknown", label="foundation"),
 )
 SETTINGS = {"kind": "fake", "api_key": "secret://fake/key", "region": "xx-home-1"}
@@ -158,7 +167,7 @@ class TestContract:
         assert isinstance(ListingFactory(), DiscoveringFactory)
         assert not isinstance(FakeFactory(), DiscoveringFactory)
 
-    def test_a_discovered_model_holds_an_id_and_a_label_only(self) -> None:
+    def test_a_discovered_model_holds_an_id_and_a_label(self) -> None:
         model = DiscoveredModel("fake-local", label="foundation")
         assert (model.model_id, model.label) == ("fake-local", "foundation")
         assert DiscoveredModel("fake-local").label is None
@@ -231,7 +240,7 @@ class TestThroughTheRegistry:
 
 
 class TestJoin:
-    async def test_each_id_is_allowed_refused_or_undeclared(self) -> None:
+    async def test_each_id_is_allowed_or_refused(self) -> None:
         result = await _registry(ListingFactory()).discover("main", SETTINGS)
         assert result.supported
         assert _outcomes(result) == {
@@ -241,8 +250,9 @@ class TestJoin:
             "fake-elsewhere": DiscoveryOutcome.REFUSED,
             "fake-spread": DiscoveryOutcome.ALLOWED,
             "fake-embed": DiscoveryOutcome.ALLOWED,
-            "fake-unknown": DiscoveryOutcome.UNDECLARED,
+            "fake-unknown": DiscoveryOutcome.ALLOWED,
         }
+        assert [m.model_id for m in result.uncatalogued] == ["fake-unknown"]
 
     async def test_a_model_not_offered_in_the_region_carries_the_start_up_reason(self) -> None:
         result = await _registry(ListingFactory()).discover("main", SETTINGS)
@@ -273,20 +283,21 @@ class TestJoin:
         assert _outcomes(result)["fake-here"] is DiscoveryOutcome.ALLOWED
         assert reasons["fake-here"] is None
 
-    async def test_undeclared_and_allowed_models_carry_no_reason(self) -> None:
+    async def test_allowed_models_carry_no_reason(self) -> None:
         result = await _registry(ListingFactory()).discover("main", SETTINGS)
         for model in result.models:
             if model.outcome is not DiscoveryOutcome.REFUSED:
                 assert model.reason is None
         [unknown] = [m for m in result.models if m.model_id == "fake-unknown"]
-        assert unknown.entry is None
+        assert not unknown.catalogued
+        assert unknown.scope is ResidencyScope.GLOBAL  # no scope listed: unbounded
         assert unknown.label == "foundation"
 
     async def test_counts_and_views(self) -> None:
         result = await _registry(ListingFactory()).discover("main", SETTINGS)
-        assert [m.model_id for m in result.undeclared] == ["fake-unknown"]
+        assert [m.model_id for m in result.uncatalogued] == ["fake-unknown"]
         assert [m.model_id for m in result.refused] == ["fake-elsewhere"]
-        assert len(result.allowed) == 5
+        assert len(result.allowed) == 6
         assert (result.provider, result.kind, result.catalogue_provider) == ("main", "fake", "fake")
         assert result.region == "xx-home-1"
 
@@ -301,8 +312,8 @@ class TestJoin:
         assert result.models == ()
 
     def test_join_is_usable_on_its_own(self) -> None:
-        joined = join_discovered(
-            [DiscoveredModel("fake-elsewhere"), DiscoveredModel("nope")],
+        joined, drift = join_discovered(
+            [LISTED[3], DiscoveredModel("nope")],
             CATALOGUE,
             catalogue_provider="fake",
             region="xx-home-1",
@@ -311,16 +322,20 @@ class TestJoin:
         )
         assert [m.outcome for m in joined] == [
             DiscoveryOutcome.REFUSED,
-            DiscoveryOutcome.UNDECLARED,
+            DiscoveryOutcome.ALLOWED,
         ]
+        assert [m.catalogued for m in joined] == [True, False]
+        assert ("nope", "uncatalogued") in {(d.model_id, d.reason.value) for d in drift}
 
 
-class TestNeverPermits:
-    async def test_an_undeclared_model_is_still_refused_after_discovery(self) -> None:
+class TestDiscoverChangesNothing:
+    async def test_a_provider_built_without_a_listing_refuses_an_uncatalogued_model(
+        self,
+    ) -> None:
         factory = ListingFactory()
         registry = _registry(factory)
         result = await registry.discover("main", SETTINGS)
-        assert "fake-unknown" in {m.model_id for m in result.undeclared}
+        assert "fake-unknown" in {m.model_id for m in result.uncatalogued}
         provider = await registry.build("main", SETTINGS)
         request = ModelRequest(
             model="fake-unknown", messages=(Message.user("Hi"),), max_output_tokens=10
@@ -388,7 +403,8 @@ class TestEvent:
         await _registry(ListingFactory(), sink=sink).discover("main", SETTINGS)
         [event] = _finished(sink)
         assert event.outcome == "ok"
-        assert (event.allowed, event.refused, event.undeclared) == (5, 1, 1)
+        assert (event.allowed, event.refused, event.uncatalogued) == (6, 1, 1)
+        assert event.unlisted == 0
         assert event.duration_ms >= 0
         assert event.models is not None
         assert event.models.text is None
@@ -402,7 +418,18 @@ class TestEvent:
         [event] = _finished(sink)
         assert event.models is not None and event.models.text is not None
         listed = json.loads(event.models.text)
-        assert {"model_id": "fake-unknown", "outcome": "undeclared"} in listed
+        assert {
+            "model_id": "fake-unknown",
+            "outcome": "allowed",
+            "scope": "global",
+            "regions": [],
+            "catalogued": False,
+        } in listed["models"]
+        assert {
+            "model_id": "fake-unknown",
+            "reason": "uncatalogued",
+            "detail": "listed by the provider, with no catalogue entry",
+        } in listed["drift"]
 
     async def test_tool_content_capture_alone_does_not_carry_the_list(self) -> None:
         sink = MemoryEventSink()
@@ -489,9 +516,9 @@ class TestSyncFacade:
         with self._start(loop, factory) as runtime:
             result = runtime.discover("main")
         assert isinstance(result, DiscoveryResult)
-        assert [m.model_id for m in result.undeclared] == ["fake-unknown"]
-        # The listing ran on the loop that owns the runtime's clients.
-        assert len(factory.discovered_with) == 1
+        assert [m.model_id for m in result.uncatalogued] == ["fake-unknown"]
+        # Start-up listed once, and this listing ran on the loop that owns the clients.
+        assert len(factory.discovered_with) == 2
 
     def test_a_sync_runtime_discovers_other_configured_settings(self, loop: LoopThread) -> None:
         factory = ListingFactory()
@@ -532,7 +559,7 @@ async def _built_registry() -> ProviderRegistry:
 class TestListingCapture:
     """The registry's own capture of the listing, before the fan-out enforces it again."""
 
-    MODELS = join_discovered(
+    MODELS, DRIFT = join_discovered(
         LISTED,
         CATALOGUE,
         catalogue_provider="fake",
@@ -549,8 +576,9 @@ class TestListingCapture:
             assert captured.size > 0
 
     def test_the_text_with_prompts_captured(self) -> None:
-        captured = _capture_listing(self.MODELS, CapturePolicy(prompts=True))
+        captured = _capture_listing(self.MODELS, CapturePolicy(prompts=True), self.DRIFT)
         assert captured.text is not None and "fake-unknown" in captured.text
+        assert "uncatalogued" in captured.text
 
 
 class ClosableClient:

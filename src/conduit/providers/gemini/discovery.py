@@ -22,6 +22,7 @@ from typing import Any
 
 from conduit.core.discovery import DiscoveredModel
 from conduit.core.errors import ProviderError, ProviderFailure
+from conduit.core.residency import ResidencyScope
 from conduit.providers.gemini.errors import classify
 
 #: Models asked for per page (the API's maximum).
@@ -31,6 +32,11 @@ MAX_PAGES = 100
 #: The generation method of a chat-capable model.
 CHAT_METHOD = "generateContent"
 _PREFIX = "models/"
+
+
+def _positive(value: object) -> int | None:
+    """A reported limit, or ``None`` for anything that is not a positive integer."""
+    return value if type(value) is int and value > 0 else None
 
 
 def _chat_models(page: object) -> list[DiscoveredModel]:
@@ -43,7 +49,13 @@ def _chat_models(page: object) -> list[DiscoveredModel]:
         listed: DiscoveredModel | None = None
         if isinstance(name, str) and isinstance(actions, list):
             with contextlib.suppress(ValueError):
-                listed = DiscoveredModel(name.removeprefix(_PREFIX))
+                listed = DiscoveredModel(
+                    name.removeprefix(_PREFIX),
+                    kind="chat",
+                    scope=ResidencyScope.GLOBAL,
+                    context_window=_positive(getattr(model, "input_token_limit", None)),
+                    output_limit=_positive(getattr(model, "output_token_limit", None)),
+                )
         if listed is None:
             raise ProviderError(ProviderFailure.PROTOCOL)
         if CHAT_METHOD in actions:

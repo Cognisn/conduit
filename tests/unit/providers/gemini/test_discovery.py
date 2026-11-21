@@ -15,6 +15,7 @@ import pytest
 from conduit.core.discovery import DiscoveryOutcome, DiscoveryResult
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.registry import DiscoveringFactory, ProviderRegistry
+from conduit.core.residency import ResidencyScope
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.providers.gemini import GeminiFactory
 from conduit.testing.replay import Replay, load_recording
@@ -60,8 +61,13 @@ async def test_chat_capable_models_on_every_page_are_listed_and_joined() -> None
     replay.assert_exhausted()  # the second page was asked for with its token
     assert {m.model_id: (m.outcome, m.label) for m in result.models} == {
         "gemini-4-argon": (DiscoveryOutcome.ALLOWED, None),
-        "example-gemini-preview": (DiscoveryOutcome.UNDECLARED, None),
+        "example-gemini-preview": (DiscoveryOutcome.ALLOWED, None),
     }
+    assert [m.model_id for m in result.uncatalogued] == ["example-gemini-preview"]
+    assert {m.scope for m in result.models} == {ResidencyScope.GLOBAL}
+    preview = result.get("example-gemini-preview")
+    assert preview is not None and preview.entry is not None
+    assert (preview.entry.context_window, preview.entry.output_limit) == (1_048_576, 65_536)
     assert all(r.url.host == "generativelanguage.googleapis.com" for r in seen)
     assert all(r.headers["x-goog-api-key"] == API_KEY for r in seen)
 

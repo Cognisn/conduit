@@ -20,6 +20,7 @@ from conduit.core.streaming import StreamEvent, StreamStopped, TextDelta, ToolCa
 from conduit.core.types import ModelRequest, ProviderStateBlock, StopReason, Usage
 from conduit.embeddings import EmbeddingBinding
 from conduit.providers.stub import (
+    DEFAULT_STUB_MODELS,
     StubFactory,
     StubToolCall,
     StubTurn,
@@ -382,7 +383,10 @@ STUB_SETTINGS = {"kind": "stub", "not_for_production": True}
 
 async def test_discovery_passes_when_a_catalogue_model_is_listed() -> None:
     result = await check_discovery(
-        "stub", STUB_SETTINGS, environ=LiveEnv({}), factories=[StubFactory()]
+        "stub",
+        STUB_SETTINGS,
+        environ=LiveEnv({}),
+        factories=[StubFactory(models=DEFAULT_STUB_MODELS)],
     )
     assert result.allowed
     [line] = [line for line in REPORT.lines if line.area == "discovery"]

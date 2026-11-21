@@ -21,9 +21,11 @@ whole life: both grow without bound, which suits a test but not a long-running p
 
 Constructing a stub needs ``not_for_production=True``, in code and in settings.
 
-The stub's factory discovers: it lists ``models`` (by default the stub models conduit's
-catalogue declares), so a product can test its handling of discovered, declared and
-undeclared models without a network.
+The stub's factory discovers when it is given ``models``: it lists them (each id given
+as a string is ``local``; a ``DiscoveredModel`` keeps what it says), so a product can
+test its handling of listed, catalogued and uncatalogued models without a network.
+Without ``models`` it has no listing: discovery is unsupported, and start-up serves the
+stub models the catalogue declares.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ from conduit.core.catalogue import Catalogue
 from conduit.core.discovery import DiscoveredModel
 from conduit.core.errors import ConfigurationError, ProviderError
 from conduit.core.provider import BaseProvider, Provider
+from conduit.core.residency import ResidencyScope
 from conduit.core.settings import ProviderSettings
 from conduit.core.streaming import (
     ProviderStateReported,
@@ -235,14 +238,15 @@ class StubSettings(ProviderSettings):
         return self
 
 
-#: What the stub lists by default: the stub models in conduit's default catalogue.
+#: The stub models in conduit's default catalogue, for a product to list them.
 DEFAULT_STUB_MODELS: tuple[str, ...] = ("stub-echo", "stub-embed")
 
 
 class StubFactory:
     """The stub's adapter for the provider registry. Scripts are looked up by name.
 
-    ``models`` is what discovery lists: ids or ``DiscoveredModel`` values, in order.
+    ``models`` is what discovery lists: ids (each ``local``) or ``DiscoveredModel``
+    values, in order. Without it discovery is unsupported.
     """
 
     kind = "stub"
@@ -252,22 +256,30 @@ class StubFactory:
         self,
         scripts: Mapping[str, StubScript] | None = None,
         *,
-        models: Iterable[str | DiscoveredModel] = DEFAULT_STUB_MODELS,
+        models: Iterable[str | DiscoveredModel] | None = None,
     ) -> None:
         self._scripts: dict[str, StubScript] = {"echo": echo, **(scripts or {})}
-        self._models = tuple(
-            model if isinstance(model, DiscoveredModel) else DiscoveredModel(model)
-            for model in models
+        self._models = (
+            None
+            if models is None
+            else tuple(
+                model
+                if isinstance(model, DiscoveredModel)
+                else DiscoveredModel(model, scope=ResidencyScope.LOCAL)
+                for model in models
+            )
         )
 
     def discovery_unsupported(self, settings: ProviderSettings) -> str | None:
+        if self._models is None:
+            return "the stub lists models only when it is given a listing"
         return None
 
     async def discover_models(
         self, settings: ProviderSettings, client: Any
     ) -> Sequence[DiscoveredModel]:
         """The configured listing. The stub has no client and reaches no network."""
-        return self._models
+        return self._models or ()
 
     def create_client(self, settings: ProviderSettings, secrets: Mapping[str, SecretStr]) -> Any:
         return None  # the stub has no client

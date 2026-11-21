@@ -17,6 +17,7 @@ from pydantic import SecretStr
 from conduit.core.discovery import DiscoveryOutcome, DiscoveryResult
 from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.registry import DiscoveringFactory, ProviderRegistry
+from conduit.core.residency import ResidencyScope
 from conduit.core.secrets import LiteralSecretResolver
 from conduit.providers.bedrock_mantle import BedrockMantleFactory, BedrockMantleSettings
 from conduit.testing.replay import Replay, load_recording
@@ -76,7 +77,7 @@ async def test_claude_models_are_listed_and_joined() -> None:
     assert {m.model_id: (m.outcome, m.label) for m in result.models} == {
         "anthropic.claude-opus-5-5": (DiscoveryOutcome.ALLOWED, "model"),
         "anthropic.claude-sonnet-5": (DiscoveryOutcome.ALLOWED, "model"),
-        "anthropic.example-claude-preview": (DiscoveryOutcome.UNDECLARED, "model"),
+        "anthropic.example-claude-preview": (DiscoveryOutcome.ALLOWED, "model"),
     }
     [request] = seen
     assert str(request.url) == f"https://bedrock-mantle.{MELBOURNE}.api.aws/v1/models"
@@ -90,13 +91,13 @@ async def test_a_model_the_messages_route_does_not_serve_is_left_out() -> None:
     assert "openai.gpt-oss-120b" not in {m.model_id for m in result.models}
 
 
-async def test_a_claude_model_not_offered_in_the_region_is_refused() -> None:
+async def test_each_model_is_processed_in_the_endpoint_region() -> None:
     handler, _, _ = _replaying("bedrock_mantle/discovery-models.json")
-    result = await _discover(handler, {**SETTINGS, "region": "us-west-2"})
-    reasons = {m.model_id: m.reason for m in result.refused}
-    assert reasons["anthropic.claude-opus-5-5"] == (
-        "mantle_melbourne: model 'anthropic.claude-opus-5-5' is not offered in region us-west-2"
-    )
+    result = await _discover(handler)
+    assert {(m.scope, m.regions) for m in result.models} == {
+        (ResidencyScope.IN_REGION, frozenset({MELBOURNE}))
+    }
+    assert [m.model_id for m in result.uncatalogued] == ["anthropic.example-claude-preview"]
 
 
 async def test_an_empty_listing() -> None:

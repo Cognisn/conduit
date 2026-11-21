@@ -26,6 +26,8 @@ from conduit.testing.replay import Interaction, Recording, save_recording
 ROOT = Path(__file__).resolve().parents[2] / "recordings"
 ACCOUNT = "123456789012"
 REGION = "ap-southeast-2"
+#: The other Region of the synthetic geographic profiles.
+OTHER_REGION = "ap-southeast-4"
 
 
 def _recording(name: str, provider: str, *pages: tuple[Any, int, Any]) -> Recording:
@@ -74,6 +76,11 @@ def ollama_tags() -> Recording:
                     _ollama_model("llama3.1:8b", "llama", "8.0B"),
                     _ollama_model("example-local:3b", "example", "3.2B"),
                     _ollama_model("nomic-embed-text:latest", "nomic-bert", "137M"),
+                    {
+                        **_ollama_model("example-cloud:120b", "example", "120B"),
+                        "remote_model": "example-cloud:120b",
+                        "remote_host": "https://ollama.example.com:443",
+                    },
                 ]
             },
         ),
@@ -115,14 +122,27 @@ def _foundation(model_id: str, provider: str, outputs: list[str]) -> dict[str, A
     }
 
 
-def _profile(profile_id: str, kind: str) -> dict[str, Any]:
+def _model_arn(region: str, model_id: str) -> dict[str, str]:
+    """An ``InferenceProfileModel``: a foundation model in one destination Region."""
+    return {"modelArn": f"arn:aws:bedrock:{region}::foundation-model/{model_id}"}
+
+
+def _profile(
+    profile_id: str, kind: str, models: list[dict[str, str]] | None = None
+) -> dict[str, Any]:
+    """A profile routing to ``models``; by default its base model in both Regions."""
+    base = profile_id.partition(".")[2] or profile_id
     return {
         "inferenceProfileName": profile_id,
         "inferenceProfileArn": (
             f"arn:aws:bedrock:{REGION}:{ACCOUNT}:inference-profile/{profile_id}"
         ),
         "inferenceProfileId": profile_id,
-        "models": [{"modelArn": f"arn:aws:bedrock:{REGION}::foundation-model/example"}],
+        "models": (
+            models
+            if models is not None
+            else [_model_arn(REGION, base), _model_arn(OTHER_REGION, base)]
+        ),
         "status": "ACTIVE",
         "type": kind,
     }
@@ -159,7 +179,53 @@ def bedrock_listing() -> Recording:
         (
             _bedrock_profiles("page-2-token"),
             200,
-            {"inferenceProfileSummaries": [_profile("example-application-1", "APPLICATION")]},
+            {
+                "inferenceProfileSummaries": [
+                    _profile(
+                        "example-application-1",
+                        "APPLICATION",
+                        [_model_arn(REGION, "example.text-model-v1:0")],
+                    )
+                ]
+            },
+        ),
+    )
+
+
+#: A foundation model ARN that names no Region.
+NO_REGION_ARN = "arn:aws:bedrock:::foundation-model/example.text-model-v1:0"
+
+
+def bedrock_drift() -> Recording:
+    """Catalogue drift against a live listing: a profile routed to fewer Regions than a
+    stale catalogue said, a profile with no catalogue entry, a profile whose models
+    disagree, and one whose model ARN names no Region."""
+    return _recording(
+        "bedrock-discovery-drift",
+        "bedrock",
+        (BEDROCK_FOUNDATION, 200, {"modelSummaries": []}),
+        (
+            _bedrock_profiles(),
+            200,
+            {
+                "inferenceProfileSummaries": [
+                    _profile("au.anthropic.claude-sonnet-4-6", "SYSTEM_DEFINED"),
+                    _profile("au.anthropic.example-claude-unlisted-v1:0", "SYSTEM_DEFINED"),
+                    _profile(
+                        "apac.example.mixed-v1:0",
+                        "SYSTEM_DEFINED",
+                        [
+                            _model_arn(REGION, "example.mixed-v1:0"),
+                            _model_arn(OTHER_REGION, "example.other-v1:0"),
+                        ],
+                    ),
+                    _profile(
+                        "example.no-region-v1:0",
+                        "APPLICATION",
+                        [{"modelArn": NO_REGION_ARN}],
+                    ),
+                ]
+            },
         ),
     )
 
@@ -190,6 +256,12 @@ def _anthropic_model(model_id: str, name: str) -> dict[str, Any]:
         "lifecycle": "active",
         "max_input_tokens": 1_000_000,
         "max_tokens": 128_000,
+        "capabilities": {
+            "batch": {"supported": True},
+            "image_input": {"supported": True},
+            "pdf_input": {"supported": True},
+            "structured_outputs": {"supported": True},
+        },
     }
 
 
@@ -274,7 +346,7 @@ def xai_models() -> Recording:
                 "object": "list",
                 "data": [
                     _openai_model("grok-4.7", "xai"),
-                    _openai_model("example-grok-preview", "xai"),
+                    {**_openai_model("example-grok-preview", "xai"), "context_length": 131_072},
                 ],
             },
         ),
@@ -372,6 +444,7 @@ RECORDINGS: dict[str, Callable[[], Recording]] = {
     "anthropic/discovery-models.json": anthropic_models,
     "anthropic/discovery-empty.json": anthropic_empty,
     "bedrock/discovery-listing.json": bedrock_listing,
+    "bedrock/discovery-drift.json": bedrock_drift,
     "bedrock/discovery-empty.json": bedrock_empty,
     "bedrock_mantle/discovery-models.json": mantle_models,
     "bedrock_mantle/discovery-empty.json": mantle_empty,

@@ -3,17 +3,20 @@
 ``start_embeddings`` does for embedding task classes what ``conduit.core.runtime.start``
 does for chat ones, from the same ``ConduitSettings``: it applies the catalogue
 overlays, validates each configured provider an embedding task class is assigned to
-against its embedding adapter, resolves every assignment through the core's
-``resolve_assignments`` (declared model, region, capability floor with its ``kind``,
-residency) and only then builds the embedding providers. A chat model cannot satisfy an
+against its embedding adapter, lists each one whose adapter can list (C18, as ``start``
+does: every built-in embedding adapter inherits its chat adapter's discovery, and
+``discovery`` in the settings may put a provider in catalogue mode), resolves every
+assignment through the core's ``resolve_assignments`` (a listed or declared model,
+capability floor with its ``kind``, residency on the listed Regions) and only then
+builds the embedding providers, each on its listed catalogue. A chat model cannot satisfy an
 embedding task class, because the floor's ``kind`` is ``embedding``; an embedding model
 cannot satisfy a chat task class for the same reason.
 
 Each task class's vector length is fixed here too: the model's own
 (``embedding_dimensions`` in the catalogue), or a shorter one the product gives in
 ``dimensions``, which must meet the floor's ``min_embedding_dimensions`` and be offered
-by the model. Every refusal happens at start-up, before any client exists or, for a
-model's dimensions, before any call; the registry is closed on the way out.
+by the model. Every refusal happens at start-up, before any call; the registry is
+closed on the way out. ``EmbeddingRuntime.discovery`` holds each listing made.
 
 Only the task classes passed in are resolved. Assignments in the settings for other task
 classes (the product's chat task classes) are left for ``start``.
@@ -26,11 +29,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from conduit.core.catalogue import Catalogue, default_catalogue
+from conduit.core.discovery import DiscoveryResult
 from conduit.core.errors import AssignmentRefused, CapabilityRefused, ConfigurationError
 from conduit.core.events import EventSink
 from conduit.core.provider import EmbeddingRequest, EmbeddingResponse
 from conduit.core.registry import EmbeddingProviderFactory, MeteredEmbedder, ProviderRegistry
-from conduit.core.runtime import ConduitSettings
+from conduit.core.runtime import ConduitSettings, _list_providers
 from conduit.core.secrets import SecretResolver
 from conduit.core.tasks import Assignments, ResolvedAssignment, TaskClass, resolve_assignments
 
@@ -69,12 +73,15 @@ class EmbeddingRuntime:
         dimensions: Mapping[str, int],
         embedders: Mapping[str, MeteredEmbedder],
         registry: ProviderRegistry,
+        discovery: Mapping[str, DiscoveryResult] | None = None,
     ) -> None:
         self.catalogue = catalogue
         self.assignments = assignments
         self.dimensions = dict(dimensions)
         self.embedders = dict(embedders)
         self.registry = registry
+        #: The listing start-up made for each provider it listed, by provider name.
+        self.discovery: Mapping[str, DiscoveryResult] = dict(discovery or {})
 
     def for_task(self, task_class: str) -> EmbeddingBinding:
         assignment = self.assignments.for_task(task_class)
@@ -107,7 +114,8 @@ async def start_embeddings(
     catalogue: Catalogue | None = None,
     dimensions: Mapping[str, int] | None = None,
 ) -> EmbeddingRuntime:
-    """Resolve and build. Raises a ``ConfigurationError`` before any call is made."""
+    """List, resolve and build. Raises a ``ConfigurationError`` before any call is made,
+    or the ``ProviderError`` of a listing that failed, before any provider is built."""
     declared = _embedding_classes(task_classes)
     names = {task.name for task in declared}
     wanted = dict(dimensions or {})
@@ -132,6 +140,7 @@ async def start_embeddings(
         for name in sorted({a.provider for a in chosen.values()})
         if name in settings.providers
     }
+    listings = await _list_providers(registry, settings, validated)
     assignments = resolve_assignments(
         declared,
         chosen,
@@ -139,6 +148,7 @@ async def start_embeddings(
         applied,
         settings.residency,
         require_all=settings.require_all_assignments,
+        listings=listings,
     )
     resolved_dimensions: dict[str, int] = {}
     for task_name, resolved in sorted(assignments.items()):
@@ -161,6 +171,9 @@ async def start_embeddings(
                 validated[provider],
                 assigned={task: assignments[task].model for task in mine},
                 dimensions={task: wanted[task] for task in mine if task in wanted},
+                catalogue=(
+                    listings[provider].listed_catalogue(applied) if provider in listings else None
+                ),
             )
     except BaseException:
         await registry.aclose()
@@ -171,4 +184,5 @@ async def start_embeddings(
         dimensions=resolved_dimensions,
         embedders=embedders,
         registry=registry,
+        discovery=listings,
     )

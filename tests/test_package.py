@@ -145,12 +145,18 @@ REEXPORTS: dict[str, tuple[str, ...]] = {
         "guarded_client",
     ),
     "conduit.core.runtime": ("ConduitSettings", "Runtime", "TaskBinding", "start"),
-    # Model discovery: what a configured provider lists, joined to the catalogue.
+    # Model discovery: what a configured provider lists, joined to the catalogue, with
+    # the catalogue drift (C18).
     "conduit.core.discovery": (
+        "FLOOR_CONTEXT_WINDOW",
+        "FLOOR_OUTPUT_LIMIT",
+        "CatalogueDrift",
         "DiscoveredModel",
         "DiscoveryOutcome",
         "DiscoveryResult",
+        "DriftReason",
         "ModelAvailability",
+        "ReportedCapabilities",
         "join_discovered",
     ),
     "conduit.core.settings": ("AssignmentSettings", "ProviderSettings", "refusals"),

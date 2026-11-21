@@ -1,13 +1,14 @@
 """``providers``, ``models`` and ``check``: adapters, credentials and residency refusals.
 
 Every credential here is synthetic, and no check reaches AWS: building a Bedrock client
-and presigning a short-term key are local, and the instance metadata lookup is off.
+and presigning a short-term key are local, the instance metadata lookup is off, and the
+Bedrock listing ``check`` makes is a synthetic one (``ListedBedrockFactory``).
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -17,12 +18,15 @@ from pydantic import SecretStr
 from conduit import (
     Catalogue,
     ConfigurationError,
+    DiscoveredModel,
     Provider,
     ProviderFactory,
     ProviderSettings,
+    ResidencyScope,
     SecretRef,
 )
 from conduit.cli.setup import interface_factories
+from conduit.providers.bedrock import BedrockFactory
 from tests.unit.cli.helpers import cli, stub_conduit, write_config
 
 ACCESS_KEY_ID = "AKIAZZEXAMPLE0000000"  # synthetic, never a real key
@@ -83,6 +87,38 @@ def bedrock_config(**assignments: Any) -> dict[str, Any]:
     }
 
 
+GEOGRAPHIES = {
+    "ap-southeast-2": ("au", frozenset({"ap-southeast-2", "ap-southeast-4"})),
+    "eu-central-1": ("eu", frozenset({"eu-central-1", "eu-west-1"})),
+}
+
+
+class ListedBedrockFactory(BedrockFactory):
+    """Bedrock with a synthetic listing for the settings' Region: Sonnet 5's geographic
+    profile to the Region's geography, and its global profile. No call reaches AWS."""
+
+    async def discover_models(
+        self, settings: ProviderSettings, client: Any
+    ) -> Sequence[DiscoveredModel]:
+        prefix, regions = GEOGRAPHIES[str(settings.region)]
+        base = "anthropic.claude-sonnet-5"
+        return (
+            DiscoveredModel(
+                f"{prefix}.{base}",
+                scope=ResidencyScope.CROSS_REGION,
+                regions=regions,
+                base_model_id=base,
+            ),
+            DiscoveredModel(f"global.{base}", scope=ResidencyScope.GLOBAL, base_model_id=base),
+        )
+
+
+def listed_factories() -> list[ProviderFactory]:
+    """The interface's adapters, with Bedrock's listing synthetic."""
+    others = [f for f in interface_factories() if f.kind != "bedrock"]
+    return [*others, ListedBedrockFactory()]
+
+
 def row(output: str, name: str) -> str:
     """The providers table's row for the provider ``name``."""
     (found,) = [
@@ -135,9 +171,9 @@ class TestProviders:
 class TestModels:
     async def test_the_catalogue_is_listed_with_residency(self) -> None:
         result = await cli("models", "--provider", "bedrock")
-        assert re.search(
-            r"bedrock\s+global\.anthropic\.claude-sonnet-5\s+chat\s+global", result.output
-        )
+        # Residency is the listing's (C18): the catalogue describes the foundation model.
+        assert re.search(r"bedrock\s+anthropic\.claude-sonnet-5\s+chat\s+listed", result.output)
+        assert "global.anthropic.claude-sonnet-5" not in result.output
         assert "stub-echo" not in result.output
 
     async def test_overlays_are_applied(self, tmp_path: Path) -> None:
@@ -189,7 +225,7 @@ class TestCheck:
             tmp_path,
             bedrock_config(chat={"provider": "keys", "model": "au.anthropic.claude-sonnet-5"}),
         )
-        result = await cli("check", "--config", path, environ=ENVIRON)
+        result = await cli("check", "--config", path, environ=ENVIRON, factories=listed_factories())
         assert result.code == 0, result.output
         assert "ready: SigV4 client built; AWS checks the credentials" in row(
             result.output, "chain"
@@ -197,6 +233,7 @@ class TestCheck:
         assert "ready: keys resolved and SigV4 client built" in row(result.output, "keys")
         assert "ready: short-term API key generated" in row(result.output, "short")
         assert "ready: long-term API key resolved (never shown)" in row(result.output, "long")
+        assert "lists 2 models (0 uncatalogued)" in row(result.output, "keys")
         for secret in SECRETS:
             assert secret not in result.output
 
@@ -209,7 +246,7 @@ class TestCheck:
                 summary={"provider": "keys", "model": "au.anthropic.claude-sonnet-5"},
             ),
         )
-        result = await cli("check", "--config", path, environ=ENVIRON)
+        result = await cli("check", "--config", path, environ=ENVIRON, factories=listed_factories())
         assert result.code == 1
         assert re.search(
             r"chat\s+keys\s+global\.anthropic\.claude-sonnet-5\s+global\s+refused: "
@@ -231,14 +268,20 @@ class TestCheck:
     async def test_a_region_outside_the_policy_is_refused(self, tmp_path: Path) -> None:
         config = bedrock_config(chat={"provider": "eu", "model": "eu.anthropic.claude-sonnet-5"})
         config["conduit"]["providers"]["eu"] = {"kind": "bedrock", "region": "eu-central-1"}
-        result = await cli("check", "--config", write_config(tmp_path, config), environ=ENVIRON)
+        result = await cli(
+            "check",
+            "--config",
+            write_config(tmp_path, config),
+            environ=ENVIRON,
+            factories=listed_factories(),
+        )
         assert "ResidencyRefused" in result.output
         assert "region eu-central-1 is not allowed" in result.output
 
     @pytest.mark.usefixtures("no_aws")
     async def test_a_missing_secret_is_named_by_its_reference(self, tmp_path: Path) -> None:
         path = write_config(tmp_path, bedrock_config())
-        result = await cli("check", "--config", path, environ={})
+        result = await cli("check", "--config", path, environ={}, factories=listed_factories())
         assert result.code == 1
         assert "refused: SecretUnavailable: secret://EXAMPLE_KEY_ID is not set" in row(
             result.output, "keys"
@@ -248,7 +291,13 @@ class TestCheck:
     async def test_long_term_keys_are_refused_unless_allowed(self, tmp_path: Path) -> None:
         config = bedrock_config()
         config["conduit"]["providers"]["long"]["allow_long_term_api_keys"] = False
-        result = await cli("check", "--config", write_config(tmp_path, config), environ=ENVIRON)
+        result = await cli(
+            "check",
+            "--config",
+            write_config(tmp_path, config),
+            environ=ENVIRON,
+            factories=listed_factories(),
+        )
         assert result.code == 1
         assert "long-term Bedrock API keys are refused" in result.output
 
