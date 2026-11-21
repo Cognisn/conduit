@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0rc7] - 2026-11-21
+
+Seventh release candidate. Wave 14 lets each connection choose the Regions its requests are processed in, lists the Regions each provider documents, and rebuilds the opt-in live catalogue pass on the provider listing (`feat/0.1.0-provider-regions`).
+
+### Added
+
+- **Region choice per connection.**
+  - Each adapter's settings take the person's choice of where requests are processed, validated against the Regions the provider documents, and build a `RegionChoice`.
+  - The choice is checked after the deployment's `ResidencyPolicy` at start-up, in discovery, in `build` and `build_embedder`, and on every call of an unassigned provider; it only narrows.
+  - An endpoint that guarantees where it processes declares that residency per model.
+  - Bedrock `processing` (AWS Regions and `allow_global`); Anthropic `inference_geo` (`us` or `global`, sent on every request, and a reply from another geography fails the call); OpenAI `data_residency` (the regional host; in au, jp and in, only `gpt-6-luna` and its dated snapshots are processed in-region, and every other model is global); X.AI `endpoint_region: us`; Foundry `deployment` (deployment type and Azure region).
+- **Region listings.** `ProviderRegistry.regions(kind)` returns each adapter's documented Regions as `RegionListing` and `OfferedRegion` values, for a product to show as choices.
+- **Exports.** `RegionChoice`, `Residency`, `OfferedRegion` and `RegionListing` are exported from `conduit`.
+
+### Changed
+
+- **Region validation.** A Bedrock `region` must be one where the bedrock-runtime endpoint is offered, and a bedrock-mantle `region` one where the mantle endpoint is offered (including ap-southeast-4); any other is refused when the settings are validated. A connection that chooses nothing is otherwise unchanged.
+- **Residency checks.** `ResidencyPolicy.check` takes the connection's settings (`provider=`). `join_discovered` takes `connection=`. `DiscoveryResult` reports the `choice` it was held to.
+- **The opt-in live catalogue pass.** It takes Bedrock and bedrock-mantle routes from each configured Region's listing, held to the run's Region choice (`CONDUIT_LIVE_BEDROCK_PROCESSING_REGIONS`, `CONDUIT_LIVE_BEDROCK_ALLOW_GLOBAL`), never from catalogue entry Regions.
+
 ## [0.1.0rc6] - 2026-11-21
 
 Sixth release candidate. Wave 13 keeps Amazon Nova's reasoning apart from its answer text (`fix/0.1.0-nova-reasoning`).
