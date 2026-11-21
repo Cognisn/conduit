@@ -1,14 +1,14 @@
 """``providers``, ``models`` and ``check``: what conduit offers and whether it is ready.
 
 ``check`` builds every configured provider through conduit's provider registry, so each
-one's secrets are resolved and its client is made exactly as a product's would be, lists
-the models of each one start-up would list (C18: the provider's listing decides which
-models exist and where they are processed), and then resolves every assignment against
-those listings (or the catalogue, for a provider that is not listed), the capability
-floors and the residency policy, one at a time, so each refusal is shown on its own
-line. No model is called: a check never reaches a model, and for the SigV4 modes of
-Amazon Bedrock that are not listed the credentials themselves are checked by AWS on the
-first call.
+one's secrets are resolved and its client is made exactly as a product's would be. It
+lists the models of each provider start-up would list (C18: each provider a task class
+is assigned to, unless its adapter cannot list or the settings put it in catalogue mode),
+and then resolves every assignment against those listings (or the catalogue, for a
+provider that is not listed), the capability floors and the residency policy, one at a
+time, so each refusal is shown on its own line. No model is called: a check never
+reaches a model, and for the SigV4 modes of Amazon Bedrock that are not listed the
+credentials themselves are checked by AWS on the first call.
 
 ``models`` shows the catalogue after the configuration's overlays: what conduit knows of
 each model that a provider's listing does not report. A residency of ``listed`` means
@@ -162,6 +162,7 @@ async def check(context: Context, config: CliConfig) -> int:
     )
     validated: dict[str, ProviderSettings] = {}
     listings: dict[str, DiscoveryResult] = {}
+    assigned = {assignment.provider for assignment in settings.assignments.values()}
     rows = []
     try:
         for name, given in settings.providers.items():
@@ -171,9 +172,12 @@ async def check(context: Context, config: CliConfig) -> int:
             try:
                 built = registry.validate(name, given)
                 await registry.build(name, built)
-                if settings.discovery.get(
-                    name, "listing"
-                ) == "listing" and registry.discovery_supported(name, built):
+                # As start-up does: only a provider a task class is assigned to is listed.
+                if (
+                    name in assigned
+                    and settings.discovery.get(name, "listing") == "listing"
+                    and registry.discovery_supported(name, built)
+                ):
                     listed = await registry.discover(name, built)
             except Exception as error:  # shown by class (and a conduit error's message)
                 outcome = f"refused: {describe_error(error)}"

@@ -62,8 +62,9 @@ def parse_tags(body: object) -> tuple[DiscoveredModel, ...]:
         name = item.get("name") if isinstance(item, dict) else None
         if not isinstance(name, str) or not name:
             raise ProviderError(ProviderFailure.PROTOCOL)
-        remote = item.get("remote_host") if isinstance(item, dict) else None
-        # A remote model is processed on its upstream host, not the deployment's own.
+        # A remote model (either remote field set) is processed on its upstream host,
+        # not the deployment's own.
+        remote = item.get("remote_host") or item.get("remote_model")
         scope = ResidencyScope.GLOBAL if remote else ResidencyScope.LOCAL
         found.append(DiscoveredModel(bare_name(name), scope=scope))
     return tuple(found)

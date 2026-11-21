@@ -387,3 +387,51 @@ class TestSecretsAreNeverPrinted:
         assert result.code == 1
         assert "conduit.providers.stub" in result.output
         assert LONG_TERM_KEY not in result.output
+
+
+class FailingListingBedrockFactory(ListedBedrockFactory):
+    """Bedrock whose listing always fails, as a role without the List permissions."""
+
+    async def discover_models(
+        self, settings: ProviderSettings, client: Any
+    ) -> Sequence[DiscoveredModel]:
+        from conduit import ProviderError, ProviderFailure
+
+        raise ProviderError(ProviderFailure.REJECTED)
+
+
+class TestCheckListsOnlyAssignedProviders:
+    @pytest.mark.usefixtures("no_aws")
+    async def test_an_unassigned_provider_is_not_listed(self, tmp_path: Path) -> None:
+        conduit = stub_conduit()
+        conduit["providers"]["spare"] = {"kind": "bedrock", "region": "ap-southeast-2"}
+        others = [f for f in interface_factories() if f.kind != "bedrock"]
+        result = await cli(
+            "check",
+            "--config",
+            write_config(tmp_path, {"conduit": conduit}),
+            factories=[*others, FailingListingBedrockFactory()],
+        )
+        assert result.code == 0, result.output
+        assert "lists" not in row(result.output, "spare")
+        assert "ready" in row(result.output, "spare")
+
+    @pytest.mark.usefixtures("no_aws")
+    async def test_an_assigned_provider_whose_listing_fails_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        path = write_config(
+            tmp_path,
+            bedrock_config(chat={"provider": "keys", "model": "au.anthropic.claude-sonnet-5"}),
+        )
+        others = [f for f in interface_factories() if f.kind != "bedrock"]
+        result = await cli(
+            "check",
+            "--config",
+            path,
+            environ=ENVIRON,
+            factories=[*others, FailingListingBedrockFactory()],
+        )
+        assert result.code == 1
+        assert "refused: ProviderError" in row(result.output, "keys")
+        assert "lists" not in row(result.output, "chain")  # not assigned, not listed

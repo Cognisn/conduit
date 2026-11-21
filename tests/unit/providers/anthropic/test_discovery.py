@@ -159,3 +159,41 @@ async def test_claude_in_foundry_is_reported_unsupported() -> None:
     )
     assert not result.supported
     assert result.reason is not None and "Foundry" in result.reason
+
+
+async def test_an_uncatalogued_claude_model_takes_the_reported_features_through_the_adapter() -> (
+    None
+):
+    """The floor sets only what the listing reports (vision, structured output); the
+    Anthropic adapter's request path serves both for any model, so an uncatalogued model
+    the listing says supports them gets them, and nothing else (no tools, no caching)."""
+    from conduit.core.catalogue import default_catalogue
+    from conduit.core.types import ImageBlock, Message, ModelRequest
+    from conduit.providers.anthropic.request import build_params
+
+    handler, _ = _replaying("anthropic/discovery-models.json")
+    result = await _discover(handler)
+    listed = result.get("example-claude-preview")
+    assert listed is not None and listed.entry is not None and not listed.catalogued
+    assert listed.entry.capabilities == Capabilities(vision=True, structured_output=True)
+    provider = AnthropicFactory().create_provider(
+        "claude",
+        AnthropicFactory.settings_model.model_validate(DIRECT),
+        object(),
+        catalogue=result.listed_catalogue(default_catalogue()),
+    )
+    assert provider.structured_output("example-claude-preview") is True  # type: ignore[attr-defined]
+    request = ModelRequest(
+        model="example-claude-preview",
+        messages=(
+            Message(
+                role="user",
+                content=(ImageBlock(media_type="image/png", data=b"\x89PNG-synthetic"),),
+            ),
+        ),
+        max_output_tokens=64,
+        output_schema={"type": "object"},
+    )
+    params = build_params(request, structured_output=True)
+    assert params["messages"][0]["content"][0]["type"] == "image"
+    assert params["output_config"]["format"]["type"] == "json_schema"

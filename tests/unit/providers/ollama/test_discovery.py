@@ -149,3 +149,21 @@ async def test_a_body_that_is_not_the_documented_shape_is_a_protocol_failure(
 def test_the_latest_tag_is_reported_under_the_bare_name(listed: str, reported: str) -> None:
     [model] = parse_tags({"models": [{"name": listed, "model": listed}]})
     assert model.model_id == reported
+
+
+@pytest.mark.parametrize(
+    "remote",
+    [
+        {"remote_host": "https://ollama.example.com:443"},
+        {"remote_model": "example-cloud:120b"},
+        {"remote_model": "example-cloud:120b", "remote_host": "https://ollama.example.com"},
+    ],
+)
+def test_either_remote_field_makes_a_model_global(remote: dict[str, str]) -> None:
+    [listed] = parse_tags({"models": [{"name": "example-cloud:120b", **remote}]})
+    assert listed.scope is ResidencyScope.GLOBAL
+
+
+def test_a_model_without_remote_fields_is_local() -> None:
+    [listed] = parse_tags({"models": [{"name": "llama3.1:8b", "remote_host": ""}]})
+    assert listed.scope is ResidencyScope.LOCAL

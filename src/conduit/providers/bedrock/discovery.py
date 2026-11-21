@@ -150,11 +150,11 @@ def _profiles(answer: object) -> tuple[list[DiscoveredModel], str | None]:
     for summary in summaries:
         if not isinstance(summary, dict):
             raise _protocol()
+        if summary.get("status", "ACTIVE") != "ACTIVE":
+            continue  # before its models are read: a retired profile cannot fail the listing
         profile_id = summary.get("inferenceProfileId")
         kind = summary.get("type")
         listed = _destinations(profile_id, summary.get("models"))
-        if summary.get("status", "ACTIVE") != "ACTIVE":
-            continue
         found.append(_model(profile_id, kind, **listed))
     token = answer.get("nextToken")
     if token is not None and (not isinstance(token, str) or not token):

@@ -60,6 +60,9 @@ FLOOR_CONTEXT_WINDOW = 8_192
 FLOOR_OUTPUT_LIMIT = 4_096
 #: The most Regions kept for one listed model.
 MAX_REGIONS = 64
+#: A listed id naming embeddings, for a listing that states no kind: such a model is
+#: taken as an embedding model (refused until an overlay declares it), never as chat.
+EMBEDDING_ID_HINT = "embed"
 
 _REGION_BOUND = frozenset({ResidencyScope.IN_REGION, ResidencyScope.CROSS_REGION})
 _FLAGS: tuple[tuple[str, str], ...] = (
@@ -338,6 +341,14 @@ class _Join:
         )
 
 
+def _kind(listed: DiscoveredModel) -> Literal["chat", "embedding"]:
+    """The listed model's kind: as the listing states it, else ``embedding`` for an id
+    naming embeddings (the conservative reading), else ``chat``."""
+    if listed.kind is not None:
+        return listed.kind
+    return "embedding" if EMBEDDING_ID_HINT in listed.model_id.lower() else "chat"
+
+
 def _keys(catalogue_provider: str, listed: DiscoveredModel) -> list[ModelKey]:
     """The catalogue keys a listed model may match, most specific first."""
     ids = [listed.model_id]
@@ -383,7 +394,7 @@ def join_discovered(
         entry: ModelEntry | None = None
         if found is None:
             join.note(DriftReason.UNCATALOGUED, "listed by the provider, with no catalogue entry")
-            if model.kind == "embedding":
+            if _kind(model) == "embedding":
                 reason = (
                     f"{provider}: model {model.model_id!r} is an embedding model with no "
                     "catalogue entry, so its dimensions are not known"
@@ -417,6 +428,16 @@ def join_discovered(
                     declared.model_id,
                     DriftReason.UNLISTED,
                     "declared in the catalogue, not listed by the provider",
+                )
+            )
+    # A withdrawal nothing listed matches may be a mistyped id: report it, never drop it.
+    for withdrawn in sorted(catalogue.withdrawn, key=str):
+        if withdrawn.provider == catalogue_provider and withdrawn not in matched:
+            drift.append(
+                CatalogueDrift(
+                    withdrawn.model_id,
+                    DriftReason.UNLISTED,
+                    "withdrawn by an overlay, not listed by the provider",
                 )
             )
     return tuple(joined), tuple(drift)

@@ -23,6 +23,7 @@ adapter says otherwise (the OpenAI-compatible adapter serves ``openai`` and ``xa
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterable, Iterator, Mapping
 from functools import cache
 from importlib.resources import files
@@ -34,6 +35,8 @@ from pydantic import Field, PositiveInt, ValidationError, model_validator
 from conduit.core.errors import ConfigurationError, UndeclaredModel
 from conduit.core.residency import ResidencyScope
 from conduit.core.settings import SettingsModel, failed_fields
+
+logger = logging.getLogger("conduit.core.catalogue")
 
 _REGION_BOUND = frozenset({ResidencyScope.IN_REGION, ResidencyScope.CROSS_REGION})
 
@@ -161,8 +164,15 @@ class Catalogue:
             if len(set(keys)) != len(keys):
                 raise ConfigurationError(f"overlay {overlay.name!r} names a model twice")
             for key in overlay.withdraw:
-                # A model the catalogue lacks may be withdrawn: a provider may list it.
-                entries.pop(key, None)
+                # A model the catalogue lacks may be withdrawn, since a provider may list
+                # it; it is logged, and reported as drift where no listing matches it.
+                if entries.pop(key, None) is None:
+                    logger.warning(
+                        "overlay %r withdraws %s, which the catalogue does not declare; it is "
+                        "refused if a provider lists it",
+                        overlay.name,
+                        key,
+                    )
                 overlaid.discard(key)
                 withdrawn.add(key)
             for entry in overlay.override:

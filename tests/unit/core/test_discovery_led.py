@@ -696,3 +696,81 @@ class TestRegistryBuild:
         finally:
             await registry.aclose()
         assert provider.assigned_models == frozenset({"only.this"})
+
+
+class _RegionFailing(ListingFactory):
+    """Lists ``LISTING``, except for settings in ``failing``, whose listing fails."""
+
+    def __init__(self, failing: str) -> None:
+        super().__init__(LISTING)
+        self.failing = failing
+
+    async def discover_models(
+        self, settings: ProviderSettings, client: Any
+    ) -> Sequence[DiscoveredModel]:
+        self.discovered_with.append((settings, client))
+        if settings.region == self.failing:
+            raise ProviderError(ProviderFailure.UNAVAILABLE)
+        return self.listing
+
+
+class TestOnlyAssignedProvidersAreListed:
+    async def test_an_unassigned_provider_is_never_listed(self) -> None:
+        settings = ConduitSettings.model_validate(
+            {
+                "providers": {"main": PROVIDER, "spare": {**PROVIDER, "region": EXTRA}},
+                "assignments": {"triage": {"provider": "main", "model": "vendor.model-small"}},
+            }
+        )
+        factory = _RegionFailing(EXTRA)
+        runtime = await _start(settings, factory)
+        try:
+            assert set(runtime.discovery) == {"main"}
+            assert [s.region for s, _ in factory.discovered_with] == [HOME]
+        finally:
+            await runtime.aclose()
+
+
+class TestEmbeddingLikeIds:
+    @pytest.mark.parametrize(
+        "model_id", ["vendor.text-embedding-x", "example-embed-text:latest", "Vendor-EMBED-2"]
+    )
+    def test_an_uncatalogued_id_naming_embeddings_is_refused_as_one(self, model_id: str) -> None:
+        models, _ = _join([DiscoveredModel(model_id, scope=ResidencyScope.GLOBAL)])
+        listed = models[model_id]
+        assert listed.outcome is DiscoveryOutcome.REFUSED
+        assert listed.entry is None
+        assert listed.reason is not None and "embedding model" in listed.reason
+
+    def test_a_chat_kind_the_listing_states_is_kept(self) -> None:
+        listed = DiscoveredModel(
+            "vendor.embed-aware-chat", kind="chat", scope=ResidencyScope.GLOBAL
+        )
+        models, _ = _join([listed])
+        assert models["vendor.embed-aware-chat"].outcome is DiscoveryOutcome.ALLOWED
+
+
+class TestAbsentWithdrawals:
+    def test_withdrawing_a_model_the_catalogue_lacks_is_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        key = ModelKey(provider="fake", model_id="vendor.model-typo")
+        with caplog.at_level("WARNING", logger="conduit"):
+            DEFAULT.apply(CatalogueOverlay(name="product", withdraw=(key,)))
+        assert [r.getMessage() for r in caplog.records] == [
+            "overlay 'product' withdraws fake:vendor.model-typo, which the catalogue does not "
+            "declare; it is refused if a provider lists it"
+        ]
+
+    def test_a_withdrawal_the_listing_does_not_match_is_drift(self) -> None:
+        key = ModelKey(provider="fake", model_id="vendor.model-typo")
+        _, drift = _join(catalogue=DEFAULT.apply(CatalogueOverlay(withdraw=(key,))))
+        found = [d for d in drift if d.model_id == "vendor.model-typo"]
+        assert [(d.reason, d.detail) for d in found] == [
+            (DriftReason.UNLISTED, "withdrawn by an overlay, not listed by the provider")
+        ]
+
+    def test_a_withdrawal_the_listing_matches_is_not_drift(self) -> None:
+        key = ModelKey(provider="fake", model_id="vendor.model-new")
+        _, drift = _join(catalogue=DEFAULT.apply(CatalogueOverlay(withdraw=(key,))))
+        assert not [d for d in drift if d.model_id == "vendor.model-new"]

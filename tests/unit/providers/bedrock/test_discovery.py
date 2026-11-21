@@ -292,6 +292,28 @@ class TestDrift:
             await _discover(Odd())
         assert raised.value.failure is ProviderFailure.PROTOCOL
 
+    @pytest.mark.parametrize("models", [None, "x", [1], [{"modelArn": 7}]])
+    async def test_an_inactive_profile_is_left_out_before_its_models_are_read(
+        self, models: Any
+    ) -> None:
+        profile: dict[str, Any] = {
+            "inferenceProfileId": "au.x.legacy-v1:0",
+            "type": "SYSTEM_DEFINED",
+            "status": "EXAMPLE_RETIRED",
+        }
+        if models is not None:
+            profile["models"] = models
+
+        class Legacy(FakeControl):
+            def list_foundation_models(self, **params: Any) -> Any:
+                return {"modelSummaries": []}
+
+            def list_inference_profiles(self, **params: Any) -> Any:
+                return {"inferenceProfileSummaries": [profile]}
+
+        result = await _discover(Legacy())
+        assert result.models == ()
+
     async def test_a_profile_that_is_not_active_is_left_out(self) -> None:
         class Inactive(FakeControl):
             def list_foundation_models(self, **params: Any) -> Any:
