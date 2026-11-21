@@ -346,9 +346,23 @@ Each adapter's listing is the source of truth for which models a provider can us
 - **Claude through Bedrock's mantle endpoint**: the endpoint's documented OpenAI-compatible listing, `GET /v1/models` on the Region's `bedrock-mantle` host, with the same Bedrock API key; only Claude models (`anthropic.` ids) are kept, each `in_region` in the endpoint's Region. Unsupported when `endpoint_url` is set.
 - **Anthropic**: the Models API (`GET /v1/models`, every page) for `endpoint: direct`, `global`, with each model's `max_input_tokens` and `max_tokens` as its window and output limit, and its image input and structured outputs support. Unsupported for Claude in Foundry, whose endpoint documents no models listing and whose ids are deployment names.
 - **OpenAI and X.AI**: the Models API (`GET /v1/models`), `global`; X.AI's `context_length` is kept as the window. Unsupported for Microsoft Foundry, whose OpenAI v1 endpoint lists the resource's models rather than its deployments.
-- **Gemini**: `models.list` (every page), keeping only the models that support `generateContent`, `global`, with their input and output token limits; the `models/` prefix is removed.
-- **Ollama**: the server's local models (`GET /api/tags`), `local`; a model the server forwards to a remote host (`remote_host` in the listing) is `global`. A model pulled without a tag is listed as `name:latest`, and Ollama resolves an untagged name to its `latest` tag, so it is reported under its bare name (`nomic-embed-text`), the name the catalogue declares and the provider calls; any other tag is kept.
+- **Gemini**: `models.list` (every page), keeping the models that support `generateContent` (chat) and those that support `embedContent` without it (embedding, for the embedding adapter), `global`, with their input and output token limits; the `models/` prefix is removed. The SDK's model carries no `baseModelId`, so a tuned model's base is its `tuned_model_info.base_model`, and any other model is its own base.
+- **Ollama**: the server's local models (`GET /api/tags`), `local`; a model the server forwards to a remote host (`remote_host` or `remote_model` in the listing) is `global`. In catalogue mode there is no listing, so a declared Ollama model has the scope its entry declares (`local` for the default entries) whether or not the server forwards it: list an Ollama server that may hold remote models. A model pulled without a tag is listed as `name:latest`, and Ollama resolves an untagged name to its `latest` tag, so it is reported under its bare name (`nomic-embed-text`), the name the catalogue declares and the provider calls; any other tag is kept.
 - **The stub**: the ids given as `StubFactory(models=[...])`, each `local`, so a product can test its handling of listed, catalogued and uncatalogued models; `DEFAULT_STUB_MODELS` names the catalogue's. Without `models` the stub is not listed, and serves the stub models the catalogue declares.
+
+### What start-up needs to list
+
+Start-up lists every provider a task class is assigned to, so the credentials need the listing as well as inference. A provider whose credentials cannot list fails to start (the listing's `ProviderError`, before anything is built); give it the permission, or set `"discovery": {"<name>": "catalogue"}` in the settings to serve only the models the catalogue declares, with the residency an overlay entry declares (`global` where it declares none).
+
+| Kind | What the listing needs |
+|---|---|
+| `bedrock` | IAM `bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles` in the provider's Region (a Bedrock API key covers both) |
+| `bedrock_mantle` | The Bedrock API key the provider already uses (`GET /v1/models` on the Region's mantle endpoint) |
+| `anthropic` (direct) | The API key the provider already uses (the Models API) |
+| `openai_compat` (OpenAI, X.AI) | The API key the provider already uses (the Models API) |
+| `gemini` | The API key the provider already uses (`models.list`) |
+| `ollama` | Network access to the server's `/api/tags` |
+| Claude in Foundry, Foundry's OpenAI v1 endpoint, `endpoint_url` | Not listed: catalogue mode |
 
 ## Building clients
 
