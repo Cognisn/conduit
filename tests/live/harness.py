@@ -492,6 +492,24 @@ async def check_embeddings(binding: EmbeddingBinding, subject: str, expected: in
     REPORT.record("embeddings", subject, f"embed at {expected}", Verdict.MATCH, detail)
 
 
+async def listing(
+    settings: dict[str, Any],
+    *,
+    environ: LiveEnv | None = None,
+    factories: Iterable[ProviderFactory] | None = None,
+) -> DiscoveryResult:
+    """The provider's listing through the registry, as start-up lists it: joined to the
+    catalogue and held to the connection's Region choice. A failed listing raises."""
+    registry = ProviderRegistry(
+        secrets=resolver(environ if environ is not None else live_env()),
+        factories=builtin_factories() if factories is None else factories,
+    )
+    try:
+        return await registry.discover("live", settings)
+    finally:
+        await registry.aclose()
+
+
 async def check_discovery(
     subject: str,
     settings: dict[str, Any],

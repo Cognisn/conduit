@@ -4,6 +4,11 @@ Every credential is a ``secret://<NAME>`` reference, resolved by
 ``EnvironmentSecretResolver(prefix="CONDUIT_LIVE_")`` from ``CONDUIT_LIVE_<NAME>`` when the
 provider is built. The settings never hold a key, and nothing here reads one.
 Non-secret values (regions, model ids, URLs, deployment names) are read as plain values.
+
+The catalogue pass takes Bedrock and bedrock-mantle routes from each configured Region's
+own listing (``listed_routes``), held to the run's Region choice
+(``CONDUIT_LIVE_BEDROCK_PROCESSING_REGIONS`` and ``CONDUIT_LIVE_BEDROCK_ALLOW_GLOBAL``),
+never from Regions in catalogue entries (C18).
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from conduit.core.catalogue import Capabilities, CatalogueOverlay, ModelEntry, default_catalogue
+from conduit.core.discovery import DiscoveryResult
 from conduit.core.residency import ResidencyScope
 from conduit.core.secrets import EnvironmentSecretResolver
 from tests.live.needs import PREFIX, LiveEnv, present, value
@@ -114,12 +120,61 @@ def first_bedrock_auth(environ: LiveEnv) -> str | None:
     return None
 
 
-def bedrock_settings(region: str, mode: str, environ: LiveEnv) -> dict[str, Any]:
+def bedrock_settings(
+    region: str, mode: str, environ: LiveEnv, *, processing: dict[str, Any] | None = None
+) -> dict[str, Any]:
     auth, long_term = bedrock_auth(mode, environ)
     settings: dict[str, Any] = {"kind": "bedrock", "region": region, "auth": auth}
     if long_term:
         settings["allow_long_term_api_keys"] = True
+    if processing is not None:
+        settings["processing"] = processing
     return settings
+
+
+def processing_choice(environ: LiveEnv) -> dict[str, Any] | None:
+    """The run's Bedrock Region choice: ``BEDROCK_PROCESSING_REGIONS`` (comma-separated)
+    and ``BEDROCK_ALLOW_GLOBAL``, or ``None`` when no Regions are chosen."""
+    listed = value(environ, "BEDROCK_PROCESSING_REGIONS")
+    regions = [part.strip() for part in (listed or "").split(",") if part.strip()]
+    if not regions:
+        return None
+    allow = (value(environ, "BEDROCK_ALLOW_GLOBAL") or "").lower() in ("1", "true", "yes")
+    return {"regions": regions, "allow_global": allow}
+
+
+@dataclass(frozen=True, slots=True)
+class Route:
+    """One listed model to verify: its target, the Region it is called in, and its
+    effective entry and residency as the listing gave them."""
+
+    target: Target
+    region: str
+    entry: ModelEntry
+    scope: ResidencyScope
+    regions: frozenset[str]
+
+
+def listed_routes(
+    label: str, provider: dict[str, Any], region: str, listing: DiscoveryResult
+) -> list[Route]:
+    """Every model ``listing`` allows that a catalogue entry describes, through its
+    listed id, in listing order: the routes the catalogue pass verifies in ``region``.
+
+    A refused model (outside the residency policy or the Region choice), an uncatalogued
+    one and anything the listing does not name are never routed; no Region is taken from
+    a catalogue entry."""
+    return [
+        Route(
+            Target(f"{label} {region}", provider, model.model_id),
+            region,
+            model.entry,
+            model.scope,
+            model.regions,
+        )
+        for model in listing.allowed
+        if model.catalogued and model.entry is not None
+    ]
 
 
 #: The cheapest Claude on bedrock-runtime, by profile prefix.
