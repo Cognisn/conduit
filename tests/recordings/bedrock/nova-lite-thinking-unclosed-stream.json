@@ -1,0 +1,83 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "operation": "ConverseStream",
+        "params": {
+          "inferenceConfig": {
+            "maxTokens": 1024
+          },
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "Incident notes: host-a.example.com stopped answering on 192.0.2.10 at 09:00."
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "modelId": "amazon.nova-lite-v1:0",
+          "system": [
+            {
+              "text": "You summarise incident notes for the operations team at example.com."
+            },
+            {
+              "cachePoint": {
+                "type": "default"
+              }
+            }
+          ]
+        },
+        "region": "us-east-1"
+      },
+      "response": [
+        {
+          "messageStart": {
+            "role": "assistant"
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 0,
+            "delta": {
+              "text": "<thinking>The notes name one host"
+            }
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 0,
+            "delta": {
+              "text": " and one time. I sho"
+            }
+          }
+        },
+        {
+          "contentBlockStop": {
+            "contentBlockIndex": 0
+          }
+        },
+        {
+          "messageStop": {
+            "stopReason": "max_tokens"
+          }
+        },
+        {
+          "metadata": {
+            "metrics": {
+              "latencyMs": 450
+            },
+            "usage": {
+              "inputTokens": 48,
+              "outputTokens": 1024,
+              "totalTokens": 1072
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "name": "nova-lite-thinking-unclosed-stream",
+  "provider": "bedrock"
+}

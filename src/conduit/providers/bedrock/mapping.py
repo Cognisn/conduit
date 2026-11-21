@@ -29,6 +29,25 @@ each ``bedrock`` state block becomes that ``reasoningContent`` block again, in i
 in the assistant message, as Claude on Bedrock needs for tool use with reasoning; other
 kinds' state is left out. Bedrock state that is not a whole reasoning block is refused
 as ``REJECTED`` before any call, with nothing of the payload in the error.
+
+Amazon Nova writes its reasoning into the reply text as ``<thinking>...</thinking>``
+(the Nova user guide's "Invoking a tool": chain-of-thought is the default for tool
+calling, "contained in <thinking> tags", with "multiple tool calls and thinking blocks in
+a response"). For a Nova model only (``splits_thinking``, matched on the base model id),
+each span in a text block becomes one ``ProviderStateReported``, in its place, with the
+same payload shape as a reasoning block (``reasoningText``, no signature) but its own
+state type, ``thinking_text``, and the answer text carries neither the tags nor what
+they hold. A span still open when its block ends (a reply cut off by its token limit) is
+reasoning, not answer text. Whitespace after a closing tag is dropped (one space is kept
+where answer text before the span did not end in whitespace), as is the span's own leading and
+trailing whitespace, and an empty span reports nothing. Streamed text holds back only a
+suffix that could begin ``<thinking>``, and releases it as text if the block ends first.
+Other models' text is never parsed.
+
+``thinking_text`` state is Nova's own text format, with no signature, so it is never sent
+back to any model, as a reasoning block or as text. Native ``reasoning_content`` state
+keeps the rule above for every model. A message left with no content by that
+is left out, and the messages either side of it, now of the same role, are merged.
 """
 
 from __future__ import annotations
@@ -86,9 +105,15 @@ NO_STREAMING_TOOL_USE = frozenset(
 #: Model families whose cache points go in system and messages only (Amazon Nova's
 #: model cards: "Fields that accept prompt cache checkpoints: system and messages").
 NO_TOOL_CACHE_POINT = ("amazon.nova-",)
+#: Model ids whose replies carry reasoning as ``<thinking>`` spans in the text.
+THINKING_TAG_MODELS = ("amazon.nova-",)
+THINKING_OPEN = "<thinking>"
+THINKING_CLOSE = "</thinking>"
 #: The provider kind and state type of a reasoning block's state.
 KIND = "bedrock"
 REASONING_STATE = "reasoning_content"
+#: The state type of a ``<thinking>`` span taken from reply text: never sent back.
+THINKING_STATE = "thinking_text"
 _REASONING_TEXT_FIELDS = frozenset({"text", "signature"})
 
 
@@ -103,7 +128,7 @@ def _reasoning_text(value: Any) -> dict[str, str] | None:
     return dict(value)
 
 
-def reasoning_state(content: Any) -> ProviderStateBlock:
+def reasoning_state(content: Any, state_type: str = REASONING_STATE) -> ProviderStateBlock:
     """The state block for a Converse ``reasoningContent`` value, or PROTOCOL."""
     payload: dict[str, Any] | None = None
     if isinstance(content, Mapping) and len(content) == 1:
@@ -118,19 +143,21 @@ def reasoning_state(content: Any) -> ProviderStateBlock:
         raise _protocol()
     return ProviderStateBlock(
         provider_kind=KIND,
-        state_type=REASONING_STATE,
+        state_type=state_type,
         payload=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
     )
 
 
-def _reasoning_content(state: ProviderStateBlock) -> dict[str, Any]:
+def _reasoning_content(
+    state: ProviderStateBlock, state_type: str = REASONING_STATE
+) -> dict[str, Any]:
     """The ``reasoningContent`` block a ``bedrock`` state block holds, or REJECTED."""
     data: Any = None
     # UnicodeDecodeError and JSONDecodeError; RecursionError for deep nesting.
     with contextlib.suppress(ValueError, RecursionError):
         data = json.loads(state.payload.decode("utf-8"))
     wire: dict[str, Any] | None = None
-    if state.state_type == REASONING_STATE and isinstance(data, dict) and len(data) == 1:
+    if state.state_type == state_type and isinstance(data, dict) and len(data) == 1:
         if "reasoningText" in data:
             text = _reasoning_text(data["reasoningText"])
             if text is not None:
@@ -178,6 +205,11 @@ def streams_tool_use(model: str) -> bool:
     return base_model_id(model) not in NO_STREAMING_TOOL_USE
 
 
+def splits_thinking(model: str) -> bool:
+    """Whether ``model`` writes its reasoning into the reply as ``<thinking>`` spans."""
+    return base_model_id(model).startswith(THINKING_TAG_MODELS)
+
+
 def caches_tools(model: str) -> bool:
     """Whether ``model`` accepts a cache point after its tools."""
     return not base_model_id(model).startswith(NO_TOOL_CACHE_POINT)
@@ -220,8 +252,14 @@ def _content(block: Any, points: _CachePoints) -> list[dict[str, Any]]:
     if isinstance(block, CacheBreakpoint):
         return points.take()
     if isinstance(block, ProviderStateBlock):
-        # Its own reasoning goes back in place; another kind's state is left out.
-        return [_reasoning_content(block)] if block.provider_kind == KIND else []
+        # Its own reasoning goes back in place; another kind's state is left out, and so
+        # is tag text (Nova's own format, unsigned), after the same check of its payload.
+        if block.provider_kind != KIND:
+            return []
+        if block.state_type == THINKING_STATE:
+            _reasoning_content(block, THINKING_STATE)
+            return []
+        return [_reasoning_content(block)]
     if isinstance(block, ToolUseBlock):
         return [{"toolUse": {"toolUseId": block.id, "name": block.name, "input": block.input}}]
     if isinstance(block, ToolResultBlock):
@@ -245,6 +283,34 @@ def _message(message: Message, points: _CachePoints) -> dict[str, Any]:
     for block in message.content:
         content.extend(_content(block, points))
     return {"role": message.role, "content": content}
+
+
+def _messages(messages: Sequence[Message], points: _CachePoints) -> list[dict[str, Any]]:
+    """The Converse messages, leaving out a turn that held only tag text.
+
+    Bedrock refuses an empty message and needs the roles to alternate, so the user
+    messages either side of a left-out turn become one. Messages the caller sent in the
+    same role are passed on as they are. A turn left with only cache points is left out in
+    the same way.
+    """
+    out: list[dict[str, Any]] = []
+    left_out = False
+    for message in messages:
+        mapped = _message(message, points)
+        if message.content and all("cachePoint" in b for b in mapped["content"]):
+            # Nothing but cache points is not valid content either: leave the turn out
+            # and carry its points to the end of the message before it, which keeps the
+            # cached prefix, unless a point is already there.
+            if out and not any("cachePoint" in b for b in out[-1]["content"][-1:]):
+                out[-1]["content"].extend(mapped["content"][:1])
+            left_out = True
+            continue
+        if left_out and out and out[-1]["role"] == mapped["role"]:
+            out[-1]["content"].extend(mapped["content"])
+        else:
+            out.append(mapped)
+        left_out = False
+    return out
 
 
 def build_converse_request(request: ModelRequest, *, prompt_caching: bool) -> dict[str, Any]:
@@ -272,7 +338,7 @@ def build_converse_request(request: ModelRequest, *, prompt_caching: bool) -> di
         system.extend(_content(block, points))
     if system:
         params["system"] = system
-    params["messages"] = [_message(m, points) for m in request.messages]
+    params["messages"] = _messages(request.messages, points)
     if tools:
         params["toolConfig"] = {"tools": tools}
     inference: dict[str, Any] = {"maxTokens": request.max_output_tokens}
@@ -320,6 +386,112 @@ def _tool_input(text: str) -> dict[str, Any]:
     return value
 
 
+def _partial_tag(text: str, tag: str) -> int:
+    """The length of the longest proper prefix of ``tag`` that ``text`` ends with."""
+    for size in range(min(len(tag) - 1, len(text)), 0, -1):
+        if text.endswith(tag[:size]):
+            return size
+    return 0
+
+
+class _ThinkingSplitter:
+    """Splits one text block's pieces into answer text and ``<thinking>`` spans.
+
+    ``feed`` and ``end`` return ``(is_thinking, text)`` parts in order. Outside a span it
+    holds back only a suffix that could begin ``<thinking>``; inside one it keeps the span
+    until the closing tag arrives.
+    """
+
+    def __init__(self) -> None:
+        self._held = ""  # a possible tag start, kept for the next piece
+        self._thinking: list[str] | None = None  # the open span's text, if one is open
+        self._trim = False  # drop whitespace that follows a closing tag
+        self._gap = False  # whitespace was dropped after a closing tag
+        self._last = ""  # the last character of answer text given out
+
+    def feed(self, piece: str) -> list[tuple[bool, str]]:
+        parts: list[tuple[bool, str]] = []
+        buffer = self._held + piece
+        self._held = ""
+        while buffer:
+            if self._thinking is None:
+                if self._trim:
+                    stripped = buffer.lstrip()
+                    self._gap = self._gap or len(stripped) < len(buffer)
+                    buffer = stripped
+                    if not buffer:
+                        break
+                start = buffer.find(THINKING_OPEN)
+                if start < 0:
+                    keep = _partial_tag(buffer, THINKING_OPEN)
+                    release = buffer[: len(buffer) - keep]
+                    self._held = buffer[len(buffer) - keep :]
+                    if release:
+                        parts.append((False, self._answer(release)))
+                    break
+                if start:
+                    parts.append((False, self._answer(buffer[:start])))
+                self._thinking = []
+                buffer = buffer[start + len(THINKING_OPEN) :]
+            else:
+                end = buffer.find(THINKING_CLOSE)
+                if end < 0:
+                    keep = _partial_tag(buffer, THINKING_CLOSE)
+                    self._thinking.append(buffer[: len(buffer) - keep])
+                    self._held = buffer[len(buffer) - keep :]
+                    break
+                self._thinking.append(buffer[:end])
+                parts.extend(self._close())
+                buffer = buffer[end + len(THINKING_CLOSE) :]
+        return parts
+
+    def _answer(self, text: str) -> str:
+        """``text`` as answer text, with the one space a dropped gap leaves between words."""
+        if self._trim and self._gap and self._last and not self._last.isspace():
+            text = " " + text
+        self._trim = self._gap = False
+        self._last = text[-1]
+        return text
+
+    def _close(self) -> list[tuple[bool, str]]:
+        text = "".join(self._thinking or []).strip()
+        self._thinking = None
+        self._trim = True
+        return [(True, text)] if text else []
+
+    def end(self) -> list[tuple[bool, str]]:
+        """What is left when the block ends: an open span is reasoning, a held tag start text."""
+        parts: list[tuple[bool, str]] = []
+        if self._thinking is not None:
+            self._thinking.append(self._held)
+            parts.extend(self._close())
+        elif self._held:
+            parts.append((False, self._answer(self._held)))
+        self._held = ""
+        self._trim = self._gap = False
+        return parts
+
+
+def _joined(parts: list[tuple[bool, str]]) -> list[tuple[bool, str]]:
+    """``parts`` with neighbouring answer text joined, for a block that arrives whole."""
+    joined: list[tuple[bool, str]] = []
+    for is_thinking, text in parts:
+        if joined and not is_thinking and not joined[-1][0]:
+            joined[-1] = (False, joined[-1][1] + text)
+        else:
+            joined.append((is_thinking, text))
+    return joined
+
+
+def _thinking_events(parts: list[tuple[bool, str]]) -> Iterator[StreamEvent]:
+    for is_thinking, text in parts:
+        if is_thinking:
+            state = reasoning_state({"reasoningText": {"text": text}}, THINKING_STATE)
+            yield ProviderStateReported(state=state)
+        else:
+            yield TextDelta(text=text)
+
+
 @dataclass
 class _OpenCall:
     id: str
@@ -363,7 +535,10 @@ class _OpenReasoning:
 class StreamMapper:
     """Turns ConverseStream events into conduit stream events, one event at a time."""
 
-    def __init__(self) -> None:
+    def __init__(self, model: str | None = None) -> None:
+        #: Whether a text block's ``<thinking>`` spans are split out (Nova models only).
+        self._splits = model is not None and splits_thinking(model)
+        self._splitters: dict[int, _ThinkingSplitter] = {}
         self._calls: dict[int, _OpenCall] = {}
         self._reasoning: dict[int, _OpenReasoning] = {}
         self._stop: StopReason | None = None
@@ -399,7 +574,12 @@ class StreamMapper:
             body = raw["contentBlockDelta"]
             delta = body["delta"]
             if "text" in delta:
-                if delta["text"]:
+                if delta["text"] and self._splits:
+                    splitter = self._splitters.setdefault(
+                        body["contentBlockIndex"], _ThinkingSplitter()
+                    )
+                    yield from _thinking_events(splitter.feed(delta["text"]))
+                elif delta["text"]:
                     yield TextDelta(text=delta["text"])
             elif "toolUse" in delta:
                 open_call = self._calls.get(body["contentBlockIndex"])
@@ -414,6 +594,9 @@ class StreamMapper:
             # Other deltas are not surfaced.
         elif "contentBlockStop" in raw:
             index = raw["contentBlockStop"]["contentBlockIndex"]
+            ended = self._splitters.pop(index, None)
+            if ended is not None:
+                yield from _thinking_events(ended.end())
             reasoning = self._reasoning.pop(index, None)
             if reasoning is not None:
                 yield ProviderStateReported(state=reasoning_state(reasoning.whole()))
@@ -433,17 +616,27 @@ class StreamMapper:
         """The final ``StreamStopped``, once the stream has ended."""
         if self._stop is None or self._usage is None or self._calls or self._reasoning:
             raise _protocol()
+        for index in sorted(self._splitters):  # a block that never saw its stop event
+            yield from _thinking_events(self._splitters[index].end())
+        self._splitters.clear()
         yield StreamStopped(stop_reason=self._stop, usage=self._usage)
 
 
-def events_from_converse_response(response: Mapping[str, Any]) -> list[StreamEvent]:
+def events_from_converse_response(
+    response: Mapping[str, Any], *, model: str | None = None
+) -> list[StreamEvent]:
     """The stream events a whole Converse response describes."""
+    splits = model is not None and splits_thinking(model)
     try:
         content: Sequence[Mapping[str, Any]] = response["output"]["message"]["content"]
         events: list[StreamEvent] = []
         for block in content:
             if "text" in block:
-                if block["text"]:
+                if block["text"] and splits:
+                    splitter = _ThinkingSplitter()
+                    parts = splitter.feed(block["text"]) + splitter.end()
+                    events.extend(_thinking_events(_joined(parts)))
+                elif block["text"]:
                     events.append(TextDelta(text=block["text"]))
             elif "toolUse" in block:
                 use = block["toolUse"]

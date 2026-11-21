@@ -464,6 +464,175 @@ def glm_text() -> Recording:
     return _text_only("glm-5-text-stream", "zai.glm-5", "us-west-2")
 
 
+#: What Amazon Nova writes into a reply as reasoning (the Nova user guide: chain-of-thought
+#: "contained in <thinking> tags"), and what follows it.
+NOVA_THOUGHT = "The notes name one host and one time. I should summarise them briefly."
+NOVA_ANSWER = "host-a.example.com stopped answering at 09:00."
+#: A non-Nova answer that merely mentions the tag; it is answer text and stays whole.
+TAG_MENTION = "Wrap your plan in <thinking>...</thinking> tags, like `<thinking>plan</thinking>`."
+
+
+def _text_block(pieces: list[str], index: int) -> list[dict[str, Any]]:
+    return [
+        {"contentBlockDelta": {"delta": {"text": piece}, "contentBlockIndex": index}}
+        for piece in pieces
+    ] + [{"contentBlockStop": {"contentBlockIndex": index}}]
+
+
+def _tool_block(index: int, tool_use_id: str, host: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "contentBlockStart": {
+                "start": {"toolUse": {"toolUseId": tool_use_id, "name": "lookup_host"}},
+                "contentBlockIndex": index,
+            }
+        },
+        {
+            "contentBlockDelta": {
+                "delta": {"toolUse": {"input": '{"host": "' + host[:6]}},
+                "contentBlockIndex": index,
+            }
+        },
+        {
+            "contentBlockDelta": {
+                "delta": {"toolUse": {"input": host[6:] + '"}'}},
+                "contentBlockIndex": index,
+            }
+        },
+        {"contentBlockStop": {"contentBlockIndex": index}},
+    ]
+
+
+def _stream(
+    blocks: list[dict[str, Any]], stop_reason: str, usage: dict[str, Any]
+) -> list[dict[str, Any]]:
+    return [
+        {"messageStart": {"role": "assistant"}},
+        *blocks,
+        {"messageStop": {"stopReason": stop_reason}},
+        {"metadata": {"usage": usage, "metrics": {"latencyMs": 450}}},
+    ]
+
+
+def nova_thinking_split_stream() -> Recording:
+    """Nova Lite: a reply whose <thinking> tags are split across stream chunks."""
+    pieces = [
+        "<thin",
+        "king>The notes name one host and one time.",
+        " I should summarise them briefly.</thin",
+        "king>\n\nhost-a.example.com ",
+        "stopped answering at 09:00.",
+    ]
+    return _vendor(
+        "nova-lite-thinking-split-stream",
+        "amazon.nova-lite-v1:0",
+        "us-east-1",
+        _stream(_text_block(pieces, 0), "end_turn", _usage(48, 40)),
+        system_cache=True,
+    )
+
+
+def nova_thinking_tool_stream() -> Recording:
+    """Nova Lite: a span before and a span after a tool call, then a second tool call."""
+    blocks = [
+        *_text_block(["<thinking>I should look the host up.</thinking>"], 0),
+        *_tool_block(1, "tooluse_example0001", "host-a.example.com"),
+        *_text_block(["<thinking>", "A second lookup helps.", "</thinking>"], 2),
+        *_tool_block(3, "tooluse_example0002", "host-b.example.com"),
+    ]
+    return _vendor(
+        "nova-lite-thinking-tool-stream",
+        "amazon.nova-lite-v1:0",
+        "us-east-1",
+        _stream(blocks, "tool_use", _usage(52, 61)),
+        tools=True,
+        system_cache=True,
+    )
+
+
+def nova_thinking_converse() -> Recording:
+    """Nova Pro through Converse: two spans in one text block, a tool call, then a span."""
+    return _vendor(
+        "nova-pro-thinking-converse",
+        "amazon.nova-pro-v1:0",
+        "us-east-1",
+        {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "text": "<thinking>First thought.</thinking>\n\nChecking now.\n"
+                            "<thinking>Second thought.</thinking>\nOne moment."
+                        },
+                        {
+                            "toolUse": {
+                                "toolUseId": "tooluse_example0001",
+                                "name": "lookup_host",
+                                "input": {"host": "host-a.example.com"},
+                            }
+                        },
+                        {"text": "<thinking>Third thought.</thinking>"},
+                    ],
+                }
+            },
+            "stopReason": "tool_use",
+            "usage": _usage(64, 58),
+            "metrics": {"latencyMs": 700},
+        },
+        operation="Converse",
+        tools=True,
+        system_cache=True,
+    )
+
+
+def nova_plain_stream() -> Recording:
+    """Nova Lite answering with no thinking at all."""
+    return _vendor(
+        "nova-lite-plain-stream",
+        "amazon.nova-lite-v1:0",
+        "us-east-1",
+        _stream(
+            _text_block(["host-a.example.com ", "stopped answering at 09:00."], 0),
+            "end_turn",
+            _usage(48, 12),
+        ),
+        system_cache=True,
+    )
+
+
+def nova_thinking_unclosed_stream() -> Recording:
+    """Nova Lite cut off by its token limit inside a <thinking> span."""
+    pieces = ["<thinking>The notes name one host", " and one time. I sho"]
+    return _vendor(
+        "nova-lite-thinking-unclosed-stream",
+        "amazon.nova-lite-v1:0",
+        "us-east-1",
+        _stream(_text_block(pieces, 0), "max_tokens", _usage(48, 1024)),
+        system_cache=True,
+    )
+
+
+def deepseek_tag_mention() -> Recording:
+    """A non-Nova model whose answer mentions the tag: not parsed, not held back."""
+    pieces = [TAG_MENTION[:20], TAG_MENTION[20:]]
+    return _vendor(
+        "deepseek-v3-2-tag-mention-stream",
+        "deepseek.v3.2",
+        "ap-southeast-2",
+        _stream(_text_block(pieces, 0), "end_turn", _usage(37, 29)),
+    )
+
+
+NOVA_THINKING = (
+    nova_thinking_split_stream,
+    nova_thinking_tool_stream,
+    nova_thinking_converse,
+    nova_plain_stream,
+    nova_thinking_unclosed_stream,
+    deepseek_tag_mention,
+)
+
 #: One recording at least per non-Anthropic vendor the catalogue declares: Amazon,
 #: Mistral AI, Qwen, OpenAI, NVIDIA, DeepSeek, MiniMax, Moonshot AI, Writer and Z.AI.
 VENDORS = (
@@ -480,7 +649,7 @@ VENDORS = (
     glm_text,
 )
 
-ALL = (sonnet_4_6_in_region, sonnet_5_in_region, uncached_profile, *VENDORS)
+ALL = (sonnet_4_6_in_region, sonnet_5_in_region, uncached_profile, *VENDORS, *NOVA_THINKING)
 
 
 def path(recording: Recording) -> Path:

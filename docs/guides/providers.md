@@ -176,6 +176,22 @@ assert "eu-west-2" in (europe.regions or ())
 
 With `endpoint_url` set (or `discovery: {"<name>": "catalogue"}` in the settings) the provider is not listed: it serves only the models the catalogue declares, with the residency an overlay entry declares, and an entry that declares none is `global`, refused under any policy that names Regions.
 
+### Reasoning
+
+Claude and a few other models return a reasoning block (`reasoningContent`) apart from the reply. conduit reports each one, whole and in its place, as a provider state block (`provider_kind` `bedrock`, `state_type` `reasoning_content`), never as answer text, and sends it back on the next turn as Bedrock needs for tool use with reasoning.
+
+Amazon Nova does not return a reasoning block. It writes its reasoning into the reply text as `<thinking>...</thinking>`: the Nova user guide's tool use page says the default behaviour for tool calling is chain-of-thought "contained in <thinking> tags", with multiple tool calls and thinking blocks in one response. For Nova models only (matched on the base model id, so `apac.amazon.nova-lite-v1:0` counts), conduit moves each span out of the text and reports it as a provider state block of the same shape, without a signature, so a product reads Nova's reasoning where it reads Claude's and can show it apart from the answer. Its `state_type` is `thinking_text`, not `reasoning_content`, so that tag text can be told from a native reasoning block:
+
+- The answer text carries neither the tags nor what they hold. Whitespace after a closing tag is dropped (one space is kept where the answer text before the span did not end in whitespace, so "is" and "42" do not join; a paragraph break after the span becomes that one space), and so is the span's own leading and trailing whitespace. Whitespace before a span stays in the answer text.
+- Streamed text holds back only a trailing piece that could be the start of `<thinking>` (such as `<thin`), and releases it as text as soon as it proves not to be, or when the block ends. Ordinary text is never delayed beyond that.
+- Several spans in one reply, before and after tool use, are each reported in their place.
+- A span still open when its block ends (a reply cut off by its token limit) is reasoning, not answer text.
+- `thinking_text` state is never sent back to any model, as a reasoning block or as text: it has no signature and is Nova's own text format, so a transcript handed from Nova to Claude carries none of it. Native `reasoning_content` state keeps the rule above for every model, Nova 2 included. An assistant message that held only `thinking_text` (a reply cut off inside a span) is left out of the next request, and the user messages either side of it are merged so the roles still alternate; a prompt cache point on that message moves to the end of the message before it. This applies to any model's state-only assistant turn, since Bedrock refuses an empty message.
+- Text from any other model is never parsed, so an answer that mentions the tag, or shows it in a code block, is left as it was.
+- Limits: spans do not nest, so the inner closing tag of a nested `<thinking>` ends the span and the rest of the outer span appears in the answer text. The model match is case-sensitive, and an ARN-form model id is not recognised as Nova (as with the other model-family checks in this adapter).
+
+A reasoning request field (turning reasoning on or off, or setting its effort) is not part of this.
+
 ### Logging and credentials
 
 botocore's signer logs every signature at DEBUG on `botocore.auth`, and a short-term key can be rebuilt from those records; botocore's endpoint logs each request object at DEBUG, which a buffering handler could render after the bearer key is set. When a provider uses API keys, conduit installs two filters on botocore's loggers, once per process: one drops `botocore.auth` records whose message starts with `Signature:`, and one renders every `botocore.endpoint` record when it is logged. Both are process-wide, so they also apply to the product's own botocore clients. Removing them gives back every signature (and with it every short-term key) and every bearer key to whatever the product's handlers write; do that only for local debugging with throwaway credentials. The presign step is `conduit.providers.bedrock.auth.short_term_keys`, shared by the bedrock and bedrock-mantle adapters.
