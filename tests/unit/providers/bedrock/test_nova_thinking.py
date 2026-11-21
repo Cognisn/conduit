@@ -567,3 +567,13 @@ class TestEmptiedTurnWithACachePoint:
     def test_with_nothing_before_it_the_point_is_dropped(self) -> None:
         sent = self._cached(self.CUT_OFF, Message.user("b"))
         assert sent == [{"role": "user", "content": [{"text": "b"}]}]
+
+    def test_two_breakpoints_on_an_emptied_turn_carry_one_point(self) -> None:
+        twice = Message(
+            role="assistant",
+            content=(thought("zz-cut-off-zz").state, CacheBreakpoint(), CacheBreakpoint()),
+        )
+        sent = self._cached(Message.user("a"), twice, Message.user("b"))
+        assert sent == [
+            {"role": "user", "content": [{"text": "a"}, CACHE_POINT, {"text": "b"}]},
+        ]
