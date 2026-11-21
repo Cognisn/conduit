@@ -12,7 +12,7 @@ conduit supplies mechanisms; the product keeps its policy. The product declares:
 - its **settings**: the providers it configures, which provider and model serve each task class, its residency policy, its content-capture policy and its catalogue overlays;
 - its **backends**: a secret resolver always, and an event sink, transcript store, approval handler, skill source and token store where it uses the layers that need them (see [Writing backends](backends.md)).
 
-`start` checks all of it at once and builds the providers. Anything wrong (an undeclared model, a model below a floor, an assignment that breaches residency, a credential written in plain text) is refused there, before any client exists, and never part-way through a task.
+`start` checks all of it at once and builds the providers. Anything wrong (a model the provider does not list, a model below a floor, an assignment that breaches residency, a credential written in plain text) is refused there, before any provider is built, and never part-way through a task.
 
 ```python
 import asyncio
@@ -176,19 +176,19 @@ assert "lacks labels tier:light" in asyncio.run(refused_at_start())
 
 ## The model catalogue and overlays
 
-Every model a product uses must be declared in the catalogue: an undeclared model is refused (`UndeclaredModel`), because a floor or a residency policy only protects anything if it is checked against a record the deployment controls. conduit ships a versioned default catalogue as package data, reviewed at each conduit point release. Each entry has a provider, a model id, a kind (`chat` or `embedding`), a residency scope with its regions, capability flags, a context window, an output limit or embedding dimensions, and labels.
+Which models a provider can use, and where each request is processed, is the provider's own listing's to say (C18; see [Discovering the models a provider reaches](#discovering-the-models-a-provider-reaches)). The catalogue holds what listings do not report: for each model a provider, a model id, a kind (`chat` or `embedding`), capability flags, a context window, an output limit or embedding dimensions, and labels. conduit ships a versioned default catalogue as package data, reviewed at each conduit point release, keyed by the provider's base model id (a Bedrock inference profile takes the entry of the foundation model its listing names). It carries no Region data.
 
 ```python
 from conduit import default_catalogue
 
 catalogue = default_catalogue()
-entry = catalogue.require("bedrock", "eu.anthropic.claude-sonnet-5")
-assert entry.residency_scope == "cross_region"
-assert "eu-west-2" in entry.regions
+entry = catalogue.require("bedrock", "anthropic.claude-sonnet-5")
+assert entry.residency_scope is None  # the listing says where it is processed
 assert entry.capabilities.prompt_caching
+assert catalogue.get("bedrock", "eu.anthropic.claude-sonnet-5") is None  # matched by base id
 ```
 
-A product changes the catalogue with overlays in its settings. Each overlay withdraws, then overrides, then adds entries; entries are keyed by provider and model id, so the same model id under two providers is two entries. Overlays are how a product declares a model conduit does not ship (a Foundry deployment, a local model, a newer release), labels entries for its floors, corrects a region list, or withdraws a model it must never use.
+A product changes the catalogue with overlays in its settings. Each overlay withdraws, then overrides, then adds entries; entries are keyed by provider and model id, so the same model id under two providers is two entries. Overlays are how a product describes a model conduit does not (a newer release, a local model), labels entries for its floors, corrects a capability or limit, declares a model with its residency for a provider conduit cannot list (a Foundry deployment), or withdraws a model it must never use. An overlay's entry is the deployment's own reviewed statement: it wins over the listing's limits and capabilities, though never over the listing's residency.
 
 ```python
 overlaid = ConduitSettings.model_validate(
@@ -214,9 +214,7 @@ overlaid = ConduitSettings.model_validate(
                         "labels": ["tier:light"],
                     }
                 ],
-                "withdraw": [
-                    {"provider": "bedrock", "model_id": "global.anthropic.claude-sonnet-5"}
-                ],
+                "withdraw": [{"provider": "bedrock", "model_id": "anthropic.claude-sonnet-5"}],
             }
         ],
     }
@@ -231,7 +229,7 @@ async def started_with_overlay() -> list[str]:
         secrets=LiteralSecretResolver({}),
     )
     try:
-        assert runtime.catalogue.get("bedrock", "global.anthropic.claude-sonnet-5") is None
+        assert runtime.catalogue.get("bedrock", "anthropic.claude-sonnet-5") is None
         return [runtime.for_task(name).assignment.model for name in sorted(runtime.assignments)]
     finally:
         await runtime.aclose()
@@ -240,74 +238,93 @@ async def started_with_overlay() -> list[str]:
 assert asyncio.run(started_with_overlay()) == ["stub-echo", "stub-light", "stub-light"]
 ```
 
-Adding an entry that already exists, or overriding or withdrawing one that does not, is refused, so an overlay cannot silently drift from the catalogue it was written against. Read `runtime.catalogue.version` and `runtime.catalogue.overlays` to record which catalogue a deployment ran with.
+A withdrawn model is refused even when a provider lists it, so withdrawing is how a product keeps out a model a listing would otherwise make usable; a model the catalogue lacks may be withdrawn too. Adding an entry that already exists, or overriding one that does not, is refused, so an overlay cannot silently drift from the catalogue it was written against. Read `runtime.catalogue.version` and `runtime.catalogue.overlays` to record which catalogue a deployment ran with.
 
 ## Residency
 
-Each catalogue entry has a residency scope:
+Each model has a residency scope:
 
 | Scope | Meaning |
 |---|---|
 | `local` | Runs on the deployment's own hosts (Ollama, local embeddings, the stub). |
-| `in_region` | Processed in the region the provider is called in, one of the entry's regions. |
-| `cross_region` | May be processed in any of the entry's regions (a Bedrock geographic inference profile, for example). |
+| `in_region` | Processed in the region the provider is called in. |
+| `cross_region` | May be processed in any of a set of regions (a Bedrock geographic inference profile, for example). |
 | `global` | May be processed anywhere the provider chooses. |
 
-`ResidencyPolicy` allows a set of scopes and, optionally, a set of regions. With regions set, a `global` entry is always refused (its processing regions are not bounded), an `in_region` entry must be called in an allowed region, and every region a `cross_region` entry may use must be allowed. A breach is `ResidencyRefused` at start-up:
+For a listed provider the scope and its regions are the listing's: a Bedrock profile's destination Regions exactly as AWS reports them, `global` for an API with no Region notion, and `local` for a model on the Ollama server (`global` if the server forwards it to a remote host); [Providers](providers.md#model-discovery) lists what each adapter reports. For a provider that is not listed they are those the catalogue entry declares, and an entry that declares none is `global`.
+
+`ResidencyPolicy` allows a set of scopes and, optionally, a set of regions. With regions set, a `global` model is always refused (its processing regions are not bounded), an `in_region` model must be called in an allowed region, and every region a `cross_region` model may use must be allowed. A breach is `ResidencyRefused` at start-up, before any provider is built and before any model is called:
 
 ```python
-from conduit import ResidencyRefused
+from conduit import DiscoveredModel, ResidencyRefused, ResidencyScope
 
-in_region_only = {"scopes": ["local", "in_region"], "regions": ["eu-west-2"]}
 
-bedrock_settings = ConduitSettings.model_validate(
+def profile(*regions: str) -> DiscoveredModel:
+    """A synthetic geographic profile, as a listing reports it."""
+    return DiscoveredModel(
+        "geo.example.model-v1",
+        scope=ResidencyScope.CROSS_REGION,
+        regions=frozenset(regions),
+        base_model_id="example.model-v1",
+    )
+
+
+geography = {"scopes": ["local", "in_region", "cross_region"], "regions": ["xx-home-1", "xx-away-1"]}
+listed_settings = ConduitSettings.model_validate(
     {
-        "providers": {"bedrock": {"kind": "bedrock", "region": "eu-west-2"}},
-        "assignments": {
-            "triage": {"provider": "bedrock", "model": "eu.anthropic.claude-sonnet-5"},
+        "providers": {
+            "local": {"kind": "stub", "not_for_production": True, "region": "xx-home-1"}
         },
-        "residency": in_region_only,
+        "assignments": {"triage": {"provider": "local", "model": "geo.example.model-v1"}},
+        "residency": geography,
     }
 )
 
 
-async def residency_refusal() -> str:
+async def residency_outcome(*regions: str) -> str:
     try:
-        await start(
-            bedrock_settings,
+        runtime = await start(
+            listed_settings,
             task_classes=[TRIAGE],
-            factories=builtin_factories(),
+            factories=[StubFactory(models=[profile(*regions)])],
             secrets=LiteralSecretResolver({}),
         )
     except ResidencyRefused as refusal:
         return str(refusal)
-    raise AssertionError("a cross-region profile breaches an in-region policy")
+    await runtime.aclose()
+    return "started"
 
 
-assert "scope cross_region is not allowed" in asyncio.run(residency_refusal())
+assert asyncio.run(residency_outcome("xx-home-1", "xx-away-1")) == "started"
+assert "outside the allowed regions" in asyncio.run(
+    residency_outcome("xx-home-1", "xx-away-1", "xx-extra-1")
+)
 ```
 
-The refusal comes before the Bedrock client would be built, so no credentials are needed to see it. Assigning `anthropic.claude-sonnet-5` (the in-region entry) instead passes the policy. A provider built outside `start` (with `ProviderRegistry.build` and no assignments) is held to the registry's policy on every call instead.
+The same profile is allowed when the provider routes it only to Regions the policy names, and refused when its listing adds one more: the decision follows the listing, never a stale catalogue. A provider built outside `start` (with `ProviderRegistry.build` and no assignments) is held to the registry's policy on every call instead, on the catalogue's declared residency.
 
 Residency in conduit covers where the model provider processes a request. Where the product stores transcripts and events is the product's decision, through its own backends.
 
 ## Discovering the models a provider reaches
 
-A product that shows its connections (which declared models a configured provider can reach, and which reachable models the catalogue lacks) asks the provider registry. `ProviderRegistry.discover(name, settings)` validates the settings, resolves the secrets and builds the client exactly as `build` does, asks the adapter for the models it lists, closes the client again, and joins each listed id to the catalogue, the residency policy and the provider's region. It returns a `DiscoveryResult`; each model in it is a `ModelAvailability` with one of three outcomes:
+The provider's own listing is the source of truth for which models a configured provider can use (C18). `start` lists every provider a task class is assigned to, once, before anything is built, and keeps each result on `runtime.discovery`, fixed for the runtime's life; a product that shows its connections asks the provider registry at any time with `ProviderRegistry.discover(name, settings)`. Either way the registry validates the settings, resolves the secrets and builds the client exactly as `build` does, asks the adapter for the models it lists, closes the client again, and joins each listed model to the catalogue and the residency policy. It returns a `DiscoveryResult`; each model in it is a `ModelAvailability`:
 
-| Outcome | Meaning |
+| Field | Meaning |
 |---|---|
-| `allowed` | Declared, offered in the provider's region and within the residency policy. |
-| `refused` | Declared, but start-up would refuse an assignment to it; `reason` is the refusal start-up gives (not offered in the region, or the residency policy's reason). |
-| `undeclared` | The catalogue does not declare it for this provider. |
+| `outcome` | `allowed`, or `refused` with the `reason` start-up gives (outside the residency policy, withdrawn by an overlay, or an embedding model with no catalogue entry). |
+| `scope`, `regions` | Where the listing says a request is processed. |
+| `entry` | The effective entry: the listing's scope and Regions with the capabilities and limits the join settled on. |
+| `catalogued` | Whether a catalogue entry matched it, by its listed id or the base model id the listing gives. |
 
-Each model carries the id as the provider names it, the provider's own label for the entry where the listing gives one (a Bedrock inference profile's type, for example), and the catalogue entry when declared. Nothing else from the provider's answer is kept. An adapter that cannot list for the settings (no listing documented for that endpoint) gives a result with `supported` false and a `reason`; that is reported, never raised, and nothing is built. A failed listing raises `ProviderError`, as a failed call does.
+A listed model's capabilities and limits are, field by field: an overlay's entry outright; else the limits the listing reports (Anthropic, Gemini and X.AI report some), then the default entry; a capability flag is set only if some source asserts it and none denies it; else the conservative floor, `FLOOR_CONTEXT_WINDOW` (8,192 tokens) and `FLOOR_OUTPUT_LIMIT` (4,096), with no capabilities. An uncatalogued model is therefore usable by a task class with a modest floor, and refused by one that needs tools, vision, caching, structured output or a larger window, until an overlay describes it.
+
+`DiscoveryResult.drift` reports, as `CatalogueDrift` values, every difference between the catalogue and the listing, with a fixed `detail`: a listed model with no entry (`uncatalogued`), an entry the provider does not list (`unlisted`), limits or capabilities the listing reports differently (`limits_differ`, `capabilities_differ`), and an overlay's residency for a model the provider lists (`regions_declared`). Drift is reported, never used to hide a model.
 
 ```python
-from conduit import DiscoveryOutcome, ProviderRegistry, ResidencyPolicy
+from conduit import DiscoveredModel, DiscoveryOutcome, DriftReason, ProviderRegistry, ResidencyPolicy
 
 
-async def connection_screen() -> dict[str, str]:
+async def connection_screen() -> tuple[dict[str, str], set[tuple[str, str]]]:
     registry = ProviderRegistry(
         secrets=LiteralSecretResolver({}),
         residency=ResidencyPolicy(scopes=["local"]),
@@ -315,18 +332,19 @@ async def connection_screen() -> dict[str, str]:
     )
     result = await registry.discover("local", {"kind": "stub", "not_for_production": True})
     assert result.supported
-    return {model.model_id: model.outcome.value for model in result.models}
+    outcomes = {model.model_id: model.outcome.value for model in result.models}
+    return outcomes, {(item.model_id, item.reason.value) for item in result.drift}
 
 
-assert asyncio.run(connection_screen()) == {
-    "stub-echo": DiscoveryOutcome.ALLOWED,
-    "example-new-model": DiscoveryOutcome.UNDECLARED,
-}
+outcomes, drift = asyncio.run(connection_screen())
+assert outcomes == {"stub-echo": DiscoveryOutcome.ALLOWED, "example-new-model": DiscoveryOutcome.ALLOWED}
+assert ("example-new-model", DriftReason.UNCATALOGUED) in drift
+assert ("stub-embed", DriftReason.UNLISTED) in drift
 ```
 
-Discovery never permits a model. The catalogue is unchanged by it, and a built provider still refuses an undeclared model with `UndeclaredModel` before any client call; conduit never writes an overlay of its own. To use a model discovery reports as undeclared, the product writes a catalogue overlay entry for it (its residency scope and regions, capabilities, context window and output limit, from the provider's documentation), has a person review it, and starts conduit again with the overlay in its settings, as [The model catalogue and overlays](#the-model-catalogue-and-overlays) shows. A model reported as refused needs a change of residency policy or region, not an overlay.
+A listing that fails stops start-up before any provider is built: conduit never runs on a stale or partial view of a provider. A provider whose adapter cannot list for its settings (Claude in Foundry, Foundry's OpenAI v1 endpoint, Bedrock or bedrock-mantle with `endpoint_url`, the stub without a listing), or that the settings put in catalogue mode with `"discovery": {"<name>": "catalogue"}` (for example, credentials without the Bedrock list permissions), is not listed: it serves only the models the catalogue declares, with the residency an entry declares, `global` where it declares none.
 
-Each discovery whose settings validate emits one `DiscoveryFinishedEvent`, however it ends (a secret that cannot be resolved or a client that cannot be built is a `failed` discovery), with the provider's name and kind, the count per outcome, the duration and the outcome (`ok`, `failed` or `unsupported`). The listing itself (each id with its outcome) is content of the prompt kind: the event always carries its hash and size, and its text only when the capture policy captures prompts. From sync code, `SyncRuntime.discover(name)` lists a provider the runtime built (with `settings` as well for any other configured provider), on the runtime's loop and under the facade's loop guard; `sync(registry).discover(...)` serves a registry the product holds. Results are not cached: each call asks the provider again.
+Each discovery whose settings validate emits one `DiscoveryFinishedEvent`, however it ends (a secret that cannot be resolved or a client that cannot be built is a `failed` discovery), with the provider's name and kind, the count per outcome and per drift reason, the duration and the outcome (`ok`, `failed` or `unsupported`). The joined listing itself (each model with its outcome, scope, Regions and drift) is content of the prompt kind: the event always carries its hash and size, and its text only when the capture policy captures prompts. From sync code, `SyncRuntime.discover(name)` lists a provider the runtime built (with `settings` as well for any other configured provider), on the runtime's loop and under the facade's loop guard; `sync(registry).discover(...)` serves a registry the product holds. `registry.discover` results are not cached: each call asks the provider again, and only `runtime.discovery` is fixed.
 
 What each adapter lists is in [Providers](providers.md).
 
