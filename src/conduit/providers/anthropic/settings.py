@@ -1,4 +1,14 @@
-"""Settings for the Anthropic adapter: the direct API, or Claude in Microsoft Foundry."""
+"""Settings for the Anthropic adapter: the direct API, or Claude in Microsoft Foundry.
+
+Regions. On the direct API, ``inference_geo`` chooses where inference runs
+(https://platform.claude.com/docs/en/manage-claude/data-residency): ``us`` keeps it on
+US infrastructure (``anthropic:us``) and is sent on every request, for the models that
+support it (``INFERENCE_GEO_MODELS``, Claude 4.6 and later; others answer 400, so they
+are ``global`` here and refused by the choice); ``global`` lets it run in any geography.
+Claude in Foundry has no ``inference_geo``: its processing is the deployment type,
+declared with ``deployment`` as for the OpenAI-compatible adapter's Foundry service.
+``region`` is set from the choice and may not be given otherwise.
+"""
 
 from __future__ import annotations
 
@@ -7,9 +17,58 @@ from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator, model_validator
 
+from conduit.core.residency import (
+    OfferedRegion,
+    RegionChoice,
+    RegionListing,
+    Residency,
+    ResidencyScope,
+)
 from conduit.core.secrets import SecretRef
-from conduit.core.settings import ProviderSettings
-from conduit.providers.openai_compat.settings import FoundryEntraId
+from conduit.core.settings import FieldsRefused, ProviderSettings
+from conduit.providers.openai_compat.settings import (
+    FoundryEntraId,
+    FoundryProcessing,
+    foundry_listing,
+)
+
+#: The data residency documentation, read on REGIONS_AS_OF.
+DATA_RESIDENCY_DOCUMENTATION = "https://platform.claude.com/docs/en/manage-claude/data-residency"
+REGIONS_AS_OF = "2026-11-21"
+#: The models that take ``inference_geo`` (the page's supported models), and their dated
+#: snapshots. Any other model answers a request carrying it with a 400.
+INFERENCE_GEO_MODELS = frozenset(
+    {
+        "claude-fable-5-2",
+        "claude-mythos-5-2",
+        "claude-fable-5-1",
+        "claude-mythos-5-1",
+        "claude-fable-5",
+        "claude-mythos-5",
+        "claude-mythos-preview",
+        "claude-opus-5-5",
+        "claude-opus-5",
+        "claude-sonnet-5-5",
+        "claude-sonnet-5",
+        "claude-haiku-5-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+    }
+)
+GLOBAL_OPTION = "inference_geo global: inference may run in any geography Anthropic serves"
+US_CODE = "anthropic:us"
+
+
+def supports_inference_geo(model_id: str) -> bool:
+    """Whether ``model_id`` (or the model it is a dated snapshot of) takes
+    ``inference_geo``."""
+    if model_id in INFERENCE_GEO_MODELS:
+        return True
+    head, _, tail = model_id.rpartition("-")
+    return head in INFERENCE_GEO_MODELS and tail.isdigit() and len(tail) == 8
+
 
 #: The direct API's endpoint. Always passed explicitly, so ``ANTHROPIC_BASE_URL`` in the
 #: environment never redirects a conduit client.
@@ -38,6 +97,10 @@ class AnthropicSettings(ProviderSettings):
     entra_id: FoundryEntraId | None = None
     base_url: str | None = Field(default=None, max_length=2048)
     max_retries: int = Field(default=2, ge=0, le=10)
+    #: Where inference runs on the direct API; sent on every request when set.
+    inference_geo: Literal["us", "global"] | None = None
+    #: A Foundry deployment's type and Azure region (``endpoint: foundry`` only).
+    deployment: FoundryProcessing | None = None
 
     @field_validator("base_url")
     @classmethod
@@ -77,3 +140,69 @@ class AnthropicSettings(ProviderSettings):
         elif (self.api_key is None) == (self.entra_id is None):
             raise ValueError("endpoint foundry needs exactly one of api_key and entra_id")
         return self
+
+    @model_validator(mode="after")
+    def _regions(self) -> Self:
+        if self.inference_geo is not None and self.endpoint != "direct":
+            raise FieldsRefused(
+                "inference_geo is only for endpoint direct; a Foundry deployment's "
+                "processing is its deployment type",
+                ["inference_geo"],
+            )
+        if self.inference_geo == "us" and self.base_url is not None:
+            raise FieldsRefused(
+                "inference_geo us cannot be guaranteed through a base_url gateway",
+                ["inference_geo"],
+            )
+        if self.deployment is not None and self.endpoint != "foundry":
+            raise FieldsRefused("deployment is only for endpoint foundry", ["deployment"])
+        chosen = self._invocation
+        if chosen is None:
+            return self
+        if self.region is not None and self.region != chosen:
+            raise FieldsRefused(
+                "region is set by the inference_geo or deployment choice; leave it unset",
+                ["region"],
+            )
+        object.__setattr__(self, "region", chosen)  # frozen: set once, while validating
+        return self
+
+    @property
+    def _invocation(self) -> str | None:
+        if self.inference_geo == "us":
+            return US_CODE
+        if self.deployment is not None:
+            return self.deployment.invocation
+        return None
+
+    def region_choice(self) -> RegionChoice | None:
+        if self.inference_geo == "us":
+            return RegionChoice(regions=frozenset({US_CODE}))
+        if self.deployment is not None:
+            return self.deployment.choice()
+        return None
+
+    def declared_residency(self, model_id: str) -> Residency | None:
+        if self.inference_geo == "us" and supports_inference_geo(model_id):
+            return Residency(ResidencyScope.CROSS_REGION, frozenset({US_CODE}))
+        if self.inference_geo is not None:
+            return Residency(ResidencyScope.GLOBAL)
+        if self.deployment is not None:
+            return self.deployment.residency()
+        return None
+
+    @classmethod
+    def offered_regions(cls) -> tuple[RegionListing, ...]:
+        direct = RegionListing(
+            kind="anthropic",
+            service="direct",
+            regions=(
+                OfferedRegion(
+                    US_CODE, "United States", invocation=True, scope=ResidencyScope.CROSS_REGION
+                ),
+            ),
+            global_option=GLOBAL_OPTION,
+            documentation=DATA_RESIDENCY_DOCUMENTATION,
+            as_of=REGIONS_AS_OF,
+        )
+        return (direct, foundry_listing("anthropic"))

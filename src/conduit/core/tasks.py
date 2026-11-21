@@ -214,7 +214,7 @@ def resolve_assignments(
                 f"{name}: model {assignment.model!r} is below the task's floor: "
                 + "; ".join(shortfalls)
             )
-        policy.check(entry, provider.region, task=name)
+        policy.check(entry, provider.region, task=name, provider=provider)
         limit = entry.output_limit or 0
         max_output = assignment.max_output_tokens or limit
         if max_output > limit:

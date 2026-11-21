@@ -130,10 +130,15 @@ class _Marks:
             block["cache_control"] = dict(_EPHEMERAL)
 
 
-def build_params(request: ModelRequest, *, structured_output: bool) -> dict[str, Any]:
-    """The keyword arguments for ``client.messages.create``, streaming."""
+def build_params(
+    request: ModelRequest, *, structured_output: bool, inference_geo: str | None = None
+) -> dict[str, Any]:
+    """The keyword arguments for ``client.messages.create``, streaming. ``inference_geo``
+    is the connection's choice of where inference runs, sent when set."""
     marks = _Marks()
     params: dict[str, Any] = {"model": request.model, "max_tokens": request.max_output_tokens}
+    if inference_geo is not None:
+        params["inference_geo"] = inference_geo
 
     if request.tools:
         params["tools"] = [

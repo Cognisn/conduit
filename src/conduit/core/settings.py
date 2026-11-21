@@ -23,12 +23,15 @@ from __future__ import annotations
 import re
 import types
 from collections.abc import Iterator, Mapping
-from typing import Any, ClassVar, Self, Union, get_args, get_origin
+from typing import TYPE_CHECKING, Any, ClassVar, Self, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, ValidationError, model_validator
 
 from conduit.core.errors import ConfigurationError
 from conduit.core.secrets import SecretRef
+
+if TYPE_CHECKING:
+    from conduit.core.residency import RegionChoice, RegionListing, Residency
 
 #: Name segments that mark a field as a credential.
 CREDENTIAL_SEGMENTS = frozenset(
@@ -212,7 +215,8 @@ class ProviderSettings(BaseModel):
     allow_extra_fields: ClassVar[bool] = False
 
     kind: str = Field(pattern=KIND_PATTERN)
-    #: The region the provider is called in, where that applies (residency policy).
+    #: The Region (or provider-prefixed geography) the provider is called in, where that
+    #: applies: what the residency policy and a Region choice check it against.
     region: str | None = Field(default=None, min_length=1, max_length=64)
 
     @classmethod
@@ -238,6 +242,23 @@ class ProviderSettings(BaseModel):
     def catalogue_provider(self) -> str:
         """The provider name catalogue entries use for this provider (default: kind)."""
         return self.kind
+
+    def region_choice(self) -> RegionChoice | None:
+        """Where this connection's requests may be processed, as the person chose it, or
+        ``None`` (no choice: only the deployment's residency policy applies). Adapters
+        build it from their own settings and validate it against what they offer."""
+        return None
+
+    def declared_residency(self, model_id: str) -> Residency | None:
+        """The residency this connection's endpoint guarantees for ``model_id``, which
+        replaces what a listing or an entry states, or ``None`` (nothing declared)."""
+        return None
+
+    @classmethod
+    def offered_regions(cls) -> tuple[RegionListing, ...]:
+        """The Regions this adapter offers, for a product to show as choices (static,
+        documented lists). An adapter with no Region notion offers none."""
+        return ()
 
 
 class AssignmentSettings(SettingsModel):

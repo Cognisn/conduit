@@ -174,6 +174,8 @@ assert "cross_region" not in in_region.scopes
 assert "eu-west-2" in (europe.regions or ())
 ```
 
+`region` must be a Region where the bedrock-runtime endpoint is offered (`BEDROCK_REGIONS` in `conduit.providers.bedrock.settings`, from AWS's "Regional availability by endpoints"); any other is refused when the settings are validated. `processing` chooses, per connection, the Regions requests may be processed in (see [Choosing Regions](#choosing-regions)): a profile is then allowed only if every destination its listing names is chosen, and a `global.` profile only with `allow_global`. Without `processing` only the deployment's policy applies, as before.
+
 With `endpoint_url` set (or `discovery: {"<name>": "catalogue"}` in the settings) the provider is not listed: it serves only the models the catalogue declares, with the residency an overlay entry declares, and an entry that declares none is `global`, refused under any policy that names Regions.
 
 ### Reasoning
@@ -205,6 +207,8 @@ conduit cannot filter everything botocore logs. When botocore refreshes temporar
 ## Claude through Bedrock's mantle endpoint
 
 Kind `bedrock_mantle`, extra `bedrock-mantle` (the anthropic SDK and boto3). Calls Claude through the Anthropic Messages API at `https://bedrock-mantle.<region>.api.aws/anthropic`, which runs each request in the Region it is sent to. That makes it the route to single-Region Claude where bedrock-runtime offers only inference profiles: every model the endpoint lists is `in_region` in the endpoint's Region. Its catalogue entries describe each Claude model the Bedrock model cards document on bedrock-mantle (gated Mythos models aside); which Regions serve a model is the endpoint's listing's to say.
+
+`region` must be one of the Regions where the bedrock-mantle endpoint is offered (a subset of bedrock-runtime's: `MANTLE_REGIONS` in `conduit.providers.bedrock_mantle.settings`, which also keeps ap-southeast-4, listed for mantle by several model cards though not by AWS's endpoint table); any other is refused when the settings are validated.
 
 Authentication is by Bedrock API key only: `short_term_api_key` (the default, generated from the credential chain or access keys and refreshed) or `long_term_api_key` behind `allow_long_term_api_keys`. The SDK never signs requests or reads a key or Region from the environment, and the key is set at send time, so it never appears in the request options the SDK logs. `ANTHROPIC_LOG=debug` is refused while set, since it makes the SDK log whole request bodies.
 
@@ -255,7 +259,9 @@ The client takes its key, endpoint and headers only from the settings. Three env
 - `ANTHROPIC_FOUNDRY_RESOURCE`, for a Foundry endpoint;
 - `ANTHROPIC_LOG=debug` (`info` logs only retries and is allowed).
 
-The SDK's own OpenTelemetry spans are switched off, since they can carry request content outside conduit's capture policy. The catalogue's `anthropic` entries describe the direct API (`global`): every current Claude model and every legacy model still available, as Anthropic's models overview lists them (Claude Mythos models, offered only to verified organisations, are left out). Claude in Foundry is a regional deployment: declare the models you deploy in a catalogue overlay with the resource's residency.
+The SDK's own OpenTelemetry spans are switched off, since they can carry request content outside conduit's capture policy. The catalogue's `anthropic` entries describe the direct API (`global`): every current Claude model and every legacy model still available, as Anthropic's models overview lists them (Claude Mythos models, offered only to verified organisations, are left out). Claude in Foundry is a regional deployment: declare the models you deploy in a catalogue overlay, and their processing with `deployment` (see [Choosing Regions](#choosing-regions)).
+
+`inference_geo: us` keeps inference on US infrastructure for Claude 4.6 and later (Anthropic's data residency page), is sent on every request, and a response whose `usage.inference_geo` names another geography fails the call (`REJECTED`), so a workspace default can never widen the choice. It is refused with a `base_url` gateway, which conduit cannot know passes it on, and on a Foundry endpoint, where processing is the deployment type.
 
 ## OpenAI, X.AI and Microsoft Foundry
 
@@ -319,7 +325,7 @@ declared = (
 assert declared.residency_scope == "in_region"
 ```
 
-Give the Foundry provider `region: swedencentral` in its settings so the residency policy can check it.
+Give the Foundry provider `region: swedencentral` in its settings so the residency policy can check it, or declare the deployment type with `deployment` (`{"type": "standard", "azure_region": "swedencentral"}`), which sets `region` to `azure:swedencentral` and gives every deployment the residency its type means (see [Choosing Regions](#choosing-regions)).
 
 Environment variables: the key and base URL are always passed, so `OPENAI_API_KEY` and `OPENAI_BASE_URL` are never used, and `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`, `OPENAI_ADMIN_KEY` and `OPENAI_WEBHOOK_SECRET` are cleared on every client unless the settings give an organisation or project (an OpenAI organisation id is never sent to X.AI or Foundry). Two still reach the SDK, and deployments should know them:
 
@@ -353,6 +359,64 @@ The HTTP client ignores the environment (no proxy variables, no `.netrc`) and ne
 ## The stub
 
 Kind `stub`, no extra. A deterministic, scriptable provider for tests: it never reaches a network, streams like a real provider, and reports all four usage counts (including cache reads and writes for requests with cache breakpoints). It needs `not_for_production: true` in its settings and logs a warning when built. Scripts are registered by name with `StubFactory(scripts={...})`: `echo` (the default), `scripted` turns in order, and `answer_tool_results` (call a tool, then answer from its result).
+
+## Choosing Regions
+
+A person configuring a connection can choose where its requests are processed. Each adapter takes the choice in its own terms, validates it against what the provider offers, and turns it into a `RegionChoice` (`settings.region_choice()`): the Regions (or geographies) requests may be processed in, and whether `global` processing is allowed. The choice is checked after the deployment's `ResidencyPolicy`, never instead of it, so it can only narrow what the policy allows; a model outside it is refused at start-up and by `ProviderRegistry.discover`, with the Regions named. A connection that chooses nothing behaves as before.
+
+Some endpoints also guarantee where a model is processed (`settings.declared_residency(model_id)`); that declaration replaces what a listing or a catalogue entry says. AWS Regions are written as bare codes (`ap-southeast-2`); a geography another provider offers carries the provider's prefix (`anthropic:us`, `openai:eu`, `xai:us`, `azure:swedencentral`, `azure:zone-eu`, `azure:geo-australia`), so a deployment's policy never matches a code it did not mean. A policy that names Regions must name such a code for that connection to pass. `region` is set from the choice for these providers and may not be given otherwise.
+
+| Kind (service) | Called in | The choice | Processing |
+|---|---|---|---|
+| `bedrock` | `region`, one of the Regions where bedrock-runtime is offered | `processing`: AWS Regions (including `region`), and `allow_global` | in-Region models in `region`; a geographic inference profile in the destination Regions its listing names (allowed only if every one is chosen); a `global.` profile only with `allow_global` |
+| `bedrock_mantle` | `region`, one of the Regions where bedrock-mantle is offered | none | always `in_region` in `region` |
+| `anthropic` (direct) | Anthropic's API | `inference_geo`: `us` or `global` | `us`: `anthropic:us` for Claude 4.6 and later, sent on every request (an older model would refuse it, so it is refused); `global`: anywhere |
+| `anthropic` (foundry), `openai_compat` (foundry) | the resource's endpoint | `deployment`: `type` (`global`, `data_zone`, `standard`) and `azure_region` | `global`: any Azure region; `data_zone`: the region's data zone (`azure:zone-us`, `-eu`, `-apac`); `standard`: the region's Azure geography (`azure:geo-...`). A declaration conduit cannot verify |
+| `openai_compat` (openai) | `https://<code>.api.openai.com/v1` when `data_residency` is set | `data_residency`: us, eu, au, ca, jp, in, sg, kr, gb, ae | `openai:<code>` where the region processes in-region (us, eu, au, jp, in, ae; au, jp and in only for `gpt-6-luna`); otherwise `global` (ca, sg, kr and gb store data only, so nothing is chosen) |
+| `openai_compat` (xai) | `https://us.api.x.ai/v1` when `endpoint_region` is `us` | `endpoint_region: us` | `xai:us` |
+| `gemini`, `ollama`, `stub` | as configured | none | Gemini `global` (no processing location is stated); Ollama `local`, or `global` for a model the server forwards |
+
+Unlisted Regions are refused: the Region lists are read from each provider's documentation and ship with conduit, so a Region a provider adds needs a conduit release. A product shows the choices with `ProviderRegistry.regions(kind)`: one `RegionListing` per adapter (or per service of it), each with its `OfferedRegion` values (code, name, whether a connection may be called there, what choosing it means, the Regions a geography covers, and whether it only stores data), what `global` means for that provider, the documentation it was read from and when. Where a chosen Bedrock source Region's profiles actually route comes from `ProviderRegistry.discover` on settings for that Region, never from a profile's prefix: AWS documents that destinations can differ by source Region.
+
+```python
+from conduit import RegionChoice
+
+[bedrock_regions] = registry.regions("bedrock")
+assert "ap-southeast-4" in {offered.code for offered in bedrock_regions.regions}
+assert bedrock_regions.global_option is not None
+
+australia = registry.validate(
+    "bedrock_au",
+    {
+        "kind": "bedrock",
+        "region": "ap-southeast-2",
+        "processing": {"regions": ["ap-southeast-2", "ap-southeast-4"]},
+    },
+)
+assert australia.region_choice() == RegionChoice(
+    regions=frozenset({"ap-southeast-2", "ap-southeast-4"})
+)
+assert "must include region" in refused(
+    {"kind": "bedrock", "region": "ap-southeast-2", "processing": {"regions": ["ap-southeast-4"]}}
+)
+assert "Bedrock runtime" in refused({"kind": "bedrock", "region": "xx-nowhere-1"})
+
+europe = registry.validate(
+    "gpt_eu",
+    {
+        "kind": "openai_compat",
+        "service": {"name": "openai", "api_key": "secret://openai/api_key", "data_residency": "eu"},
+    },
+)
+assert europe.region == "openai:eu"
+by_service = {listing.service: listing for listing in registry.regions("openai_compat")}
+assert {offered.code for offered in by_service["openai"].regions if offered.stores_only} == {
+    "openai:ca",
+    "openai:sg",
+    "openai:kr",
+    "openai:gb",
+}
+```
 
 ## Model discovery
 

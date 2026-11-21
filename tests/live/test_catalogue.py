@@ -1,15 +1,23 @@
-"""Live: the default catalogue verification pass (Q0002), with Bedrock's region lists.
+"""Live: the default catalogue verification pass (Q0002), on each provider's listing.
 
-One test per declared model. Each calls the model through conduit, for every route the
-run has credentials and regions for, and checks what it can observe against the entry:
+Bedrock and bedrock-mantle (C18, Q0061): one test per kind. For each configured Region
+(``BEDROCK_REGIONS`` or ``BEDROCK_REGION``, ``BEDROCK_MANTLE_REGIONS`` or
+``BEDROCK_MANTLE_REGION``) a connection is built with the run's Region choice
+(``BEDROCK_PROCESSING_REGIONS``, ``BEDROCK_ALLOW_GLOBAL``) and listed through the
+registry; every listed model it allows that a catalogue entry describes is verified
+through its listed id (bare id, each geographic profile, the global profile when the
+choice allows it), and the listing's catalogue drift and each profile's destination
+Regions are recorded. No route is taken from Regions in catalogue entries.
 
-- the model is invocable (in each catalogued region the run covers, for in-region
-  entries: Q0004's bare ids among them);
-- the provider accepts a request at the catalogued output limit;
+The other providers: one test per declared model, through the provider's one route.
+
+Every route checks what it can observe against the (listed) entry:
+
+- the model is invocable;
+- the provider accepts a request at the output limit;
 - each declared capability: tools, prompt caching, structured output, vision;
 - what a metadata API states: Anthropic's and Gemini's context window and output limit,
-  Ollama's trained context length, and the regions a Bedrock inference profile routes
-  to (compared with the entry's region list).
+  and Ollama's trained context length.
 
 Everything observed goes into the report. A mismatch fails the entry's test, naming
 the checks; what cannot be observed (OpenAI's and X.AI's limits, which no API states;
@@ -23,11 +31,13 @@ providers with ``-k`` (``-k "bedrock and not mantle"``).
 from __future__ import annotations
 
 from collections.abc import Awaitable, Iterable
+from typing import Any
 
 import pytest
 
 from conduit.core.catalogue import ModelEntry, default_catalogue
-from conduit.core.errors import ProviderError
+from conduit.core.discovery import DiscoveryResult
+from conduit.core.errors import ConfigurationError, ProviderError
 from conduit.core.registry import ProviderFactory
 from conduit.core.residency import ResidencyScope
 from tests.live import needs
@@ -41,6 +51,7 @@ from tests.live.harness import (
     check_structured_output,
     check_tools,
     check_vision,
+    listing,
     started,
     started_embeddings,
 )
@@ -49,24 +60,23 @@ from tests.live.probes import (
     Limits,
     ProbeFailed,
     anthropic_limits,
-    bedrock_control_client,
-    bedrock_model_exists,
-    bedrock_profile_regions,
     gemini_limits,
     ollama_context,
 )
 from tests.live.report import REPORT, Verdict
 from tests.live.targets import (
+    Route,
     Target,
     anthropic_direct,
     bedrock_settings,
     first_bedrock_auth,
     gemini_settings,
+    listed_routes,
     mantle_auth,
     mantle_settings,
-    offered_in,
     ollama_settings,
     openai_settings,
+    processing_choice,
     regions_list,
     xai_settings,
 )
@@ -87,7 +97,10 @@ PROVIDER_NEEDS: dict[str, tuple[Need, ...]] = {
 #: Providers whose caches are written through explicit breakpoints.
 EXPLICIT_CACHES = frozenset({"anthropic", "bedrock", "bedrock_mantle"})
 
-ENTRIES = [entry for entry in default_catalogue() if entry.provider != "stub"]
+#: The kinds whose routes come from each configured Region's listing.
+LISTED_KINDS = ("bedrock", "bedrock_mantle")
+
+ENTRIES = [entry for entry in default_catalogue() if entry.provider not in ("stub", *LISTED_KINDS)]
 
 
 def _param(entry: ModelEntry) -> object:
@@ -98,57 +111,82 @@ def _param(entry: ModelEntry) -> object:
     )
 
 
-def routes(entry: ModelEntry, environ: LiveEnv) -> list[tuple[Target, str | None]]:
-    """The targets to call ``entry`` through, each with the region it is called in."""
+def routes(entry: ModelEntry, environ: LiveEnv) -> list[Target]:
+    """The one target a non-listed-kind ``entry`` is called through."""
     model = entry.model_id
     if entry.provider == "anthropic":
-        return [(Target("anthropic direct", anthropic_direct(), model), None)]
+        return [Target("anthropic direct", anthropic_direct(), model)]
     if entry.provider == "openai":
-        return [(Target("openai", openai_settings(), model), None)]
+        return [Target("openai", openai_settings(), model)]
     if entry.provider == "xai":
-        return [(Target("xai", xai_settings(), model), None)]
+        return [Target("xai", xai_settings(), model)]
     if entry.provider == "gemini":
-        return [(Target("gemini", gemini_settings(), model), None)]
+        return [Target("gemini", gemini_settings(), model)]
     if entry.provider == "ollama":
-        return [(Target("ollama", ollama_settings(environ), model), None)]
-    if entry.provider == "bedrock":
+        return [Target("ollama", ollama_settings(environ), model)]
+    return []
+
+
+def connections(kind: str, environ: LiveEnv) -> list[tuple[str, dict[str, Any], str]]:
+    """One connection per configured Region of ``kind``: its label, its settings (with
+    the run's Region choice, for Bedrock) and the Region."""
+    if kind == "bedrock":
         mode = first_bedrock_auth(environ)
-        assert mode is not None
-        covered = [
-            region
+        if mode is None:
+            return []
+        choice = processing_choice(environ)
+        return [
+            (f"bedrock {mode}", bedrock_settings(region, mode, environ, processing=choice), region)
             for region in regions_list(environ, "BEDROCK_REGIONS", "BEDROCK_REGION")
-            if offered_in(entry, region)
         ]
-        if entry.residency_scope is not ResidencyScope.IN_REGION:
-            covered = covered[:1]
-        return [
-            (
-                Target(f"bedrock {region} {mode}", bedrock_settings(region, mode, environ), model),
-                region,
-            )
-            for region in covered
-        ]
-    if entry.provider == "bedrock_mantle":
+    if kind == "bedrock_mantle":
         chosen = mantle_auth(environ)
-        assert chosen is not None
+        if chosen is None:
+            return []
         auth, long_term = chosen
-        covered = [
-            region
-            for region in regions_list(environ, "BEDROCK_MANTLE_REGIONS", "BEDROCK_MANTLE_REGION")
-            if offered_in(entry, region)
-        ]
         return [
-            (
-                Target(
-                    f"bedrock-mantle {region} {auth['mode']}",
-                    mantle_settings(region, auth, long_term),
-                    model,
-                ),
-                region,
-            )
-            for region in covered
+            (f"bedrock-mantle {auth['mode']}", mantle_settings(region, auth, long_term), region)
+            for region in regions_list(environ, "BEDROCK_MANTLE_REGIONS", "BEDROCK_MANTLE_REGION")
         ]
     return []
+
+
+def record_drift(subject: str, listed: DiscoveryResult) -> None:
+    """Record each catalogue drift the listing found, as a finding (the listing is what
+    conduit uses; drift is for the catalogue's maintainers)."""
+    for drift in listed.drift:
+        REPORT.record(
+            "catalogue",
+            subject,
+            f"{drift.reason.value} {drift.model_id}",
+            Verdict.FINDING,
+            drift.detail,
+        )
+
+
+def record_destinations(subject: str, found: Iterable[Route]) -> None:
+    """Record each geographic profile's destination Regions, as the listing gives them,
+    and the widest (the API documents at most 5 models in a profile)."""
+    widest = 0
+    for route in found:
+        if route.scope is not ResidencyScope.CROSS_REGION:
+            continue
+        widest = max(widest, len(route.regions))
+        REPORT.record(
+            "catalogue",
+            subject,
+            f"destinations {route.target.model}",
+            Verdict.FINDING,
+            ", ".join(sorted(route.regions)),
+        )
+    if widest:
+        REPORT.record(
+            "catalogue",
+            subject,
+            "widest geographic profile",
+            Verdict.FINDING,
+            f"{widest} destination Regions",
+        )
 
 
 def _failure(error: ProviderError) -> str:
@@ -266,9 +304,7 @@ def compare_regions(subject: str, catalogued: frozenset[str], routed: frozenset[
         )
 
 
-async def verify_metadata(
-    entry: ModelEntry, target: Target, region: str | None, environ: LiveEnv
-) -> None:
+async def verify_metadata(entry: ModelEntry, target: Target, environ: LiveEnv) -> None:
     subject = target.subject
     try:
         if entry.provider in ("anthropic", "gemini"):
@@ -280,36 +316,10 @@ async def verify_metadata(
         elif entry.provider == "ollama":
             stated = await ollama_context(entry.model_id, environ)
             compare(subject, "context window", entry.context_window, stated)
-        elif entry.provider == "bedrock" and region is not None:
-            await _verify_bedrock(entry, subject, region, environ)
         else:
             REPORT.record("catalogue", subject, "limits", Verdict.UNOBSERVED, "no API states them")
     except ProbeFailed as failed:
         REPORT.record("catalogue", subject, "metadata", Verdict.UNOBSERVED, f"probe: {failed}")
-
-
-async def _verify_bedrock(entry: ModelEntry, subject: str, region: str, environ: LiveEnv) -> None:
-    client = await bedrock_control_client(region, environ)
-    if entry.residency_scope is ResidencyScope.IN_REGION:
-        exists = await bedrock_model_exists(client, entry.model_id)
-        REPORT.record(
-            "catalogue",
-            subject,
-            "foundation model listed in region",
-            Verdict.MATCH if exists else Verdict.MISMATCH,
-        )
-        return
-    routed = await bedrock_profile_regions(client, entry.model_id)
-    if entry.residency_scope is ResidencyScope.GLOBAL:
-        REPORT.record(
-            "catalogue",
-            subject,
-            "global profile regions",
-            Verdict.FINDING,
-            f"routes to {len(routed)} region(s)",
-        )
-        return
-    compare_regions(subject, entry.regions, routed)
 
 
 def fail_on_mismatches(subjects: Iterable[str]) -> None:
@@ -324,6 +334,19 @@ def fail_on_mismatches(subjects: Iterable[str]) -> None:
     assert count == 0, "catalogue mismatches: " + "; ".join(mismatched)
 
 
+#: Each route's listing, made once per run.
+_LISTINGS: dict[str, DiscoveryResult] = {}
+
+
+async def listed_by(target: Target, environ: LiveEnv) -> bool:
+    """Whether the provider behind ``target`` lists its model (listed once per run)."""
+    listed = _LISTINGS.get(target.label)
+    if listed is None:
+        listed = await listing(target.provider, environ=environ)
+        _LISTINGS[target.label] = listed
+    return not listed.supported or listed.get(target.model) is not None
+
+
 @pytest.mark.parametrize("entry", [_param(entry) for entry in ENTRIES])
 async def test_default_catalogue_entry(entry: ModelEntry) -> None:
     found = routes(entry, live_env())
@@ -331,23 +354,68 @@ async def test_default_catalogue_entry(entry: ModelEntry) -> None:
         pytest.skip(
             f"{entry.provider}:{entry.model_id} is not offered in any region this run covers"
         )
+    for target in found:
+        if not await listed_by(target, live_env()):
+            REPORT.record("catalogue", target.subject, "listed", Verdict.FINDING, "unlisted")
+            pytest.skip(f"{entry.provider}:{entry.model_id} is not in the provider's listing")
     if entry.provider == "ollama":
         try:
             await ollama_context(entry.model_id, live_env())
         except ProbeFailed as failed:
             pytest.skip(f"{entry.model_id} on the Ollama server: {failed}")
-    for target, region in found:
-        if entry.kind == "embedding":
-            own = entry.embedding_dimensions
-            assert own is not None
-            try:
-                async with started_embeddings(target) as binding:
-                    await check_embeddings(binding, target.subject, own)
-            except ProviderError as error:
-                REPORT.record(
-                    "catalogue", target.subject, "embeddings", Verdict.MISMATCH, _failure(error)
-                )
-        else:
-            await verify_chat(entry, target)
-        await verify_metadata(entry, target, region, live_env())
-    fail_on_mismatches(target.subject for target, _ in found)
+    for target in found:
+        await verify_entry(entry, target)
+        await verify_metadata(entry, target, live_env())
+    fail_on_mismatches(target.subject for target in found)
+
+
+async def verify_entry(entry: ModelEntry, target: Target) -> None:
+    """Embed at the entry's dimensions, or verify the chat entry."""
+    if entry.kind == "embedding":
+        own = entry.embedding_dimensions
+        assert own is not None
+        try:
+            async with started_embeddings(target) as binding:
+                await check_embeddings(binding, target.subject, own)
+        except ProviderError as error:
+            REPORT.record(
+                "catalogue", target.subject, "embeddings", Verdict.MISMATCH, _failure(error)
+            )
+    else:
+        await verify_chat(entry, target)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        pytest.param(
+            kind,
+            marks=pytest.mark.live_needs(needs.CATALOGUE_PASS, *PROVIDER_NEEDS[kind]),
+            id=kind,
+        )
+        for kind in LISTED_KINDS
+    ],
+)
+async def test_listed_models(kind: str) -> None:
+    """Every listed model the catalogue describes, in every configured Region."""
+    environ = live_env()
+    subjects: list[str] = []
+    for label, settings, region in connections(kind, environ):
+        subject = f"{label} {region}"
+        subjects.append(subject)
+        try:
+            listed = await listing(settings, environ=environ)
+        except (ProviderError, ConfigurationError) as error:
+            why = _failure(error) if isinstance(error, ProviderError) else type(error).__name__
+            REPORT.record("catalogue", subject, "listing", Verdict.MISMATCH, why)
+            continue
+        record_drift(subject, listed)
+        found = listed_routes(label, settings, region, listed)
+        REPORT.record("catalogue", subject, "routes", Verdict.FINDING, f"{len(found)} listed")
+        record_destinations(subject, found)
+        for route in found:
+            await verify_entry(route.entry, route.target)
+            subjects.append(route.target.subject)
+    if not subjects:
+        pytest.skip(f"no {kind} Region is configured")
+    fail_on_mismatches(subjects)

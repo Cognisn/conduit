@@ -125,13 +125,22 @@ _THINKING_DELTAS = {"thinking_delta": "thinking", "signature_delta": "signature"
 
 
 class _Translator:
-    def __init__(self) -> None:
+    def __init__(self, inference_geo: str | None = None) -> None:
+        #: The geography a request asked inference to stay in; ``global`` bounds nothing.
+        self.expected_geo = inference_geo if inference_geo != "global" else None
         self.counts = _Counts()
         self.blocks: dict[int, _Block] = {}
         self.started = False
         self.stop_reason: StopReason | None = None
         self.held: _Block | None = None  # the last stopped tool call, not yet reported
         self.finished = False
+
+    def _check_geo(self, usage: Any) -> None:
+        """Fail the call if the response reports inference outside the geography the
+        request asked for: a workspace default can never widen the connection's choice."""
+        reported = usage.get("inference_geo") if isinstance(usage, Mapping) else None
+        if self.expected_geo is not None and reported not in (None, self.expected_geo):
+            raise ProviderError(ProviderFailure.REJECTED)
 
     def _block(self, event: Mapping[str, Any]) -> _Block:
         block = self.blocks.get(event.get("index"))  # type: ignore[arg-type]
@@ -157,6 +166,7 @@ class _Translator:
             if not isinstance(message, Mapping):
                 raise _broken()
             self.counts.update(message.get("usage"))
+            self._check_geo(message.get("usage"))
             return [UsageReported(usage=self.counts.usage())]
         if not self.started:
             raise _broken()
@@ -171,6 +181,7 @@ class _Translator:
             reason = delta.get("stop_reason") if isinstance(delta, Mapping) else None
             self.stop_reason = _STOP_REASONS.get(reason, StopReason.OTHER)  # type: ignore[arg-type]
             self.counts.update(event.get("usage") or {})
+            self._check_geo(event.get("usage"))
             if self.stop_reason is StopReason.MAX_TOKENS:
                 self.held = None  # possibly cut off: dropped
             return self._release()
@@ -260,9 +271,15 @@ class _Translator:
         return [StreamStopped(stop_reason=self.stop_reason, usage=self.counts.usage())]
 
 
-async def translate(events: AsyncIterator[Any]) -> AsyncIterator[StreamEvent]:
-    """conduit's events for one Messages API stream, ending with one ``StreamStopped``."""
-    translator = _Translator()
+async def translate(
+    events: AsyncIterator[Any], *, inference_geo: str | None = None
+) -> AsyncIterator[StreamEvent]:
+    """conduit's events for one Messages API stream, ending with one ``StreamStopped``.
+
+    With ``inference_geo`` (the geography the request asked for), a ``usage`` that
+    reports inference in any other geography fails the call (``REJECTED``).
+    """
+    translator = _Translator(inference_geo)
     async for event in events:
         for out in translator.handle(as_mapping(event)):
             yield out

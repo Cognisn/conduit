@@ -63,7 +63,7 @@ EXPECTED_EXAMPLES: dict[str, int] = {
     "docs/guides/integration.md": 16,
     "docs/guides/mcp.md": 4,
     "docs/guides/observability.md": 3,
-    "docs/guides/providers.md": 11,
+    "docs/guides/providers.md": 12,
     "docs/guides/skills.md": 2,
     "docs/guides/terminal.md": 2,
 }

@@ -48,6 +48,7 @@ OFFLINE_MODULES = frozenset(
         "test_skip_reasons.py",
         "test_harness.py",
         "test_catalogue_logic.py",
+        "test_catalogue_routes.py",
         "test_redaction.py",
     }
 )
@@ -123,9 +124,18 @@ def test_the_live_suite_collects_from_every_module(collected: list[dict[str, Any
         if _module(item) in OFFLINE_MODULES and item["integration"]
     ]
     assert offline_integration == []
-    entries = sum(1 for e in default_catalogue() if e.provider != "stub")
+    # Bedrock and bedrock-mantle entries are verified through each Region's listing (one
+    # test per kind, every listed model the catalogue describes); the rest one per entry.
+    listed = {"bedrock", "bedrock_mantle"}
+    entries = sum(1 for e in default_catalogue() if e.provider not in {"stub", *listed})
     catalogue_items = sum(1 for i in collected if "test_default_catalogue_entry" in i["nodeid"])
     assert catalogue_items == entries, "the catalogue pass does not cover every declared model"
+    listed_items = {
+        str(i["nodeid"]).rsplit("[", 1)[-1].rstrip("]")
+        for i in collected
+        if "test_listed_models" in i["nodeid"]
+    }
+    assert listed_items == listed, "the catalogue pass does not list every listed kind"
 
 
 def test_every_catalogue_item_needs_the_opt_in(collected: list[dict[str, Any]]) -> None:
