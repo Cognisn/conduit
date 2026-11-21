@@ -130,6 +130,9 @@ class TestOpenAIDataResidency:
         assert settings.declared_residency("gpt-6-luna-2026-09-22") == inside
         assert settings.declared_residency("gpt-6-sol") == GLOBAL
         assert settings.declared_residency("gpt-6-lunar") == GLOBAL
+        # A sibling model is not the documented one, whatever its prefix.
+        for sibling in ("gpt-6-luna-mini", "gpt-6-luna-pro", "gpt-6-luna-2026-09"):
+            assert settings.declared_residency(sibling) == GLOBAL
 
     def test_a_luna_only_choice_refuses_the_other_models(self) -> None:
         settings = _openai(data_residency="au")

@@ -122,6 +122,12 @@ class RegionChoice(SettingsModel):
                 f"{where}: the connection is called in {provider_region or 'no Region'}, "
                 "outside the connection's Region choice"
             )
+        if scope is ResidencyScope.CROSS_REGION and not residency.regions:
+            # Unbounded in practice: never let it through a choice.
+            raise ResidencyRefused(
+                f"{where}: cross-Region processing that names no Region is outside the "
+                "connection's Region choice"
+            )
         outside = sorted(residency.regions - self.regions)
         if outside:
             raise ResidencyRefused(

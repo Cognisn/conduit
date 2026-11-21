@@ -181,6 +181,11 @@ class TestChoiceCheck:
     def test_a_geographic_profile_inside_the_choice_is_allowed(self) -> None:
         self.check(GEO_NEAR, _choice(HOME, NEAR))
 
+    def test_a_cross_region_residency_naming_no_region_is_refused(self) -> None:
+        choice = RegionChoice.model_validate(_choice(HOME))
+        with pytest.raises(ResidencyRefused, match="names no Region"):
+            choice.check(Residency(ResidencyScope.CROSS_REGION), HOME, where="triage")
+
     def test_a_geographic_profile_outside_the_choice_is_refused(self) -> None:
         with pytest.raises(ResidencyRefused, match=r"xx-away-1.*outside the connection"):
             self.check(GEO_AWAY, _choice(HOME, NEAR))

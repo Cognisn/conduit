@@ -41,6 +41,7 @@ may not be given otherwise. A service that chooses nothing keeps its old meaning
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlsplit
 
@@ -299,13 +300,24 @@ def foundry_listing(kind: str) -> RegionListing:
     )
 
 
+#: A dated snapshot's suffix, as OpenAI names them (``gpt-6-luna-2026-09-22``).
+_SNAPSHOT = re.compile(r"-\d{4}-\d{2}-\d{2}")
+
+
+def _snapshot_of(model_id: str) -> str:
+    """The model ``model_id`` is a dated snapshot of, or ``model_id`` itself. Only an
+    exact ``-YYYY-MM-DD`` suffix counts, so a sibling (``gpt-6-luna-mini``) stays itself."""
+    found = _SNAPSHOT.search(model_id)
+    if found is not None and found.end() == len(model_id):
+        return model_id[: found.start()]
+    return model_id
+
+
 def _openai_residency(code: str, model_id: str) -> Residency:
     if code not in OPENAI_PROCESSING_REGIONS:
         return Residency(ResidencyScope.GLOBAL)
     only = OPENAI_PROCESSING_MODELS.get(code)
-    if only is not None and not any(
-        model_id == model or model_id.startswith(f"{model}-") for model in only
-    ):
+    if only is not None and _snapshot_of(model_id) not in only:
         return Residency(ResidencyScope.GLOBAL)
     return Residency(ResidencyScope.CROSS_REGION, frozenset({f"openai:{code}"}))
 
