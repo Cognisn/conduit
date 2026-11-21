@@ -269,12 +269,13 @@ def profile(*regions: str) -> DiscoveredModel:
     )
 
 
-geography = {"scopes": ["local", "in_region", "cross_region"], "regions": ["xx-home-1", "xx-away-1"]}
+geography = {
+    "scopes": ["local", "in_region", "cross_region"],
+    "regions": ["xx-home-1", "xx-away-1"],
+}
 listed_settings = ConduitSettings.model_validate(
     {
-        "providers": {
-            "local": {"kind": "stub", "not_for_production": True, "region": "xx-home-1"}
-        },
+        "providers": {"local": {"kind": "stub", "not_for_production": True, "region": "xx-home-1"}},
         "assignments": {"triage": {"provider": "local", "model": "geo.example.model-v1"}},
         "residency": geography,
     }
@@ -321,7 +322,13 @@ A listed model's capabilities and limits are, field by field: an overlay's entry
 `DiscoveryResult.drift` reports, as `CatalogueDrift` values, every difference between the catalogue and the listing, with a fixed `detail`: a listed model with no entry (`uncatalogued`), an entry the provider does not list (`unlisted`), limits or capabilities the listing reports differently (`limits_differ`, `capabilities_differ`), and an overlay's residency for a model the provider lists (`regions_declared`). Drift is reported, never used to hide a model.
 
 ```python
-from conduit import DiscoveredModel, DiscoveryOutcome, DriftReason, ProviderRegistry, ResidencyPolicy
+from conduit import (
+    DiscoveredModel,
+    DiscoveryOutcome,
+    DriftReason,
+    ProviderRegistry,
+    ResidencyPolicy,
+)
 
 
 async def connection_screen() -> tuple[dict[str, str], set[tuple[str, str]]]:
@@ -337,7 +344,10 @@ async def connection_screen() -> tuple[dict[str, str], set[tuple[str, str]]]:
 
 
 outcomes, drift = asyncio.run(connection_screen())
-assert outcomes == {"stub-echo": DiscoveryOutcome.ALLOWED, "example-new-model": DiscoveryOutcome.ALLOWED}
+assert outcomes == {
+    "stub-echo": DiscoveryOutcome.ALLOWED,
+    "example-new-model": DiscoveryOutcome.ALLOWED,
+}
 assert ("example-new-model", DriftReason.UNCATALOGUED) in drift
 assert ("stub-embed", DriftReason.UNLISTED) in drift
 ```

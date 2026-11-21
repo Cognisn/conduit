@@ -297,7 +297,9 @@ foundry_overlay = CatalogueOverlay.model_validate(
         ],
     }
 )
-declared = default_catalogue().apply(foundry_overlay).require("openai", "example-gpt5-swedencentral")
+declared = (
+    default_catalogue().apply(foundry_overlay).require("openai", "example-gpt5-swedencentral")
+)
 assert declared.residency_scope == "in_region"
 ```
 
