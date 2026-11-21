@@ -1,0 +1,199 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "operation": "ConverseStream",
+        "params": {
+          "inferenceConfig": {
+            "maxTokens": 1024
+          },
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "Incident notes: host-a.example.com stopped answering on 192.0.2.10 at 09:00."
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "modelId": "amazon.nova-lite-v1:0",
+          "system": [
+            {
+              "text": "You summarise incident notes for the operations team at example.com."
+            },
+            {
+              "cachePoint": {
+                "type": "default"
+              }
+            }
+          ],
+          "toolConfig": {
+            "tools": [
+              {
+                "toolSpec": {
+                  "description": "Look a host up in the inventory.",
+                  "inputSchema": {
+                    "json": {
+                      "properties": {
+                        "host": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "host"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "name": "lookup_host"
+                }
+              }
+            ]
+          }
+        },
+        "region": "us-east-1"
+      },
+      "response": [
+        {
+          "messageStart": {
+            "role": "assistant"
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 0,
+            "delta": {
+              "text": "<thinking>I should look the host up.</thinking>"
+            }
+          }
+        },
+        {
+          "contentBlockStop": {
+            "contentBlockIndex": 0
+          }
+        },
+        {
+          "contentBlockStart": {
+            "contentBlockIndex": 1,
+            "start": {
+              "toolUse": {
+                "name": "lookup_host",
+                "toolUseId": "tooluse_example0001"
+              }
+            }
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 1,
+            "delta": {
+              "toolUse": {
+                "input": "{\"host\": \"host-a"
+              }
+            }
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 1,
+            "delta": {
+              "toolUse": {
+                "input": ".example.com\"}"
+              }
+            }
+          }
+        },
+        {
+          "contentBlockStop": {
+            "contentBlockIndex": 1
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 2,
+            "delta": {
+              "text": "<thinking>"
+            }
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 2,
+            "delta": {
+              "text": "A second lookup helps."
+            }
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 2,
+            "delta": {
+              "text": "</thinking>"
+            }
+          }
+        },
+        {
+          "contentBlockStop": {
+            "contentBlockIndex": 2
+          }
+        },
+        {
+          "contentBlockStart": {
+            "contentBlockIndex": 3,
+            "start": {
+              "toolUse": {
+                "name": "lookup_host",
+                "toolUseId": "tooluse_example0002"
+              }
+            }
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 3,
+            "delta": {
+              "toolUse": {
+                "input": "{\"host\": \"host-b"
+              }
+            }
+          }
+        },
+        {
+          "contentBlockDelta": {
+            "contentBlockIndex": 3,
+            "delta": {
+              "toolUse": {
+                "input": ".example.com\"}"
+              }
+            }
+          }
+        },
+        {
+          "contentBlockStop": {
+            "contentBlockIndex": 3
+          }
+        },
+        {
+          "messageStop": {
+            "stopReason": "tool_use"
+          }
+        },
+        {
+          "metadata": {
+            "metrics": {
+              "latencyMs": 450
+            },
+            "usage": {
+              "inputTokens": 52,
+              "outputTokens": 61,
+              "totalTokens": 113
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "name": "nova-lite-thinking-tool-stream",
+  "provider": "bedrock"
+}

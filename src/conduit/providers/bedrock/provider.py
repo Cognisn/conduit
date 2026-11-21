@@ -87,10 +87,11 @@ class BedrockProvider(BaseProvider):
         # A model that refuses tools on ConverseStream gets a request with tools whole.
         streams = not request.tools or streams_tool_use(request.model)
         if self.settings.use_converse_stream and streams:
-            async for event in self._converse_stream(params, request.timeout_s):
+            async for event in self._converse_stream(params, request.timeout_s, request.model):
                 yield event
             return
-        for event in events_from_converse_response(await self._converse(params, request.timeout_s)):
+        response = await self._converse(params, request.timeout_s)
+        for event in events_from_converse_response(response, model=request.model):
             yield event
 
     async def _converse(self, params: dict[str, Any], timeout: float) -> Mapping[str, Any]:
@@ -125,7 +126,7 @@ class BedrockProvider(BaseProvider):
         return result
 
     async def _converse_stream(
-        self, params: dict[str, Any], timeout: float
+        self, params: dict[str, Any], timeout: float, model: str
     ) -> AsyncIterator[StreamEvent]:
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=STREAM_BUFFER)
@@ -174,7 +175,7 @@ class BedrockProvider(BaseProvider):
                     _close(opened[0])
 
         threading.Thread(target=read, name="conduit-bedrock-stream", daemon=True).start()
-        mapper = StreamMapper()
+        mapper = StreamMapper(model)
         try:
             while True:
                 waited = True

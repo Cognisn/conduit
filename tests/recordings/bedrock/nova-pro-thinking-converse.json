@@ -1,0 +1,94 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "operation": "Converse",
+        "params": {
+          "inferenceConfig": {
+            "maxTokens": 1024
+          },
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "Incident notes: host-a.example.com stopped answering on 192.0.2.10 at 09:00."
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "modelId": "amazon.nova-pro-v1:0",
+          "system": [
+            {
+              "text": "You summarise incident notes for the operations team at example.com."
+            },
+            {
+              "cachePoint": {
+                "type": "default"
+              }
+            }
+          ],
+          "toolConfig": {
+            "tools": [
+              {
+                "toolSpec": {
+                  "description": "Look a host up in the inventory.",
+                  "inputSchema": {
+                    "json": {
+                      "properties": {
+                        "host": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "host"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "name": "lookup_host"
+                }
+              }
+            ]
+          }
+        },
+        "region": "us-east-1"
+      },
+      "response": {
+        "metrics": {
+          "latencyMs": 700
+        },
+        "output": {
+          "message": {
+            "content": [
+              {
+                "text": "<thinking>First thought.</thinking>\n\nChecking now.\n<thinking>Second thought.</thinking>\nOne moment."
+              },
+              {
+                "toolUse": {
+                  "input": {
+                    "host": "host-a.example.com"
+                  },
+                  "name": "lookup_host",
+                  "toolUseId": "tooluse_example0001"
+                }
+              },
+              {
+                "text": "<thinking>Third thought.</thinking>"
+              }
+            ],
+            "role": "assistant"
+          }
+        },
+        "stopReason": "tool_use",
+        "usage": {
+          "inputTokens": 64,
+          "outputTokens": 58,
+          "totalTokens": 122
+        }
+      }
+    }
+  ],
+  "name": "nova-pro-thinking-converse",
+  "provider": "bedrock"
+}
