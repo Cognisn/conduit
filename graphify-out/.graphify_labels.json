@@ -1,5 +1,4 @@
 {
-  "2": "Message Content Blocks",
   "3": "MCP OAuth Test Fixtures",
   "6": "Otel Sink Tests",
   "7": "JSON Stores",
@@ -37,7 +36,6 @@
   "125": "tests/unit/providers/openai_compat (group 125)",
   "127": "tests/unit/core (group 127)",
   "129": "docs/design (group 129)",
-  "131": "tests/unit/providers (group 131)",
   "132": "tests/unit/providers/bedrock (group 132)",
   "142": "CHANGELOG.md (group 142)",
   "143": "CHANGELOG.md (group 143)",
