@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0rc6] - 2026-11-21
+
+Sixth release candidate. Wave 13 keeps Amazon Nova's reasoning apart from its answer text (`fix/0.1.0-nova-reasoning`).
+
+### Fixed
+
+- Amazon Nova's `<thinking>` spans are no longer returned as answer text. The Bedrock adapter reports each span as a reasoning state block with state type `thinking_text` (same payload shape as Claude's reasoning), for Converse and ConverseStream, with tags split across chunks, several spans and tool use handled. Other models' text is not parsed. `thinking_text` is never sent back to any model. An assistant turn that holds only such state (from any model) is left out of the next request and the user messages around it merged, instead of being sent as an empty message; a cache point on it moves to the earlier message. Native reasoning keeps its existing send-back rule.
+
 ## [0.1.0rc5] - 2026-11-21
 
 Fifth release candidate. Wave 13 makes each provider's own model listing the source of truth for which models exist and where a request is processed, replacing the declared-catalogue rule, to end catalogue drift against live provider listings (`feat/0.1.0-discovery-led-catalogue`).
