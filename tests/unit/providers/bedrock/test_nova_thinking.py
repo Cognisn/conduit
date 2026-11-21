@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from conduit.core.errors import ProviderError, ProviderFailure
 from conduit.core.streaming import (
     ProviderStateReported,
     StreamEvent,
@@ -40,14 +41,23 @@ USAGE = Usage(input_tokens=11, output_tokens=7, cache_read_tokens=0, cache_write
 METADATA = {"metadata": {"usage": {"inputTokens": 11, "outputTokens": 7}, "metrics": {}}}
 
 
-def thought(text: str) -> ProviderStateReported:
-    """The state event for one reasoning span, as the Claude path reports it."""
+def _state(state_type: str, text: str) -> ProviderStateReported:
     payload = json.dumps({"reasoningText": {"text": text}}, separators=(",", ":"))
     return ProviderStateReported(
         state=ProviderStateBlock(
-            provider_kind="bedrock", state_type="reasoning_content", payload=payload.encode()
+            provider_kind="bedrock", state_type=state_type, payload=payload.encode()
         )
     )
+
+
+def thought(text: str) -> ProviderStateReported:
+    """The state event for one <thinking> span: Claude's reasoning shape, marked as tag text."""
+    return _state("thinking_text", text)
+
+
+def native(text: str) -> ProviderStateReported:
+    """The state event for a native ``reasoningContent`` block."""
+    return _state("reasoning_content", text)
 
 
 def delta(text: str, index: int = 0) -> dict[str, Any]:
@@ -174,9 +184,31 @@ class TestWholeReply:
         assert whole([{"text": text}]) == [TextDelta(text=text), STOPPED]
 
     def test_a_reasoning_block_in_the_response_still_passes_through(self) -> None:
-        native = {"reasoningText": {"text": "Native."}}
-        events = whole([{"reasoningContent": native}, {"text": "Hi."}])
-        assert events == [thought("Native."), TextDelta(text="Hi."), STOPPED]
+        block = {"reasoningText": {"text": "Native."}}
+        events = whole([{"reasoningContent": block}, {"text": "Hi."}])
+        assert events == [native("Native."), TextDelta(text="Hi."), STOPPED]
+
+    def test_a_word_before_a_span_keeps_one_space_from_the_text_after_it(self) -> None:
+        events = whole([{"text": "The answer is<thinking>x</thinking> 42"}])
+        assert events == [
+            TextDelta(text="The answer is"),
+            thought("x"),
+            TextDelta(text=" 42"),
+            STOPPED,
+        ]
+
+    def test_no_space_is_added_where_the_text_before_ended_in_whitespace(self) -> None:
+        events = whole([{"text": "Line one.\n<thinking>x</thinking>\nLine two."}])
+        assert events == [
+            TextDelta(text="Line one.\n"),
+            thought("x"),
+            TextDelta(text="Line two."),
+            STOPPED,
+        ]
+
+    def test_no_space_is_added_at_the_start_of_a_block(self) -> None:
+        events = whole([{"text": "<thinking>x</thinking> 42"}])
+        assert events == [thought("x"), TextDelta(text="42"), STOPPED]
 
     @pytest.mark.parametrize(
         "model",
@@ -340,6 +372,22 @@ class TestStreamedReply:
             StreamStopped(stop_reason=StopReason.TOOL_USE, usage=USAGE),
         ]
 
+    def test_the_separating_space_survives_chunking(self) -> None:
+        text = "The answer is<thinking>x</thinking>\n 42, then<thinking>y</thinking> done."
+        assert _merged(streamed(list(text))) == _merged(whole([{"text": text}]))
+        events = streamed(["is<thinking>x</thinking>", " ", "42"])
+        assert events == [TextDelta(text="is"), thought("x"), TextDelta(text=" 42"), STOPPED]
+
+    def test_a_span_straight_after_a_span_keeps_the_pending_space(self) -> None:
+        events = streamed(["is<thinking>x</thinking> <thinking>y</thinking> 42"])
+        assert events == [
+            TextDelta(text="is"),
+            thought("x"),
+            thought("y"),
+            TextDelta(text=" 42"),
+            STOPPED,
+        ]
+
     def test_a_block_left_open_is_flushed_at_the_end_of_the_stream(self) -> None:
         mapper = StreamMapper(NOVA)
         events: list[StreamEvent] = []
@@ -374,38 +422,95 @@ def _merged(events: list[StreamEvent]) -> list[Any]:
     return out
 
 
-class TestSendingReasoningBack:
-    """Nova's reasoning is never sent back, as a reasoning block or as answer text."""
+ALL_MODELS = [
+    "amazon.nova-lite-v1:0",
+    "us.amazon.nova-pro-v1:0",
+    "apac.amazon.nova-micro-v1:0",
+    "anthropic.claude-sonnet-4-6",
+    "openai.gpt-oss-120b-1:0",
+]
 
-    def _sent(self, model: str) -> list[Any]:
-        state = thought("Private thought zz-thought-zz.").state
-        params = build_converse_request(
-            ModelRequest(
-                model=model,
-                messages=(
-                    Message.user("Hello"),
-                    Message(role="assistant", content=(state, TextBlock(text="Hi."))),
-                    Message.user("Again"),
-                ),
-                max_output_tokens=256,
-            ),
-            prompt_caching=False,
+
+def _params(model: str, *messages: Message) -> dict[str, Any]:
+    return build_converse_request(
+        ModelRequest(model=model, messages=messages, max_output_tokens=256),
+        prompt_caching=False,
+    )
+
+
+class TestSendingReasoningBack:
+    """Tag-derived reasoning is never sent back to any model; native reasoning keeps its rule."""
+
+    def _sent(self, model: str, state: ProviderStateBlock) -> list[Any]:
+        params = _params(
+            model,
+            Message.user("Hello"),
+            Message(role="assistant", content=(state, TextBlock(text="Hi."))),
+            Message.user("Again"),
         )
         sent: list[Any] = params["messages"][1]["content"]
         return sent
 
-    @pytest.mark.parametrize(
-        "model", ["amazon.nova-lite-v1:0", "us.amazon.nova-pro-v1:0", "apac.amazon.nova-micro-v1:0"]
-    )
-    def test_a_nova_request_leaves_the_reasoning_out(self, model: str) -> None:
-        sent = self._sent(model)
+    @pytest.mark.parametrize("model", ALL_MODELS)
+    def test_tag_derived_reasoning_is_left_out_for_every_model(self, model: str) -> None:
+        sent = self._sent(model, thought("Private thought zz-thought-zz.").state)
         assert sent == [{"text": "Hi."}]
         assert "zz-thought-zz" not in repr(sent)
 
-    @pytest.mark.parametrize("model", ["anthropic.claude-sonnet-4-6", "openai.gpt-oss-120b-1:0"])
-    def test_other_models_keep_the_existing_rule(self, model: str) -> None:
-        sent = self._sent(model)
-        assert sent[0] == {
-            "reasoningContent": {"reasoningText": {"text": "Private thought zz-thought-zz."}}
-        }
+    @pytest.mark.parametrize("model", ALL_MODELS)
+    def test_native_reasoning_keeps_the_existing_rule_for_every_model(self, model: str) -> None:
+        sent = self._sent(model, native("Native thought.").state)
+        assert sent[0] == {"reasoningContent": {"reasoningText": {"text": "Native thought."}}}
         assert sent[1] == {"text": "Hi."}
+
+    def test_a_malformed_tag_state_is_still_refused_without_its_payload(self) -> None:
+        state = ProviderStateBlock(
+            provider_kind="bedrock", state_type="thinking_text", payload=b"zz-state-marker-zz"
+        )
+        with pytest.raises(ProviderError) as raised:
+            self._sent("amazon.nova-lite-v1:0", state)
+        assert raised.value.failure is ProviderFailure.REJECTED
+        assert "zz-state-marker-zz" not in repr(raised.value)
+        assert raised.value.__cause__ is None and raised.value.__context__ is None
+
+
+class TestReasoningOnlyTurns:
+    """A turn that held only <thinking> text is left out; its neighbours are merged."""
+
+    ONLY = Message(role="assistant", content=(thought("zz-cut-off-zz").state,))
+
+    @pytest.mark.parametrize("model", ["amazon.nova-lite-v1:0", "anthropic.claude-sonnet-4-6"])
+    def test_the_empty_assistant_turn_is_left_out_and_users_are_merged(self, model: str) -> None:
+        params = _params(model, Message.user("Hello"), self.ONLY, Message.user("Please carry on."))
+        assert params["messages"] == [
+            {"role": "user", "content": [{"text": "Hello"}, {"text": "Please carry on."}]}
+        ]
+        assert "zz-cut-off-zz" not in repr(params)
+
+    def test_roles_still_alternate_around_other_turns(self) -> None:
+        params = _params(
+            "amazon.nova-lite-v1:0",
+            Message.user("One"),
+            Message(role="assistant", content=(TextBlock(text="Two."),)),
+            Message.user("Three"),
+            self.ONLY,
+            Message.user("Four"),
+            Message(role="assistant", content=(TextBlock(text="Five."),)),
+        )
+        assert [m["role"] for m in params["messages"]] == ["user", "assistant", "user", "assistant"]
+        assert params["messages"][2]["content"] == [{"text": "Three"}, {"text": "Four"}]
+
+    def test_a_trailing_empty_turn_is_left_out(self) -> None:
+        params = _params("amazon.nova-lite-v1:0", Message.user("Hello"), self.ONLY)
+        assert params["messages"] == [{"role": "user", "content": [{"text": "Hello"}]}]
+
+    def test_a_turn_with_other_content_is_kept(self) -> None:
+        both = Message(
+            role="assistant", content=(thought("zz-cut-off-zz").state, TextBlock(text="Hi."))
+        )
+        params = _params("amazon.nova-lite-v1:0", Message.user("Hello"), both, Message.user("Go"))
+        assert [m["role"] for m in params["messages"]] == ["user", "assistant", "user"]
+
+    def test_same_role_neighbours_the_caller_sent_are_not_merged(self) -> None:
+        params = _params("amazon.nova-lite-v1:0", Message.user("A"), Message.user("B"))
+        assert len(params["messages"]) == 2

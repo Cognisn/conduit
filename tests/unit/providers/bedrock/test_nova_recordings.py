@@ -31,7 +31,7 @@ def thoughts(events: list[Any]) -> list[str]:
     for event in events:
         if isinstance(event, ProviderStateReported):
             assert event.state.provider_kind == "bedrock"
-            assert event.state.state_type == "reasoning_content"
+            assert event.state.state_type == "thinking_text"
             out.append(json.loads(event.state.payload)["reasoningText"]["text"])
     return out
 
