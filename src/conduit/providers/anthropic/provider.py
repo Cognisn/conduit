@@ -113,11 +113,15 @@ class AnthropicProvider(BaseProvider):
         name: str,
         catalogue: Catalogue,
         catalogue_provider: str = "anthropic",
+        inference_geo: str | None = None,
     ) -> None:
         self.name = name
         self._client = client
         self._catalogue = catalogue
         self._catalogue_provider = catalogue_provider
+        #: The connection's ``inference_geo``: sent on every request, and the geography
+        #: every response must report.
+        self._inference_geo = inference_geo
 
     def structured_output(self, model: str) -> bool:
         """Whether the catalogue says ``model`` supports structured output."""
@@ -128,12 +132,14 @@ class AnthropicProvider(BaseProvider):
         supported = self.structured_output(request.model)
         if request.output_schema is not None and not supported:
             raise ProviderError(ProviderFailure.REJECTED)
-        params = build_params(request, structured_output=supported)
+        params = build_params(
+            request, structured_output=supported, inference_geo=self._inference_geo
+        )
         sdk_stream: Any = None
         failure: ProviderFailure | None = None
         try:
             sdk_stream = await self._client.messages.create(**params)
-            async for event in translate(aiter(sdk_stream)):
+            async for event in translate(aiter(sdk_stream), inference_geo=self._inference_geo):
                 yield event
         except ProviderError as error:
             failure = error.failure
@@ -281,4 +287,5 @@ class AnthropicFactory:
             name=name,
             catalogue=catalogue if catalogue is not None else default_catalogue(),
             catalogue_provider=validated.catalogue_provider,
+            inference_geo=validated.inference_geo,
         )
