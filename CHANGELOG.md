@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-21
+
+First release. 0.1.0 is 0.1.0rc7 released as final, with no change to the code. The sections below record each pre-release on the way to it.
+
+### Changed
+
+- The README describes 0.1.0 as released, and installation no longer asks for a pre-release.
+
 ## [0.1.0rc7] - 2026-11-21
 
 Seventh release candidate. Wave 14 lets each connection choose the Regions its requests are processed in, lists the Regions each provider documents, and rebuilds the opt-in live catalogue pass on the provider listing (`feat/0.1.0-provider-regions`).
